@@ -1,5 +1,8 @@
 # MH Comic Reader (Tauri Desktop) v0.3.1
 
+> **Download for Windows**: grab `mh-reader.exe` from [Releases](https://github.com/jsksskskdnnsj-rgb/vertial-comic-reader/releases) — double-click to run, no build needed.
+> To build from source, see "Build & Run" below.
+
 A local comic reader with a light lavender theme: home (welcome banner + drag & drop import + recently read), shelf, local import, and settings. Built with Tauri 2 + Rust + vanilla HTML/JS.
 
 [中文说明](README.md)

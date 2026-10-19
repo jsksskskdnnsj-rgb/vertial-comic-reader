@@ -1,5 +1,8 @@
 # MH漫画阅读器（Tauri 桌面版）v0.3.1
 
+> **普通用户直接下载**：去 [Releases](https://github.com/jsksskskdnnsj-rgb/vertial-comic-reader/releases) 下载 `mh-reader.exe`，双击即用，无需编译。
+> 开发者从源码构建请看下面的「构建运行」。
+
 浅紫薰衣草主题的本地漫画阅读器：首页（欢迎横幅 + 拖放导入 + 最近阅读）、书架、本地导入、设置。
 
 [English README](README_EN.md)
