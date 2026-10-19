@@ -1,0 +1,37 @@
+# ---------- 依赖 ----------
+node_modules/
+src-tauri/target/
+
+# ---------- 构建产物（只忽略根目录的成品二进制） ----------
+/mh-reader.exe
+/mh-reader
+*.msi
+*.dmg
+*.app
+*.AppImage
+*.deb
+src-tauri/bundles/
+src-tauri/WixTools/
+
+# ---------- 本地运行时数据（用户书架 / 缓存，不进仓库） ----------
+*.db
+*.db-journal
+page_cache/
+drop-queue.json
+data-dir.txt
+reader-config.json
+theme-config.json
+hero-custom.*
+
+# ---------- 生成的二进制图标（由 scripts/gen-icons.py 生成，见 README） ----------
+src-tauri/icons/
+
+# ---------- 系统文件 ----------
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ---------- 编辑器 ----------
+.vscode/
+.idea/
+*.swp

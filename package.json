@@ -1,0 +1,13 @@
+{
+  "devDependencies": {
+    "@tauri-apps/cli": "^2"
+  },
+  "name": "mh-reader",
+  "private": true,
+  "scripts": {
+    "tauri": "tauri",
+    "build": "tauri build && node scripts/copy-exe.cjs"
+  },
+  "type": "module",
+  "version": "0.3.1"
+}
