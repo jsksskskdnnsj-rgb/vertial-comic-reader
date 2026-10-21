@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>mh-reader</title>
+<link rel="stylesheet" href="mh-ui.css">
+<!-- Optional artwork (your own files; the page degrades to gradients without them):
+     assets/sidebar-art.png  (sidebar footer, ~192x300)   banner image via  :root{--banner-img:url(assets/banner.jpg)} -->
+<style>:root{ --banner-img:url("assets/banner.jpg"); }</style>
+</head>
+<body>
+<div class="window">
+
+  <!-- ===== Sidebar: 192px ===== -->
+  <aside class="sb" data-tauri-drag-region>
+    <div class="brand">
+      <div class="logo"><svg viewBox="0 0 24 24"><path d="M5 18V6l7 8 7-8v12"/></svg></div>
+      <div><div class="brand__name">mh-reader</div><div class="brand__sub" data-i="tagline"></div></div>
+    </div>
+    <nav class="nav">
+      <a href="home.html" aria-current="page"><svg class="i"><use href="icons.svg#home"/></svg><span data-i="home"></span></a>
+      <a href="library.html"><svg class="i"><use href="icons.svg#shelf"/></svg><span data-i="library"></span></a>
+      <a href="import.html"><svg class="i"><use href="icons.svg#import"/></svg><span data-i="import"></span></a>
+      <a href="settings.html"><svg class="i"><use href="icons.svg#settings"/></svg><span data-i="settings"></span></a>
+    </nav>
+    <p class="sb__quote" data-i="quote"></p>
+    <div class="sb__art" aria-hidden="true"></div>
+  </aside>
+
+  <!-- ===== Main ===== -->
+  <div class="main">
+    <header class="topbar" data-tauri-drag-region>
+      <label class="search">
+        <svg class="i"><use href="icons.svg#search"/></svg>
+        <input id="q" type="search" data-i-ph="search" autocomplete="off">
+      </label>
+      <span class="spacer" data-tauri-drag-region></span>
+      <div class="wc">
+        <button data-win="min"   data-i-label="min"><svg class="i"><use href="icons.svg#min"/></svg></button>
+        <button data-win="max"   data-i-label="max"><svg class="i"><use href="icons.svg#max"/></svg></button>
+        <button data-win="close" data-i-label="close"><svg class="i"><use href="icons.svg#close"/></svg></button>
+      </div>
+    </header>
+
+    <main class="body">
+      <div class="home">
+        <section class="banner">
+          <div class="banner__img"></div>
+          <h1 data-i="welcome"></h1>
+          <p data-i="welcomeSub"></p>
+        </section>
+
+        <div class="col-left">
+          <div class="zone-wrap">
+            <div class="zone" id="zone">
+              <div class="zone__icon"><svg viewBox="0 0 64 48"><use href="icons.svg#cloud-up"/></svg></div>
+              <h2 data-i="dropTitle"></h2>
+              <p data-i="dropSub"></p>
+              <button class="btn btn--primary" id="pick"><svg class="i"><use href="icons.svg#folder"/></svg><span data-i="pick"></span></button>
+              <div class="zone__note"><span data-i="dropNote"></span></div>
+            </div>
+          </div>
+
+          <section class="panel quick">
+            <div class="panel__title"><svg class="i" style="color:var(--v-500);width:16px;height:16px"><use href="icons.svg#sparkle"/></svg><span data-i="quick"></span></div>
+            <div class="quick__grid">
+              <a class="tile" href="import.html"><svg class="i"><use href="icons.svg#folder"/></svg><b data-i="qImport"></b><span data-i="qImportD"></span><i class="tile__go"><svg class="i"><use href="icons.svg#arrow"/></svg></i></a>
+              <a class="tile" href="library.html"><svg class="i"><use href="icons.svg#shelf"/></svg><b data-i="qLib"></b><span data-i="qLibD"></span><i class="tile__go"><svg class="i"><use href="icons.svg#arrow"/></svg></i></a>
+              <a class="tile" href="settings.html#reading"><svg class="i"><use href="icons.svg#settings"/></svg><b data-i="qSet"></b><span data-i="qSetD"></span><i class="tile__go"><svg class="i"><use href="icons.svg#arrow"/></svg></i></a>
+              <a class="tile" href="settings.html#reading-mode"><svg class="i"><use href="icons.svg#image"/></svg><b data-i="qImg"></b><span data-i="qImgD"></span><i class="tile__go"><svg class="i"><use href="icons.svg#arrow"/></svg></i></a>
+            </div>
+          </section>
+        </div>
+
+        <div class="col-right">
+          <section class="panel">
+            <div class="panel__head"><div class="panel__title" data-i="recent"></div>
+              <a class="link-more" href="library.html?sort=recent"><span data-i="more"></span><svg class="i"><use href="icons.svg#chevron"/></svg></a></div>
+            <div class="recent-list" id="recent"></div>
+          </section>
+          <!-- Reference has "Recommended manga"; an offline app has nothing to recommend, so this shows YOUR recently added books -->
+          <section class="panel added-panel">
+            <div class="panel__head"><div class="panel__title" data-i="added"></div>
+              <a class="link-more" href="library.html?sort=added"><span data-i="more"></span><svg class="i"><use href="icons.svg#chevron"/></svg></a></div>
+            <div class="added-grid" id="added"></div>
+          </section>
+        </div>
+
+        <div class="footer-note" id="ver"></div>
+      </div>
+    </main>
+  </div>
+</div>
+<script type="module" src="home.js"></script>
+</body>
+</html>

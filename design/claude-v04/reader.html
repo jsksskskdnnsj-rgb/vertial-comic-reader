@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>mh-reader</title>
+<link rel="stylesheet" href="mh-ui.css">
+</head>
+<body>
+<div class="reader" id="reader" data-bg="lavender">
+
+  <!-- reader.js mounts .scroller > .sizer > .page* in here -->
+  <div id="host"></div>
+  <div class="mini" id="mini"></div>
+
+  <!-- top bar: 52px floating glass. Auto-hides (see reader-boot.js). Drag region = empty space. -->
+  <header class="ov ov--top" id="top" data-tauri-drag-region>
+    <button class="ibtn" id="back" data-i-label="back"><svg class="i"><use href="icons.svg#back"/></svg></button>
+    <div class="ov__title" data-tauri-drag-region><b id="title"></b><span id="chapter"></span></div>
+    <span class="spacer" data-tauri-drag-region></span>
+    <span class="epnav" id="epnav" hidden>
+      <button class="ibtn" id="epPrev" data-i-label="prevEp"><svg class="i"><use href="icons.svg#skip-prev"/></svg></button>
+      <button class="ibtn" id="epNext" data-i-label="nextEp"><svg class="i"><use href="icons.svg#skip-next"/></svg></button>
+    </span>
+    <button class="pill num" id="cnt" data-i-label="jump">- / -</button>
+    <button class="ibtn" id="bmAdd" data-i-label="bmAdd"><svg class="i"><use href="icons.svg#bookmark"/></svg></button>
+    <button class="ibtn" id="bmPanel" data-i-label="bmPanel" aria-expanded="false"><svg class="i"><use href="icons.svg#list"/></svg></button>
+    <button class="ibtn" id="gear" data-i-label="settingsQuick" aria-expanded="false"><svg class="i"><use href="icons.svg#settings"/></svg></button>
+    <button class="ibtn" id="fs" data-i-label="fullscreen"><svg class="i"><use href="icons.svg#expand"/></svg></button>
+    <span style="width:1px;height:20px;background:var(--line);margin:0 4px"></span>
+    <div class="wc">
+      <button data-win="min"   data-i-label="min"><svg class="i"><use href="icons.svg#min"/></svg></button>
+      <button data-win="max"   data-i-label="max"><svg class="i"><use href="icons.svg#max"/></svg></button>
+      <button data-win="close" data-i-label="close"><svg class="i"><use href="icons.svg#close"/></svg></button>
+    </div>
+  </header>
+
+  <!-- quick settings popover -->
+  <section class="pop" id="pop" hidden aria-label="Reading settings">
+    <label><span data-i="width"></span><input id="w" type="range" min="40" max="100" step="5"></label>
+    <label><span data-i="gap"></span>
+      <span class="seg" id="gap"><button data-gap="0">0</button><button data-gap="8">8</button><button data-gap="16">16</button></span></label>
+    <label><span data-i="bg"></span>
+      <span class="sw" id="bgsw">
+        <button data-bg="paper"    style="background:#FFFFFF" data-i-label="paper"></button>
+        <button data-bg="lavender" style="background:#EFEAF9" data-i-label="lavender"></button>
+        <button data-bg="night"    style="background:#121019" data-i-label="night"></button>
+        <button data-bg="black"    style="background:#000000" data-i-label="black"></button>
+      </span></label>
+    <label><span data-i="dim"></span><input id="dim" type="range" min="60" max="100" step="5"></label>
+    <label><span data-i="saver"></span><input id="saver" type="checkbox"></label>
+
+    <div class="pop__sep"></div>
+    <div class="sub" data-i="chapters"></div>
+    <label><span class="seg" id="chmode">
+      <button data-chmode="none"   data-i="chNone"></button>
+      <button data-chmode="folder" data-i="chFolder"></button>
+      <button data-chmode="pages"  data-i="chPages"></button></span></label>
+    <label id="chnRow" hidden><span data-i="pagesPerEp"></span><input id="chn" type="number" min="1" max="9999" step="1" inputmode="numeric"></label>
+    <p class="hint" id="chhint" hidden></p>
+    <label><span data-i="rememberBook"></span><input id="chrem" type="checkbox"></label>
+    <button class="linkbtn" id="chreset" hidden data-i="resetDefault"></button>
+  </section>
+
+  <!-- side panel (T). One tab for now; a "Pages" thumbnail tab can sit next to it. -->
+  <aside class="side" id="side" hidden aria-label="Side panel">
+    <div class="side__head">
+      <div class="tabs" role="tablist"><button role="tab" aria-selected="true" data-i="bookmarks"></button></div>
+      <button class="ibtn" id="sideClose" data-i-label="close"><svg class="i"><use href="icons.svg#close"/></svg></button>
+    </div>
+    <div class="side__body" id="bmList"></div>
+  </aside>
+
+  <!-- bottom bar: 48px floating glass with the scrubber (track = .scrub, 24px hit area) -->
+  <footer class="ov ov--bottom" id="bottom">
+    <div class="scrub" id="track">
+      <div class="scrub__rail"><div class="scrub__fill"></div></div>
+      <div class="scrub__thumb"></div>
+      <div class="thumbtip"><img id="thumb" alt=""><span id="tiplabel"></span></div>
+    </div>
+  </footer>
+
+  <!-- open() failed -->
+  <div class="reader-err" id="err" hidden>
+    <div class="panel">
+      <h2 id="errTitle"></h2><p id="errDetail"></p>
+      <div style="display:flex;gap:10px">
+        <button class="btn btn--soft" id="errBack"><span data-i="back"></span></button>
+        <button class="btn btn--soft" id="errLocate" hidden><span data-i="locate"></span></button>
+        <button class="btn btn--primary" id="errRetry"><span data-i="retry"></span></button>
+      </div>
+    </div>
+  </div>
+</div>
+<script type="module" src="reader-boot.js"></script>
+</body>
+</html>
