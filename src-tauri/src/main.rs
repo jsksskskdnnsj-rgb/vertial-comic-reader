@@ -1,5 +1,20 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+// v0.4 reader backend (split from design/claude-v04/reader_backend.rs; see
+// design/claude-v04/INTEGRATION_NOTES.md §3 for the shelf-unification decisions).
+mod adapters;
+mod bookmarks;
+mod cache;
+mod chapters;
+mod commands;
+mod cover_protocol;
+mod db;
+mod error;
+mod extractor;
+mod model;
+mod protocol;
+mod scan;
+
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -375,7 +390,7 @@ fn take_drop_queue() -> Result<Vec<String>, String> {
 /* ================= 数据目录（可自定义，默认 exe 所在目录） ================= */
 
 /// 数据目录解析：exe 旁的 data-dir.txt 可指定自定义目录；默认就是 exe 所在目录
-fn data_dir() -> Result<PathBuf, String> {
+pub(crate) fn data_dir() -> Result<PathBuf, String> {
     let exe_dir = std::env::current_exe()
         .map_err(|e| e.to_string())?
         .parent()
@@ -523,7 +538,32 @@ fn pick_data_dir(app: AppHandle) -> Result<Option<String>, String> {
         .and_then(fp_to_string))
 }
 
-/// 切换数据目录：把现有数据库复制到新位置（不删除旧文件），写入 exe 旁的 data-dir.txt；
+/// 递归复制目录：只复制目标不存在的文件，已存在的跳过（不覆盖）
+fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<(), String> {
+    if !src.is_dir() {
+        return Ok(());
+    }
+    std::fs::create_dir_all(dst).map_err(|e| format!("创建目录失败：{}", e))?;
+    let entries = std::fs::read_dir(src).map_err(|e| format!("读取目录失败：{}", e))?;
+    for entry in entries {
+        let entry = entry.map_err(|e| format!("读取目录项失败：{}", e))?;
+        let src_path = entry.path();
+        let dst_path = dst.join(entry.file_name());
+        let ft = entry
+            .file_type()
+            .map_err(|e| format!("读取文件类型失败：{}", e))?;
+        if ft.is_dir() {
+            copy_dir_recursive(&src_path, &dst_path)?;
+        } else if ft.is_file() && !dst_path.exists() {
+            std::fs::copy(&src_path, &dst_path).map_err(|e| format!("复制文件失败：{}", e))?;
+        }
+        // 符号链接等其他类型跳过
+    }
+    Ok(())
+}
+
+/// 切换数据目录：把现有数据（数据库、阅读配置、页面缓存）复制到新位置（不删除旧文件，
+/// 新目录已有同名文件不覆盖），写入 exe 旁的 data-dir.txt；
 /// 若选的就是 exe 目录则删除配置文件，即恢复默认
 #[tauri::command]
 fn set_data_dir(path: String) -> Result<String, String> {
@@ -533,10 +573,23 @@ fn set_data_dir(path: String) -> Result<String, String> {
     }
     let old_dir = data_dir()?;
     if new_dir != old_dir {
+        // 数据库
         let old_db = old_dir.join("mh-reader.db");
         let new_db = new_dir.join("mh-reader.db");
-        if old_db.exists() && old_db != new_db {
+        if old_db.exists() && !new_db.exists() {
             std::fs::copy(&old_db, &new_db).map_err(|e| format!("迁移数据库失败：{}", e))?;
+        }
+        // 阅读配置（默认阅读模式/省内存开关等）
+        let old_cfg = old_dir.join("reader-config.json");
+        let new_cfg = new_dir.join("reader-config.json");
+        if old_cfg.exists() && !new_cfg.exists() {
+            std::fs::copy(&old_cfg, &new_cfg).map_err(|e| format!("迁移阅读配置失败：{}", e))?;
+        }
+        // 页面缓存（已解压的 ZIP 页面，递归复制，已存在的跳过）
+        let old_cache = old_dir.join("page_cache");
+        let new_cache = new_dir.join("page_cache");
+        if old_cache.is_dir() {
+            copy_dir_recursive(&old_cache, &new_cache)?;
         }
     }
     let exe = exe_dir()?;
@@ -552,6 +605,10 @@ fn set_data_dir(path: String) -> Result<String, String> {
 fn db_conn() -> Result<Connection, String> {
     let dir = data_dir()?;
     let conn = Connection::open(dir.join("mh-reader.db")).map_err(|e| e.to_string())?;
+    // v0.4: the design backend holds one long-lived connection to this same file;
+    // wait on contention instead of failing with SQLITE_BUSY (both sides set this).
+    conn.busy_timeout(std::time::Duration::from_millis(5000))
+        .map_err(|e| e.to_string())?;
     conn.execute_batch(
         "CREATE TABLE IF NOT EXISTS shelf (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -584,6 +641,30 @@ fn db_conn() -> Result<Connection, String> {
     if has_col == 0 {
         conn.execute("ALTER TABLE shelf ADD COLUMN folder_id INTEGER", [])
             .map_err(|e| e.to_string())?;
+    }
+    // v0.4 轻量迁移（同一 pragma 检查风格）：reader 后端需要的三个新列
+    // scan_sig: 扫描签名（变更检测）；finished: 是否读完；cover_ver: 封面版本号（mhcover 缓存失效）
+    for (col, ddl) in [
+        ("scan_sig", "ALTER TABLE shelf ADD COLUMN scan_sig TEXT"),
+        (
+            "finished",
+            "ALTER TABLE shelf ADD COLUMN finished INTEGER NOT NULL DEFAULT 0",
+        ),
+        (
+            "cover_ver",
+            "ALTER TABLE shelf ADD COLUMN cover_ver INTEGER NOT NULL DEFAULT 1",
+        ),
+    ] {
+        let has: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('shelf') WHERE name=?1",
+                [col],
+                |r| r.get(0),
+            )
+            .unwrap_or(0);
+        if has == 0 {
+            conn.execute(ddl, []).map_err(|e| e.to_string())?;
+        }
     }
     Ok(conn)
 }
@@ -764,6 +845,56 @@ fn main() {
         .manage(ZipState {
             map: Mutex::new(HashMap::new()),
         })
+        .setup(|app| {
+            use tauri::Manager;
+            // v0.4 reader backend wiring (design reader_backend.rs wiring block,
+            // adapted to this crate's data_dir()/db_conn()).
+            let dir = data_dir().map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
+            // db_conn() runs the base DDL + shelf column migrations (incl. the new
+            // scan_sig/finished/cover_ver columns the design DDL expects).
+            let _ = db_conn().map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
+            let conn = Connection::open(dir.join("mh-reader.db"))?;
+            conn.busy_timeout(std::time::Duration::from_millis(5000))?;
+            // Design migrations once, in order: db DDL -> chapters DDL -> bookmarks
+            // (bookmarks::migrate also runs bookmarks::DDL). All idempotent.
+            conn.execute_batch(db::DDL)?;
+            conn.execute_batch(chapters::DDL)?;
+            bookmarks::migrate(&conn)?;
+            let rdb: db::Db =
+                std::sync::Arc::new(parking_lot::Mutex::new(conn));
+            let cache = std::sync::Arc::new(cache::PageCache::open(
+                dir.join("cache"),
+                512 << 20,
+            )?);
+            let extractor = extractor::Extractor::start(cache.clone(), 2);
+            app.manage(commands::ReaderState {
+                db: rdb,
+                cache,
+                extractor,
+            });
+            app.manage(cover_protocol::CoversDir(std::sync::Arc::new(
+                dir.join("covers"),
+            )));
+            Ok(())
+        })
+        .register_asynchronous_uri_scheme_protocol("mhpage", |ctx, req, responder| {
+            use tauri::Manager;
+            let ex = ctx
+                .app_handle()
+                .state::<commands::ReaderState>()
+                .extractor
+                .clone();
+            protocol::handle(ex, req, responder);
+        })
+        .register_asynchronous_uri_scheme_protocol("mhcover", |ctx, req, responder| {
+            use tauri::Manager;
+            let dir = ctx
+                .app_handle()
+                .state::<cover_protocol::CoversDir>()
+                .0
+                .clone();
+            cover_protocol::cover_handle(dir, req, responder);
+        })
         .invoke_handler(tauri::generate_handler![
             pick_images,
             pick_zips,
@@ -796,7 +927,39 @@ fn main() {
             folder_list,
             folder_rename,
             folder_remove,
-            shelf_move
+            shelf_move,
+            // v0.4 reader core (design backend)
+            commands::open_book,
+            commands::rescan_book,
+            commands::close_book,
+            commands::set_reading_window,
+            commands::save_progress,
+            commands::load_progress,
+            commands::fix_page_dims,
+            commands::cache_stats,
+            commands::cache_set_limit,
+            commands::cache_clear,
+            // v0.4 chapters
+            chapters::get_chapter_defaults,
+            chapters::set_chapter_defaults,
+            chapters::set_book_chapter_settings,
+            chapters::clear_book_chapter_settings,
+            chapters::episode_info,
+            // v0.4 bookmarks
+            bookmarks::add_bookmark,
+            bookmarks::list_bookmarks,
+            bookmarks::delete_bookmark,
+            bookmarks::update_bookmark_note,
+            bookmarks::reanchor_bookmark,
+            bookmarks::bookmark_counts,
+            // v0.4 covers
+            cover_protocol::ensure_cover,
+            // v0.4 adapters (INTEGRATION_NOTES §2.3)
+            adapters::list_recent_books,
+            adapters::list_recent_added,
+            adapters::import_paths,
+            adapters::reveal_book,
+            adapters::relink_book
         ])
         .on_window_event(|_window, event| {
             if let tauri::WindowEvent::DragDrop(tauri::DragDropEvent::Drop { paths, .. }) = event {
