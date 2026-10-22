@@ -24,7 +24,7 @@ pub fn is_image(name: &str) -> bool {
     } // ._foo, .DS_Store
     matches!(
         base.rsplit('.').next(),
-        Some("jpg" | "jpeg" | "png" | "webp" | "gif" | "avif" | "bmp")
+        Some("jpg" | "jpeg" | "jfif" | "jpe" | "png" | "webp" | "gif" | "avif" | "bmp")
     )
 }
 

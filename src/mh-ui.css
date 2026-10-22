@@ -118,3 +118,17 @@
 .danger-zone{border-color:#ff8e9140}
 .path-txt{font-size:12px;color:var(--muted);overflow-wrap:anywhere}
 @media(max-width:900px){.lib-layout{grid-template-columns:1fr}.folder-panel{position:static;flex-direction:row;flex-wrap:wrap}.shell-search{display:none}}
+
+/* === v0.5.1 perf fixes ===
+   1) backdrop-filter blur(22px) sat on .glass/.glass-strong, i.e. on the
+      near-full-window reader panel and the tall history panel: every scroll
+      frame re-blurred the whole window (with a full-window photo behind it,
+      scrolling stuttered and the background flickered/dropped out).
+      Panels are 82-94% opaque already - drop the blur there, keep a light
+      blur only on small floating chrome.
+   2) .bg-layer gets its own compositor layer BEHIND the content
+      (z-index:-1 still paints above the html/body canvas background), so
+      the photo no longer repaints with the content. */
+.glass,.glass-strong{backdrop-filter:none;-webkit-backdrop-filter:none}
+.shell-top,.shell-rail,.flyout,.drawer,.toast,.modal,.vp__pill,.vp__auto{backdrop-filter:blur(14px) saturate(1.25);-webkit-backdrop-filter:blur(14px) saturate(1.25)}
+.bg-layer{z-index:-1;transform:translateZ(0);will-change:transform}

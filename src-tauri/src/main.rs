@@ -25,7 +25,10 @@ use tauri::{AppHandle, State};
 use tauri_plugin_dialog::{DialogExt, FilePath};
 
 const IMAGE_EXTS: &[&str] = &[
-    "jpg", "jpeg", "png", "webp", "gif", "bmp", "svg", "avif", "tif", "tiff", "heic", "jxl",
+    // Only formats the reader pipeline can actually serve (extractor::sniff):
+    // svg/tif/heic/jxl used to be admitted here and then failed page-by-page
+    // as "not a recognised image" - reject them at import instead.
+    "jpg", "jpeg", "jfif", "jpe", "png", "webp", "gif", "bmp", "avif",
 ];
 const ZIP_EXTS: &[&str] = &["zip", "cbz"];
 

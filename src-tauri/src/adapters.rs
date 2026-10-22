@@ -16,8 +16,10 @@ use std::path::{Path, PathBuf};
 /// (mh-common.js): \.(jpe?g|jfif|png|apng|webp|gif|bmp|dib|avif|svg|ico|tif|tiff|heic|heif|jxl)$/i
 /// Broader than main.rs IMAGE_EXTS (adds jfif, apng, dib, heic, heif).
 const IMPORT_IMG_EXTS: &[&str] = &[
-    "jpg", "jpeg", "jfif", "png", "apng", "webp", "gif", "bmp", "dib", "avif", "svg", "ico",
-    "tif", "tiff", "heic", "heif", "jxl",
+    // Servable formats only (see main.rs IMAGE_EXTS note): admitting tif /
+    // heic / jxl / svg / ico here produced books whose every page failed
+    // with "not a recognised image" in the reader.
+    "jpg", "jpeg", "jfif", "jpe", "png", "apng", "webp", "gif", "bmp", "avif",
 ];
 
 fn is_import_image(p: &Path) -> bool {

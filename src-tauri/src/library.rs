@@ -464,3 +464,234 @@ pub fn library_stats() -> Result<LibraryStats, String> {
         bookmarked_books: one("SELECT COUNT(DISTINCT book_id) FROM bookmarks"),
     })
 }
+
+#[cfg(test)]
+mod chain_tests {
+    use super::*;
+    use std::io::Write;
+
+    fn png_bytes(w: u32, h: u32, rgb: [u8; 3]) -> Vec<u8> {
+        let img = image::DynamicImage::ImageRgb8(image::RgbImage::from_pixel(
+            w,
+            h,
+            image::Rgb(rgb),
+        ));
+        let mut v = Vec::new();
+        img.write_to(&mut std::io::Cursor::new(&mut v), image::ImageFormat::Png)
+            .unwrap();
+        v
+    }
+
+    fn apply_schema(conn: &rusqlite::Connection) {
+        conn.execute_batch(crate::db::DDL).unwrap();
+        conn.execute_batch(crate::db::EDITED_DDL).unwrap();
+        conn.execute_batch(crate::chapters::DDL).unwrap();
+        crate::bookmarks::migrate(conn).unwrap();
+    }
+
+    #[test]
+    fn merged_and_plain_books_full_chain() {
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let base = std::env::temp_dir().join(format!("mh-chain-{stamp}"));
+        let folder = base.join("vol01-10");
+        std::fs::create_dir_all(&folder).unwrap();
+        for i in 1..=3 {
+            std::fs::write(
+                folder.join(format!("{i:03}.png")),
+                png_bytes(100, 140, [200, 30, 30]),
+            )
+            .unwrap();
+        }
+        let zipp = base.join("vol11-20.zip");
+        {
+            let f = std::fs::File::create(&zipp).unwrap();
+            let mut zw = zip::ZipWriter::new(f);
+            let opts = zip::write::SimpleFileOptions::default();
+            for i in 1..=3 {
+                zw.start_file(format!("{i:03}.png"), opts).unwrap();
+                zw.write_all(&png_bytes(100, 140, [30, 30, 200])).unwrap();
+            }
+            zw.finish().unwrap();
+        }
+        let conn = crate::db_conn().unwrap();
+        apply_schema(&conn);
+        drop(conn);
+
+        // 1) merged import: folder + zip mixed into ONE book
+        let merged_id = tauri::async_runtime::block_on(import_merged(
+            vec![
+                folder.to_string_lossy().into_owned(),
+                zipp.to_string_lossy().into_owned(),
+            ],
+            Some(format!("chain-merged-{stamp}")),
+            None,
+        ))
+        .expect("import_merged failed");
+
+        // 2) plain import of the same sources (zip book + folder book)
+        let r = crate::adapters::import_paths(
+            vec![
+                zipp.to_string_lossy().into_owned(),
+                folder.to_string_lossy().into_owned(),
+            ],
+            None,
+        )
+        .unwrap();
+        assert_eq!(r.added, 2, "plain import added != 2");
+        let conn = crate::db_conn().unwrap();
+        let zip_id: i64 = conn
+            .query_row(
+                "SELECT id FROM shelf WHERE kind='zip' AND paths LIKE '%' || ?1 || '%' ORDER BY id DESC LIMIT 1",
+                [stamp.to_string()],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let folder_id: i64 = conn
+            .query_row(
+                "SELECT id FROM shelf WHERE kind='folder' AND paths LIKE '%' || ?1 || '%' ORDER BY id DESC LIMIT 1",
+                [stamp.to_string()],
+                |row| row.get(0),
+            )
+            .unwrap();
+        drop(conn);
+
+        // reader state, mirroring app setup
+        let conn2 = crate::db_conn().unwrap();
+        apply_schema(&conn2);
+        let cache = std::sync::Arc::new(
+            crate::cache::PageCache::open(base.join("cache"), 512 << 20).unwrap(),
+        );
+        let ex = crate::extractor::Extractor::start(cache.clone(), 2);
+        let state = crate::commands::ReaderState {
+            db: std::sync::Arc::new(parking_lot::Mutex::new(conn2)),
+            cache: cache.clone(),
+            extractor: ex.clone(),
+        };
+
+        for (id, want) in [(merged_id, 6u32), (zip_id, 3), (folder_id, 3)] {
+            let opened = crate::commands::open_blocking(&state, id, false)
+                .unwrap_or_else(|e| panic!("open book {id}: {e:?}"));
+            assert_eq!(opened.real_pages, want, "book {id} page count");
+            assert!(
+                opened.dims.iter().all(|d| *d == [100, 140]),
+                "book {id} dims: {:?}",
+                opened.dims
+            );
+            for i in 0..want {
+                let p = ex
+                    .get_or_extract((id, i, 0))
+                    .unwrap_or_else(|e| panic!("book {id} extract page {i}: {e:?}"));
+                let bytes = std::fs::read(&p.path).unwrap();
+                assert!(
+                    crate::extractor::sniff(&bytes).is_some(),
+                    "book {id} page {i} bytes not a recognised image"
+                );
+            }
+        }
+        let _ = std::fs::remove_dir_all(&base);
+    }
+}
+
+#[cfg(test)]
+mod chain_tests2 {
+    use std::io::Write;
+
+    fn img_bytes(fmt: image::ImageFormat, w: u32, h: u32, rgb: [u8; 3]) -> Vec<u8> {
+        let img = image::DynamicImage::ImageRgb8(image::RgbImage::from_pixel(
+            w,
+            h,
+            image::Rgb(rgb),
+        ));
+        let mut v = Vec::new();
+        img.write_to(&mut std::io::Cursor::new(&mut v), fmt).unwrap();
+        v
+    }
+
+    #[test]
+    fn nasty_zip_and_mixed_folder_chain() {
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let base = std::env::temp_dir().join(format!("mh-nasty-{stamp}"));
+        std::fs::create_dir_all(&base).unwrap();
+        // zip: subfolder entries added in REVERSE order + junk entries mixed in
+        let zipp = base.join("nasty.zip");
+        {
+            let f = std::fs::File::create(&zipp).unwrap();
+            let mut zw = zip::ZipWriter::new(f);
+            let opts = zip::write::SimpleFileOptions::default();
+            zw.add_directory("chap1/", opts).unwrap();
+            zw.start_file("readme.txt", opts).unwrap();
+            zw.write_all(b"not an image").unwrap();
+            for i in (1..=4).rev() {
+                zw.start_file(format!("chap1/{i:03}.jpg"), opts).unwrap();
+                zw.write_all(&img_bytes(image::ImageFormat::Jpeg, 90, 130, [10, 100, 10]))
+                    .unwrap();
+            }
+            zw.start_file("Thumbs.db", opts).unwrap();
+            zw.write_all(b"junk").unwrap();
+            zw.start_file("chap1/005.webp", opts).unwrap();
+            zw.write_all(&img_bytes(image::ImageFormat::WebP, 90, 130, [10, 10, 100]))
+                .unwrap();
+            zw.finish().unwrap();
+        }
+        // folder with mixed formats incl. gif + a nested subfolder
+        let folder = base.join("mixedfolder");
+        std::fs::create_dir_all(folder.join("sub")).unwrap();
+        std::fs::write(folder.join("001.jpg"), img_bytes(image::ImageFormat::Jpeg, 90, 130, [50, 50, 50])).unwrap();
+        std::fs::write(folder.join("sub").join("002.gif"), img_bytes(image::ImageFormat::Gif, 90, 130, [60, 60, 60])).unwrap();
+        std::fs::write(folder.join("003.png"), img_bytes(image::ImageFormat::Png, 90, 130, [70, 70, 70])).unwrap();
+
+        let conn = crate::db_conn().unwrap();
+        conn.execute_batch(crate::db::DDL).unwrap();
+        conn.execute_batch(crate::db::EDITED_DDL).unwrap();
+        conn.execute_batch(crate::chapters::DDL).unwrap();
+        crate::bookmarks::migrate(&conn).unwrap();
+        drop(conn);
+
+        let r = crate::adapters::import_paths(
+            vec![
+                zipp.to_string_lossy().into_owned(),
+                folder.to_string_lossy().into_owned(),
+            ],
+            None,
+        )
+        .unwrap();
+        assert_eq!(r.added, 2, "nasty import added != 2");
+        let conn = crate::db_conn().unwrap();
+        let zip_id: i64 = conn.query_row("SELECT id FROM shelf WHERE kind='zip' AND paths LIKE '%' || ?1 || '%' ORDER BY id DESC LIMIT 1", [stamp.to_string()], |row| row.get(0)).unwrap();
+        let folder_id: i64 = conn.query_row("SELECT id FROM shelf WHERE kind='folder' AND paths LIKE '%' || ?1 || '%' ORDER BY id DESC LIMIT 1", [stamp.to_string()], |row| row.get(0)).unwrap();
+        drop(conn);
+
+        let conn2 = crate::db_conn().unwrap();
+        let cache = std::sync::Arc::new(crate::cache::PageCache::open(base.join("cache"), 512 << 20).unwrap());
+        let ex = crate::extractor::Extractor::start(cache.clone(), 2);
+        let state = crate::commands::ReaderState {
+            db: std::sync::Arc::new(parking_lot::Mutex::new(conn2)),
+            cache: cache.clone(),
+            extractor: ex.clone(),
+        };
+        // zip: 5 image pages (4 jpg + 1 webp), junk skipped; folder: 3 pages
+        for (id, want) in [(zip_id, 5u32), (folder_id, 3)] {
+            let opened = crate::commands::open_blocking(&state, id, false)
+                .unwrap_or_else(|e| panic!("open book {id}: {e:?}"));
+            assert_eq!(opened.real_pages, want, "book {id} page count");
+            for i in 0..want {
+                let p = ex.get_or_extract((id, i, 0))
+                    .unwrap_or_else(|e| panic!("book {id} extract page {i}: {e:?}"));
+                let bytes = std::fs::read(&p.path).unwrap();
+                assert!(crate::extractor::sniff(&bytes).is_some(), "book {id} page {i} not recognised");
+                // thumbnails go through the decode path (v=160)
+                let th = ex.get_or_extract((id, i, 160))
+                    .unwrap_or_else(|e| panic!("book {id} thumb page {i}: {e:?}"));
+                let tb = std::fs::read(&th.path).unwrap();
+                assert!(crate::extractor::sniff(&tb).is_some(), "book {id} thumb {i} not recognised");
+            }
+        }
+        let _ = std::fs::remove_dir_all(&base);
+    }
+}
