@@ -52,14 +52,42 @@ pub(crate) fn open_blocking(
     if kind != SourceKind::Images && !path.exists() {
         return Err(ReaderError::SourceMissing(first));
     } // -> "Locate file..." dialog
-    let sig = scan::quick_sig(kind, &path)?;
+    // Page-edit overlay: a user-edited page list wins over the scan. A forced
+    // rescan is the explicit "back to the source as it is" action, so it drops
+    // the overlay first.
+    if force {
+        db::clear_edited_pages(&s.db.lock(), id)?;
+    }
+    let edited = if force {
+        None
+    } else {
+        db::load_edited_pages(&s.db.lock(), id)?
+    };
+    let sig = if let Some(e) = &edited {
+        // Content-derived: every page edit changes the sig, so JS image URLs
+        // (which carry `s=<sig>`) never serve a stale page from the webview cache.
+        let mut h: u64 = 0xcbf29ce484222325;
+        for p in e {
+            for b in format!("{}|{}|{:?};", p.entry, p.name, p.src_path).bytes() {
+                h ^= b as u64;
+                h = h.wrapping_mul(0x100000001b3);
+            }
+        }
+        format!("edited:{h:016x}")
+    } else {
+        scan::quick_sig(kind, &path)?
+    };
 
-    let cached = if !force && row.scan_sig.as_deref() == Some(sig.as_str()) {
+    let cached = if !force && edited.is_none() && row.scan_sig.as_deref() == Some(sig.as_str()) {
         db::load_pages(&s.db.lock(), id)?
     } else {
         vec![]
     };
-    let real = if !cached.is_empty() {
+    let real = if let Some(e) = edited {
+        // Mirror into pages_meta (bookmarks / episode_info read names from there).
+        db::sync_pages_meta(&s.db.lock(), id, &e)?;
+        e
+    } else if !cached.is_empty() {
         cached
     } else {
         let fresh = match kind {

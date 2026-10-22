@@ -399,6 +399,10 @@ fn read_entry(
     page: &PageMeta,
     zip: &mut ZipHandle,
 ) -> Result<Vec<u8>, ReaderError> {
+    // Appended/merged pages carry their own source file (see model::PageMeta).
+    if let Some(p) = &page.src_path {
+        return Ok(std::fs::read(p)?);
+    }
     match book.kind {
         SourceKind::Zip => {
             if zip.as_ref().map(|(id, _)| *id) != Some(book.id) {

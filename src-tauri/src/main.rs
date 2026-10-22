@@ -11,6 +11,7 @@ mod cover_protocol;
 mod db;
 mod error;
 mod extractor;
+mod library;
 mod model;
 mod protocol;
 mod scan;
@@ -858,6 +859,7 @@ fn main() {
             // Design migrations once, in order: db DDL -> chapters DDL -> bookmarks
             // (bookmarks::migrate also runs bookmarks::DDL). All idempotent.
             conn.execute_batch(db::DDL)?;
+            conn.execute_batch(db::EDITED_DDL)?;
             conn.execute_batch(chapters::DDL)?;
             bookmarks::migrate(&conn)?;
             let rdb: db::Db =
@@ -959,7 +961,18 @@ fn main() {
             adapters::list_recent_added,
             adapters::import_paths,
             adapters::reveal_book,
-            adapters::relink_book
+            adapters::relink_book,
+            // v0.5 library management + page edits (library.rs)
+            library::reorder_pages,
+            library::delete_pages,
+            library::append_pages,
+            library::reset_page_edits,
+            library::page_edit_info,
+            library::shelf_rename,
+            library::book_reset_progress,
+            library::check_books_missing,
+            library::import_merged,
+            library::library_stats
         ])
         .on_window_event(|_window, event| {
             if let tauri::WindowEvent::DragDrop(tauri::DragDropEvent::Drop { paths, .. }) = event {

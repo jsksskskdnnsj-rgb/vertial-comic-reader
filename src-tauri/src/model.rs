@@ -40,6 +40,11 @@ pub struct RealPage {
     pub w: u32,
     pub h: u32,
     pub bytes: u64,
+    /// Page-edit overlay only: this page comes from a DIFFERENT source than the
+    /// book itself (appended/merged in via the page directory). Absolute file
+    /// path read directly by the extractor, bypassing the book's own source.
+    /// None for every page produced by a normal scan.
+    pub src_path: Option<String>,
 }
 
 /// One VIRTUAL page = what JS gets a box for. Tall images are cut into several of these.
@@ -52,6 +57,8 @@ pub struct PageMeta {
     pub h: u32, // dims of THIS box (h = slice height); 0,0 = unknown
     pub full_h: u32, // height of the whole underlying image
     pub y0: u32,     // slice offset inside the image
+    /// See RealPage::src_path (appended/merged pages read from this file).
+    pub src_path: Option<String>,
 }
 impl PageMeta {
     pub fn is_slice(&self) -> bool {

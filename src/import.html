@@ -3,76 +3,55 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>mh-reader · 本地导入</title>
+<title data-i="app.name"></title>
 <link rel="stylesheet" href="mh-ui.css">
-<style>
-  .imp{ display:flex; flex-direction:column; gap:var(--gap); max-width:760px; }
-  .imp h2{ margin:0; font-size:18px; color:var(--ink-900); }
-  .imp .pick-row{ display:flex; flex-wrap:wrap; gap:12px; margin-top:16px; }
-  .imp-results{ display:flex; flex-direction:column; gap:12px; }
-  .imp-result{ padding:16px 20px; }
-  .imp-result .sum{ font-weight:700; color:var(--ink-900); }
-  .imp-result ul{ margin:8px 0 0; padding-left:18px; color:var(--danger); font-size:var(--fs-meta); word-break:break-all; }
-  .imp-note{ font-size:var(--fs-meta); color:var(--ink-400); }
-</style>
 </head>
 <body>
-<div class="window">
+<div class="app">
+  <header id="shell-top"></header>
+  <div class="work">
+    <nav id="shell-rail"></nav>
+    <main class="page-main">
+      <div class="page-head"><h1 data-i="imp.title"></h1><span class="muted" data-i="imp.help"></span></div>
 
-  <!-- ===== Sidebar: 192px ===== -->
-  <aside class="sb" data-tauri-drag-region>
-    <div class="brand">
-      <div class="logo"><svg viewBox="0 0 24 24"><path d="M5 18V6l7 8 7-8v12"/></svg></div>
-      <div><div class="brand__name">mh-reader</div><div class="brand__sub" data-i="tagline"></div></div>
-    </div>
-    <nav class="nav">
-      <a href="home.html"><svg class="i"><use href="icons.svg#home"/></svg><span data-i="home"></span></a>
-      <a href="library.html"><svg class="i"><use href="icons.svg#shelf"/></svg><span data-i="library"></span></a>
-      <a href="import.html" aria-current="page"><svg class="i"><use href="icons.svg#import"/></svg><span data-i="import"></span></a>
-      <a href="settings.html"><svg class="i"><use href="icons.svg#settings"/></svg><span data-i="settings"></span></a>
-    </nav>
-    <p class="sb__quote" data-i="quote"></p>
-    <div class="sb__art" aria-hidden="true"></div>
-  </aside>
-
-  <!-- ===== Main ===== -->
-  <div class="main">
-    <header class="topbar" data-tauri-drag-region>
-      <label class="search">
-        <svg class="i"><use href="icons.svg#search"/></svg>
-        <input id="q" type="search" data-i-ph="search" autocomplete="off">
-      </label>
-      <span class="spacer" data-tauri-drag-region></span>
-      <div class="wc">
-        <button data-win="min"   data-i-label="min"><svg class="i"><use href="icons.svg#min"/></svg></button>
-        <button data-win="max"   data-i-label="max"><svg class="i"><use href="icons.svg#max"/></svg></button>
-        <button data-win="close" data-i-label="close"><svg class="i"><use href="icons.svg#close"/></svg></button>
-      </div>
-    </header>
-
-    <main class="body">
-      <div class="imp">
-        <div class="zone-wrap">
-          <div class="zone" id="zone">
-            <div class="zone__icon"><svg viewBox="0 0 64 48"><use href="icons.svg#cloud-up"/></svg></div>
-            <h2 data-i="dropTitle"></h2>
-            <p data-i="dropSub"></p>
-            <div class="pick-row">
-              <button class="btn btn--primary" id="pickZips"><svg class="i"><use href="icons.svg#folder"/></svg>选择压缩包</button>
-              <button class="btn btn--soft" id="pickImages"><svg class="i"><use href="icons.svg#image"/></svg>选择图片</button>
-              <button class="btn btn--soft" id="pickFolder"><svg class="i"><use href="icons.svg#folder"/></svg>选择文件夹</button>
-            </div>
-            <div class="zone__note"><span data-i="dropNote"></span></div>
+      <section class="panel glass">
+        <div class="dropzone" id="zone">
+          <svg class="dz-icon"><use href="icons.svg#cloud-up"/></svg>
+          <h3 data-i="imp.dropTitle"></h3>
+          <p data-i="home.dropSub"></p>
+          <div style="display:flex;gap:9px;justify-content:center;flex-wrap:wrap">
+            <button class="btn btn--primary" id="addZips"><svg class="i"><use href="icons.svg#folder"/></svg><span data-i="imp.addZips"></span></button>
+            <button class="btn btn--ghost" id="addFolders"><svg class="i"><use href="icons.svg#folder"/></svg><span data-i="imp.addFolders"></span></button>
           </div>
         </div>
-        <p class="imp-note">也可以把压缩包、图片或文件夹直接拖放到窗口任意位置导入。注意：暂不支持 RAR / 7z 格式，请先解压或转成 ZIP 后再导入。</p>
-        <section>
-          <h2 style="margin-bottom:12px">导入结果</h2>
-          <div class="imp-results" id="results">
-            <p class="empty" id="noResults" style="padding:0">还没有导入记录，本次打开页面后的导入结果会显示在这里。</p>
-          </div>
-        </section>
-      </div>
+
+        <div style="display:flex;align-items:center;gap:10px;margin-top:16px;flex-wrap:wrap">
+          <h2 style="margin:0;font-size:14px"><span data-i="imp.sources"></span> <span class="muted num" id="srcCount"></span></h2>
+          <span style="flex:1"></span>
+          <button class="btn btn--ghost btn--sm" id="sortBtn"><svg class="i"><use href="icons.svg#wand"/></svg><span data-i="imp.sortByName"></span></button>
+          <button class="btn btn--ghost btn--sm" id="clearBtn"><span data-i="imp.clear"></span></button>
+        </div>
+        <div class="src-list" id="srcList"></div>
+        <p class="empty" id="srcEmpty" data-i="imp.empty"></p>
+
+        <div class="set-row">
+          <div class="grow"><span data-i="imp.merge"></span><span class="sub muted" data-i="imp.note"></span></div>
+          <span class="seg" id="mergeSeg">
+            <button data-merge="off" data-i="imp.mergeOff"></button>
+            <button data-merge="on" data-i="imp.mergeOn"></button>
+          </span>
+        </div>
+        <div class="set-row">
+          <div class="grow"><span data-i="lib.folders"></span></div>
+          <select class="select" id="folderSel"><option value="" data-i="lib.noFolder"></option></select>
+        </div>
+        <div style="display:flex;gap:9px;margin-top:16px;flex-wrap:wrap">
+          <button class="btn btn--primary" id="goBtn"><svg class="i"><use href="icons.svg#download"/></svg><span data-i="nav.import"></span></button>
+          <button class="btn btn--ghost" id="openNew" hidden><span data-i="imp.openBook"></span></button>
+        </div>
+        <p class="hint" id="summary" style="margin-top:12px"></p>
+        <ul class="fail-list" id="failList"></ul>
+      </section>
     </main>
   </div>
 </div>

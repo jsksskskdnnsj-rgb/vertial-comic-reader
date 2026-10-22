@@ -3,85 +3,37 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>mh-reader · 书架</title>
+<title data-i="app.name"></title>
 <link rel="stylesheet" href="mh-ui.css">
-<style>
-  .lib-layout{ display:grid; grid-template-columns:200px minmax(0,1fr); gap:var(--gap); align-items:start; }
-  .lib-folders{ padding:14px 12px; display:flex; flex-direction:column; gap:4px; position:sticky; top:0; }
-  .lib-folders h3{ margin:2px 8px 8px; font-size:var(--fs-h); color:var(--ink-900); }
-  .lib-folders button{ height:36px; padding:0 12px; border-radius:10px; display:flex; align-items:center; gap:8px; text-align:left; color:var(--ink-700); font-size:var(--fs-body); }
-  .lib-folders button:hover{ background:var(--v-100); }
-  .lib-folders button[aria-current="true"]{ background:var(--grad-nav); color:#fff; font-weight:600; box-shadow:var(--sh-nav); }
-  .lib-folders button .cnt{ margin-left:auto; font-size:var(--fs-tiny); opacity:.75; }
-  .lib-folders button .i{ width:16px; height:16px; }
-  .lib-head{ display:flex; align-items:center; gap:12px; margin:2px 0 14px; }
-  .lib-head h2{ margin:0; font-size:18px; color:var(--ink-900); }
-  .lib-head .spacer{ flex:1; }
-  .lib-sort{ height:32px; border:1px solid var(--line); border-radius:var(--r-input); background:var(--surface-solid); color:var(--ink-700); font:inherit; padding:0 10px; outline:0; }
-  .lib-grid{ display:grid; grid-template-columns:repeat(auto-fill,minmax(132px,1fr)); gap:16px; }
-  .lib-card{ min-width:0; cursor:pointer; }
-  .lib-cover-wrap{ position:relative; }
-  .lib-cover-wrap .cover{ width:100%; aspect-ratio:3/4; }
-  .lib-card .ribbon{ display:grid; place-items:start center; padding-top:2px; color:#fff; font-size:9px; font-style:normal; font-weight:700; }
-  .lib-card b{ display:block; margin-top:6px; font-size:var(--fs-card); font-weight:600; color:var(--ink-700); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-  .lib-card .meta{ font-size:var(--fs-meta); color:var(--ink-400); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-  .lib-card .more{ position:absolute; top:6px; left:6px; background:var(--glass); border:1px solid var(--line); width:28px; height:24px; }
-  .menu .sep{ height:1px; background:var(--line); margin:4px 6px; }
-  .menu .danger{ color:var(--danger); }
-</style>
 </head>
 <body>
-<div class="window">
-
-  <!-- ===== Sidebar: 192px ===== -->
-  <aside class="sb" data-tauri-drag-region>
-    <div class="brand">
-      <div class="logo"><svg viewBox="0 0 24 24"><path d="M5 18V6l7 8 7-8v12"/></svg></div>
-      <div><div class="brand__name">mh-reader</div><div class="brand__sub" data-i="tagline"></div></div>
-    </div>
-    <nav class="nav">
-      <a href="home.html"><svg class="i"><use href="icons.svg#home"/></svg><span data-i="home"></span></a>
-      <a href="library.html" aria-current="page"><svg class="i"><use href="icons.svg#shelf"/></svg><span data-i="library"></span></a>
-      <a href="import.html"><svg class="i"><use href="icons.svg#import"/></svg><span data-i="import"></span></a>
-      <a href="settings.html"><svg class="i"><use href="icons.svg#settings"/></svg><span data-i="settings"></span></a>
-    </nav>
-    <p class="sb__quote" data-i="quote"></p>
-    <div class="sb__art" aria-hidden="true"></div>
-  </aside>
-
-  <!-- ===== Main ===== -->
-  <div class="main">
-    <header class="topbar" data-tauri-drag-region>
-      <label class="search">
-        <svg class="i"><use href="icons.svg#search"/></svg>
-        <input id="q" type="search" data-i-ph="search" autocomplete="off">
-      </label>
-      <span class="spacer" data-tauri-drag-region></span>
-      <div class="wc">
-        <button data-win="min"   data-i-label="min"><svg class="i"><use href="icons.svg#min"/></svg></button>
-        <button data-win="max"   data-i-label="max"><svg class="i"><use href="icons.svg#max"/></svg></button>
-        <button data-win="close" data-i-label="close"><svg class="i"><use href="icons.svg#close"/></svg></button>
-      </div>
-    </header>
-
-    <main class="body">
+<div class="app">
+  <header id="shell-top"></header>
+  <div class="work">
+    <nav id="shell-rail"></nav>
+    <main class="page-main">
       <div class="lib-layout">
-        <aside class="panel lib-folders">
-          <h3>文件夹</h3>
-          <div id="folders" style="display:flex;flex-direction:column;gap:4px"></div>
+        <aside class="panel glass folder-panel">
+          <h3 data-i="lib.folders"></h3>
+          <div id="folders" style="display:flex;flex-direction:column;gap:3px"></div>
+          <button class="btn btn--ghost btn--sm" id="newFolder" style="margin-top:9px">
+            <svg class="i"><use href="icons.svg#plus"/></svg><span data-i="lib.newFolder"></span>
+          </button>
         </aside>
         <section>
-          <div class="lib-head">
-            <h2 data-i="library"></h2>
-            <span class="spacer"></span>
-            <label style="font-size:var(--fs-meta);color:var(--ink-400)">排序
-              <select class="lib-sort" id="sortSel">
-                <option value="recent">最近阅读</option>
-                <option value="added">最近添加</option>
+          <div class="page-head">
+            <h1 data-i="lib.title"></h1>
+            <span class="muted num" id="count"></span>
+            <span class="spacer" style="flex:1"></span>
+            <label style="font-size:12px;color:var(--muted)"><span data-i="lib.sort"></span>
+              <select class="select" id="sortSel">
+                <option value="recent" data-i="lib.sortRecent"></option>
+                <option value="added" data-i="lib.sortAdded"></option>
+                <option value="name" data-i="lib.sortName"></option>
               </select>
             </label>
           </div>
-          <div class="lib-grid" id="grid"></div>
+          <div class="cards-row" id="grid" style="grid-template-columns:repeat(auto-fill,minmax(148px,1fr))"></div>
           <p class="empty" id="empty" hidden></p>
         </section>
       </div>

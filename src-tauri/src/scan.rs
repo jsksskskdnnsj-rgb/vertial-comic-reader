@@ -97,6 +97,7 @@ pub fn scan_zip(path: &Path) -> Result<Vec<RealPage>, ReaderError> {
             w,
             h,
             bytes,
+            src_path: None,
         });
     }
     Ok(out)
@@ -135,6 +136,7 @@ pub fn scan_folder(root: &Path) -> Vec<RealPage> {
                 w,
                 h,
                 bytes,
+                src_path: None,
             }
         })
         .collect()
@@ -154,6 +156,7 @@ pub fn scan_images(paths: &[String]) -> Vec<RealPage> {
                 w,
                 h,
                 bytes: std::fs::metadata(p).map(|m| m.len()).unwrap_or(0),
+                src_path: None,
             }
         })
         .collect()
@@ -194,6 +197,7 @@ pub fn build_pages(real: &[RealPage]) -> Vec<PageMeta> {
                 h,
                 full_h: r.h,
                 y0,
+                src_path: r.src_path.clone(),
             });
         }
     }

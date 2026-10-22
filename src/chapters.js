@@ -1,77 +1,85 @@
-// chapters.js - chapter modes as a pure NAVIGATION / DISPLAY layer. No DOM, no Tauri, no imports.
-//
-// A chapter ("episode") is { index (1-based), page (0-based first REAL page), len, title }.
-// Nothing here touches layout.js, the strip, virtual pages, slices or cache keys: switching mode or N
-// only changes labels, scrubber ticks and prev/next targets, so the vertical strip never reflows.
-//
-// Modes:  'none'   one book, no chapter UI at all
-//         'folder' episodes = parent-folder changes inside the archive/folder (computed once by Rust)
-//         'pages'  episode k covers pages (k-1)*N+1 .. k*N (last one may be shorter); computed here, instantly
+// chapters.js - chapter (episode) math for the v2 reader, aligned with the REAL
+// backend contract (verified against src-tauri/src/chapters.rs + model.rs):
+//   open_book returns chapters/folderChapters as Episode { index, page, len, title }
+//   episode_info is ONE batch call: invoke('episode_info', { items: [{bookId, page}] })
+//     -> [{ index, total } | null, ...] aligned with the request.
+// A chapter here is { start, end, index, title } with end exclusive, in REAL pages.
+// (The repaired package's version called episode_info per-book with a wrong
+// shape and computed folder-episode `end` as the book total for every chapter;
+// both are fixed here. prev/next accept a page number OR a {page, frac} pos.)
+export const DEFAULT_PAGES = 30;
+export const sanePages = (v) => Math.max(1, Math.min(9999, Math.round(Number(v) || DEFAULT_PAGES)));
 
-export const MODES = ['none', 'folder', 'pages'];
-export const DEFAULT_PAGES = 20;
-export const MAX_PAGES = 9999;
-
-const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
-export const sanePages = (n) => clamp(Math.trunc(Number(n)) || DEFAULT_PAGES, 1, MAX_PAGES);
-
-/** Virtual episodes from page count. Fewer than 2 episodes => [] (a single episode is not a chapter list). */
-export function byPages(total, n) {
-  if (!(total > 0)) return [];
-  n = clamp(sanePages(n), 1, total);
-  const count = Math.ceil(total / n);
-  if (count < 2) return [];
-  return Array.from({ length: count }, (_, k) => ({ index: k + 1, page: k * n, len: Math.min(n, total - k * n), title: '' }));
+export function resolve(mode = 'folder', pages = DEFAULT_PAGES, book = {}) {
+  const n = Math.max(0, book?.realPages || book?.src?.length || 0);
+  if (!n || mode === 'none') return [];
+  if (mode === 'folder' && Array.isArray(book.folderChapters) && book.folderChapters.length) {
+    return book.folderChapters
+      .map((c, i) => {
+        const start = Math.max(0, c.page ?? c.start ?? 0);
+        const end = Math.min(n, c.end ?? (start + (c.len ?? n - start)));
+        return { start, end, index: c.index ?? i + 1, title: c.title || '' };
+      })
+      .filter((c) => c.start < n && c.end > c.start);
+  }
+  if (mode === 'folder') return []; // no sub-folders in this book -> no chapters
+  const size = sanePages(pages);
+  const count = Math.ceil(n / size);
+  if (count < 2) return []; // a single episode is not a chapter list
+  const out = [];
+  for (let start = 0, i = 1; start < n; start += size, i++) {
+    out.push({ start, end: Math.min(n, start + size), index: i, title: '' });
+  }
+  return out;
 }
 
-/** Effective list for a mode. `book` = { realPages, folderChapters } as returned by open_book. */
-export function resolve(mode, n, book) {
-  if (mode === 'pages') return byPages(book.realPages, n);
-  if (mode === 'folder') return book.folderChapters ?? [];
-  return [];
+const pageOf = (pos) => (typeof pos === 'number' ? pos : Math.floor(Number(pos?.page) || 0));
+
+export function episodeAt(chs, pos) {
+  const page = pageOf(pos);
+  return chs.findIndex((c) => page >= c.start && page < c.end);
 }
 
-/** Episode containing `page` (binary search; null when there are no chapters). */
-export function episodeAt(chs, page) {
-  if (!chs.length) return null;
-  let lo = 0, hi = chs.length - 1;
-  while (lo < hi) { const mid = (lo + hi + 1) >> 1; if (chs[mid].page <= page) lo = mid; else hi = mid - 1; }
-  return chs[lo];
-}
-
-/** "Previous episode": first press goes to the START of the current episode if you're past it, else to the previous one. */
 export function prevTarget(chs, pos) {
-  const e = episodeAt(chs, pos.page);
-  if (!e) return null;
-  if (pos.page > e.page || pos.frac > 0.02) return { page: e.page, frac: 0 };
-  const p = chs[e.index - 2];
-  return p ? { page: p.page, frac: 0 } : null;
+  const i = episodeAt(chs, pos);
+  if (i < 0) return null;
+  const page = pageOf(pos);
+  const frac = typeof pos === 'object' && pos ? Number(pos.frac) || 0 : 0;
+  // Past the very start of the current episode -> go to its start first.
+  if (page > chs[i].start || frac > 0.02) return { page: chs[i].start, frac: 0 };
+  return i > 0 ? { page: chs[i - 1].start, frac: 0 } : null;
 }
 
 export function nextTarget(chs, pos) {
-  const e = episodeAt(chs, pos.page);
-  const n = e && chs[e.index];                 // index is 1-based and contiguous, so chs[index] is the next one
-  return n ? { page: n.page, frac: 0 } : null;
+  const i = episodeAt(chs, pos);
+  return i >= 0 && i < chs.length - 1 ? { page: chs[i + 1].start, frac: 0 } : null;
 }
 
-/** Scrubber tick positions as fractions 0..1, matching the thumb mapping page/(realPages-1). First episode has no tick. */
-export function tickFractions(chs, realPages, trackPx, minGapPx = 4) {
-  if (chs.length < 2 || realPages < 2) return [];
-  const stride = Math.max(1, Math.ceil((minGapPx * chs.length) / Math.max(1, trackPx)));   // thin out dense ticks
-  return chs.filter((e, i) => i > 0 && i % stride === 0).map(e => e.page / (realPages - 1));
+/** Scrubber ticks: one per episode boundary (the first episode needs none). */
+export function tickFractions(chs, total) {
+  if (!total || total < 2 || chs.length < 2) return [];
+  return chs.slice(1).map((c) => c.start / (total - 1)).filter((f) => f > 0 && f < 1);
 }
 
-/** Display text: "Episode 3 / 12", plus the folder name in folder mode. `t` is shell.js's translator. */
-export function episodeLabel(t, chs, page, mode) {
-  const e = episodeAt(chs, page);
-  if (!e) return '';
-  const base = t('episodeOf', { i: e.index, n: chs.length });
-  const name = mode === 'folder' && e.title ? e.title.split('/').pop() : '';
+export function episodeLabel(t, chs, pos, mode) {
+  const i = episodeAt(chs, pos);
+  if (i < 0) return '';
+  const c = chs[i];
+  const base = t('common.episodeOf', { i: c.index ?? i + 1, n: chs.length });
+  const name = mode === 'folder' && c.title ? c.title.split('/').pop() : '';
   return name ? `${base} · ${name}` : base;
 }
 
-/** For lists (Recent reading, Library): one round trip for many books. -> [{index,total}|null, ...] aligned with `books`. */
+/** Batch episode lookup for book lists. -> [{index,total}|null, ...] aligned. */
 export async function fetchEpisodeInfo(invoke, books) {
-  if (!books.length) return [];
-  return invoke('episode_info', { items: books.map(b => ({ bookId: b.id, page: b.page ?? 0 })) });
+  const list = books || [];
+  if (!list.length) return [];
+  try {
+    const rows = await invoke('episode_info', {
+      items: list.map((b) => ({ bookId: b.id, page: Math.max(0, Math.floor(Number(b.page) || 0)) })),
+    });
+    return list.map((_, i) => rows?.[i] ?? null);
+  } catch {
+    return list.map(() => null);
+  }
 }

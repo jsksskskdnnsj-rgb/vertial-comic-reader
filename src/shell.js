@@ -1,88 +1,41 @@
-// shell.js - shared by home.html, reader.html (and your library/import/settings pages).
-// Needs tauri.conf.json: app.withGlobalTauri = true, window: decorations:false, transparent:true.
-// Capabilities (src-tauri/capabilities/*.json): core:window:allow-start-dragging, allow-minimize,
-//   allow-toggle-maximize, allow-close, allow-destroy, allow-is-maximized, allow-set-fullscreen,
-//   allow-is-fullscreen, dialog:allow-open, core:webview:allow-... (drag-drop is on by default).
-export const T = window.__TAURI__;
-export const invoke = T.core.invoke;
-export const win = T.window.getCurrentWindow();
+import zh from './zh-CN.js';
+import en from './en.js';
+export const T=window.__TAURI__||{};
+export const invoke=(cmd,args={})=>{if(!T.core?.invoke)return Promise.reject(new Error('桌面端接口不可用'));return T.core.invoke(cmd,args)};
+export const win=T.window?.getCurrentWindow?.()||{setFullscreen:async()=>{},isFullscreen:async()=>false,onCloseRequested:async()=>{},destroy:async()=>{}};
+const lang=()=>localStorage.getItem('mh.lang')||'zh-CN';
+export function t(key,vars={}){const dict=lang()==='en'?en:zh;let s=dict[key]??en[key]??zh[key]??key;return String(s).replace(/\{(\w+)\}/g,(_,k)=>vars[k]??`{${k}}`).replace(/\\u([\da-f]{4})/gi,(_,h)=>String.fromCharCode(parseInt(h,16)));}
+export const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+export function ago(v){if(!v)return '';let n=typeof v==='number'?(v<1e12?v*1000:v):Date.parse(v);if(!Number.isFinite(n))return '';const en=lang()==='en';const d=Math.max(0,Date.now()-n),m=Math.floor(d/60000);if(m<1)return en?'just now':'刚刚';if(m<60)return en?`${m}m ago`:`${m} 分钟前`;const h=Math.floor(m/60);if(h<24)return en?`${h}h ago`:`${h} 小时前`;const days=Math.floor(h/24);return days<30?(en?`${days}d ago`:`${days} 天前`):new Date(n).toLocaleDateString();}
+export const prefs={get(k,d){try{const v=localStorage.getItem('mh.pref.'+k);return v===null?d:JSON.parse(v)}catch{return d}},set(k,v){try{localStorage.setItem('mh.pref.'+k,JSON.stringify(v))}catch{}}};
+export function toast(msg){let n=document.querySelector('.toast');if(!n){n=document.createElement('div');n.className='toast';document.body.append(n)}n.textContent=String(msg??'');n.classList.add('show');clearTimeout(n._timer);n._timer=setTimeout(()=>n.classList.remove('show'),2600)}
+export function bootPage(section){document.documentElement.lang=lang()==='en'?'en':'zh-CN';document.querySelectorAll('[data-i]').forEach(e=>e.textContent=t(e.dataset.i));document.querySelectorAll('[data-i-label]').forEach(e=>e.setAttribute('aria-label',t(e.dataset.iLabel)));document.title=t('app.name');}
+export const isModalOpen=()=>!!document.querySelector('.modal-backdrop');
+export function openModal({title='',body=null,wide=false}={}){const backdrop=document.createElement('div');backdrop.className='modal-backdrop';const panel=document.createElement('section');panel.className='modal glass-strong'+(wide?' modal--wide':'');const head=document.createElement('header');head.className='modal__head';const h=document.createElement('h2');h.textContent=title;const close=document.createElement('button');close.className='ibtn';close.textContent='×';close.setAttribute('aria-label','Close');head.append(h,close);const content=document.createElement('div');content.className='modal__body';if(typeof body==='string')content.innerHTML=body;else if(body)content.append(body);panel.append(head,content);backdrop.append(panel);document.body.append(backdrop);const done=()=>backdrop.remove();close.onclick=done;backdrop.addEventListener('click',e=>{if(e.target===backdrop)done()});return {close:done,element:panel,body:content}}
+function dialog({title='',message='',ok='确定',cancel='取消',danger=false,placeholder=''}){return new Promise(resolve=>{const body=document.createElement('div');body.className='dialog';const p=document.createElement('p');p.textContent=message;body.append(p);let input;if(placeholder){input=document.createElement('input');input.className='field';input.placeholder=placeholder;body.append(input)}const actions=document.createElement('div');actions.className='modal__actions';const no=document.createElement('button');no.className='btn btn--ghost';no.textContent=cancel;const yes=document.createElement('button');yes.className='btn '+(danger?'btn--danger':'btn--primary');yes.textContent=ok;actions.append(no,yes);body.append(actions);const m=openModal({title,body});no.onclick=()=>{m.close();resolve(false)};yes.onclick=()=>{const v=input?input.value:true;m.close();resolve(v)};if(input)input.focus()})}
+export const confirmDialog=o=>dialog(o);
+export async function choiceDialog({title,message='',choices=[]}={}){return new Promise(resolve=>{const body=document.createElement('div');body.className='dialog';const p=document.createElement('p');p.textContent=message;body.append(p);const actions=document.createElement('div');actions.className='modal__actions';const m=openModal({title,body});for(const c of choices){const b=document.createElement('button');b.className='btn '+(c.kind==='primary'?'btn--primary':'btn--ghost');b.textContent=c.label;b.onclick=()=>{m.close();resolve(c.value)};actions.append(b)}body.append(actions)})}
+export const promptDialog=o=>dialog({...o,placeholder:o?.placeholder||''});
 
-// ---- i18n: the reference UI is zh-CN, so zh is the default. Persist `lang` in your settings table
-//      (localStorage is used here only so the files run standalone; WebView2 keeps it in the data dir).
-const S = {
-  zh: {
-    tagline: '更好的漫画阅读体验', home: '首页', library: '书架', import: '本地导入', settings: '设置',
-    quote: '漫画不只是图像，<br>而是另一个世界。', search: '搜索漫画、作者、标签...',
-    welcome: '欢迎使用 mh-reader', welcomeSub: '支持多种格式 · 本地阅读 · 纯净体验',
-    dropTitle: '拖放文件夹或压缩包到这里', dropSub: '支持 .zip、.cbz 压缩包、图片文件夹和散图',
-    pick: '选择文件 / 文件夹', pickFiles: '选择压缩包或图片', pickFolder: '选择文件夹',
-    dropNote: '本地读取 · 不联网 · 按需解压', quick: '快速开始',
-    qImport: '本地导入', qImportD: '支持压缩包与文件夹<br>一键导入漫画', qLib: '我的书架', qLibD: '管理你的漫画资源<br>与阅读进度',
-    qSet: '阅读设置', qSetD: '自定义阅读模式<br>享受舒适体验', qImg: '图片模式', qImgD: '支持卷轴与翻页<br>多种阅读方式',
-    recent: '最近阅读', added: '最近添加', more: '查看更多', noRecent: '还没有阅读记录，导入一本漫画开始吧。', noAdded: '导入后会显示在这里。',
-    pageOf: '第 {p} 页 / 共 {n} 页', open: '继续阅读', reveal: '在资源管理器中显示', imported: '已导入 {n} 本', importNone: '没有新增（已存在或格式不支持）',
-    importFail: '导入失败：{e}', back: '返回', settingsQuick: '阅读设置', width: '页面宽度', gap: '页间距', bg: '背景', dim: '亮度', saver: '省内存模式',
-    paper: '纸白', lavender: '薰衣草', night: '夜间', black: '纯黑', jump: '跳转到页', errMissing: '找不到文件', errCorrupt: '文件无法读取', retry: '重试',
-    locate: '重新定位文件…', fullscreen: '全屏', min: '最小化', max: '最大化', close: '关闭',
-  },
-  en: {
-    tagline: 'A better way to read comics', home: 'Home', library: 'Library', import: 'Local import', settings: 'Settings',
-    quote: 'Comics are more than images,<br>they are another world.', search: 'Search titles, authors, tags...',
-    welcome: 'Welcome to mh-reader', welcomeSub: 'Many formats · Local reading · Clean experience',
-    dropTitle: 'Drop folders or archives here', dropSub: 'Supports .zip, .cbz, image folders and loose images',
-    pick: 'Choose files / folder', pickFiles: 'Choose archives or images', pickFolder: 'Choose a folder',
-    dropNote: 'Read locally · Offline · Extracted on demand', quick: 'Quick start',
-    qImport: 'Local import', qImportD: 'Archives and folders<br>imported in one step', qLib: 'My library', qLibD: 'Manage your comics<br>and reading progress',
-    qSet: 'Reading settings', qSetD: 'Customize reading mode<br>for comfort', qImg: 'Image mode', qImgD: 'Scroll or page-flip<br>reading styles',
-    recent: 'Recent reading', added: 'Recently added', more: 'See more', noRecent: 'No reading history yet. Import a comic to start.', noAdded: 'Imported books show up here.',
-    pageOf: 'Page {p} of {n}', open: 'Continue reading', reveal: 'Show in Explorer', imported: 'Imported {n}', importNone: 'Nothing new (already added or unsupported)',
-    importFail: 'Import failed: {e}', back: 'Back', settingsQuick: 'Reading settings', width: 'Page width', gap: 'Page gap', bg: 'Background', dim: 'Brightness', saver: 'Memory saver',
-    paper: 'Paper', lavender: 'Lavender', night: 'Night', black: 'Black', jump: 'Jump to page', errMissing: 'File not found', errCorrupt: 'File could not be read', retry: 'Retry',
-    locate: 'Locate file…', fullscreen: 'Fullscreen', min: 'Minimize', max: 'Maximize', close: 'Close',
-    // chapters (English only; the zh table has no entries, so t() falls back to these)
-    episodeOf: 'Episode {i} / {n}', chapters: 'Chapters', chNone: 'None', chFolder: 'Folder', chPages: 'Pages',
-    pagesPerEp: 'Pages per episode', rememberBook: 'Remember for this book', resetDefault: 'Use default',
-    noFolders: 'No sub-folders found, so this book has no chapters.', prevEp: 'Previous episode', nextEp: 'Next episode',
-    chDefaultTitle: 'Chapter mode (default)', chDefaultHelp: 'Applies to every book unless you change it for one book in the reader.',
-    chNoneHelp: 'Continuous: one folder or ZIP is one book, with no chapter UI.', chFolderHelp: 'Episodes follow the folders inside the book.',
-    chPagesHelp: 'Every N pages is one episode. The last one may be shorter.', saved: 'Saved',
-    // bookmarks
-    bookmarks: 'Bookmarks', bmAdd: 'Bookmark this image (B)', bmPanel: 'Bookmarks panel (T)', bmAdded: 'Bookmark added', bmRemoved: 'Bookmark removed',
-    bmEmpty: 'No bookmarks yet. Press B to bookmark the image in the middle of the screen.', bmBroken: 'This image is no longer in the book.',
-    bmGoOld: 'Go to old position (page {p})', bmReanchor: 'Anchor to page {p}', bmDelete: 'Delete', bmNote: 'Add a note', pageOfN: 'Page {p} / {n}',
-  },
-};
-export const lang = localStorage.getItem('mh.lang') || 'zh';
-export const t = (k, v = {}) => (S[lang][k] ?? S.en[k] ?? k).replace(/\{(\w+)\}/g, (_, n) => v[n] ?? '');
-export const esc = (s) => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
-export function applyI18n(root = document) {
-  document.documentElement.lang = lang === 'zh' ? 'zh-CN' : 'en';
-  root.querySelectorAll('[data-i]').forEach(e => { e.innerHTML = t(e.dataset.i); });      // strings are ours, not user data
-  root.querySelectorAll('[data-i-ph]').forEach(e => { e.placeholder = t(e.dataset.iPh); });
-  root.querySelectorAll('[data-i-label]').forEach(e => { e.setAttribute('aria-label', t(e.dataset.iLabel)); e.title = t(e.dataset.iLabel); });
+// Compatibility exports for the surrounding app shell. They are intentionally idempotent.
+export { lang };
+export function applyI18n(root=document){
+  root.querySelectorAll('[data-i]').forEach(e=>{e.textContent=t(e.dataset.i)});
+  root.querySelectorAll('[data-i-label]').forEach(e=>e.setAttribute('aria-label',t(e.dataset.iLabel)));
+  root.querySelectorAll('[data-i-title]').forEach(e=>e.setAttribute('title',t(e.dataset.iTitle)));
+  document.documentElement.lang=lang()==='en'?'en':'zh-CN';
 }
-export const applyTheme = () => { document.documentElement.dataset.theme = localStorage.getItem('mh.theme') || 'light'; };
-
-export function ago(ms) {
-  const rtf = new Intl.RelativeTimeFormat(lang === 'zh' ? 'zh-CN' : 'en', { numeric: 'auto' });
-  const s = Math.round((ms - Date.now()) / 1000), a = Math.abs(s);
-  if (a < 3600) return rtf.format(Math.round(s / 60), 'minute');
-  if (a < 86400) return rtf.format(Math.round(s / 3600), 'hour');
-  return rtf.format(Math.round(s / 86400), 'day');
+export function applyTheme(theme=prefs.get('theme','dark')){
+  const safe=['dark','light','system'].includes(theme)?theme:'dark';
+  document.documentElement.dataset.theme=safe;
+  document.documentElement.classList.toggle('theme-light',safe==='light');
+  return safe;
 }
-
-let toastTimer = 0;
-export function toast(msg) {
-  let el = document.getElementById('toast');
-  if (!el) { el = Object.assign(document.createElement('div'), { id: 'toast', className: 'toast', hidden: true }); document.body.append(el); }
-  el.textContent = msg; el.hidden = false; clearTimeout(toastTimer); toastTimer = setTimeout(() => { el.hidden = true; }, 3200);
-}
-
-export function wireWindow(root = document) {
-  root.querySelectorAll('[data-win]').forEach(b => b.addEventListener('click', () => {
-    const a = b.dataset.win; if (a === 'min') win.minimize(); else if (a === 'max') win.toggleMaximize(); else win.close();
-  }));
-  const sync = async () => document.querySelector('.window')?.classList.toggle('is-max', await win.isMaximized());
-  win.onResized(sync); sync();
+export function wireWindow(){
+  const w=T.window?.getCurrentWindow?.(); if(!w)return false;
+  document.querySelectorAll('[data-window-minimize]').forEach(b=>b.addEventListener('click',()=>w.minimize?.()));
+  document.querySelectorAll('[data-window-maximize]').forEach(b=>b.addEventListener('click',()=>w.toggleMaximize?.()));
+  document.querySelectorAll('[data-window-close]').forEach(b=>b.addEventListener('click',()=>w.close?.()));
+  return true;
 }

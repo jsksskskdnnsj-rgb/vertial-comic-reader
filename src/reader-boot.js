@@ -1,225 +1,263 @@
-// reader-boot.js - glue between reader.html and reader.js / layout.js / chapters.js.
-// Chapters are a NAVIGATION/DISPLAY layer: this file only reads the strip's position and calls
-// reader.jumpTo(); it never touches layout, slicing or the image window.
+// reader-boot.js - wires reader.html to the two views (vertical strip: reader.js, page flip: flip.js) and to every reader feature.
+// Chapters and bookmarks are a navigation/display layer: this file only reads positions from the active view and calls view.jumpTo().
+import { T, invoke, win, t, esc, ago, toast, bootPage, prefs, isModalOpen, confirmDialog, choiceDialog, promptDialog } from './shell.js';
 import { Reader, thumbUrl } from './reader.js';
-import { T, invoke, win, t, esc, toast, applyI18n, applyTheme, wireWindow } from './shell.js';
-import { centerPosition, findNearby, thumbVirtualIndex, bookmarkTicks, BookmarkPanel } from './bookmarks.js';
-import { resolve, episodeAt, prevTarget, nextTarget, tickFractions, episodeLabel, sanePages, DEFAULT_PAGES } from './chapters.js';
+import { FlipView } from './flip.js';
+import { lib } from './legacy-api.js';
+import { resolve, episodeAt, prevTarget, nextTarget, tickFractions, episodeLabel, sanePages, DEFAULT_PAGES, fetchEpisodeInfo } from './chapters.js';
+import { findNearby, thumbVirtualIndex, bookmarkTicks, BookmarkPanel } from './bookmarks.js';
+import { HistoryStack, ThumbStrip } from './reader-panels.js';
+import { AutoScroll, openPageDirectory } from './reader-tools.js';
+import { mountShell } from './shell-ui.js';
 
 const $ = (id) => document.getElementById(id);
-const root = $('reader');
+bootPage('library');
+mountShell('library');
+
 const bookId = Number(new URLSearchParams(location.search).get('book'));
+const COVER_BASE = T.core.convertFileSrc('', 'mhcover').replace(/\/$/, '');
+const coverUrl = (id, v = 0) => `${COVER_BASE}/${id}?v=${v ?? 0}`;
+const LARGE_BOOK_PAGES = 1200;                         // above this the large-book warning appears (once per book per session)
 
-// ---- reader settings (move into your settings table; localStorage keeps the files standalone) ----
-const DEF = { widthPct: 100, gap: 0, bg: 'lavender', dim: 100, saver: false };
-const cfg = { ...DEF, ...JSON.parse(localStorage.getItem('mh.reader') || '{}') };
-const save = () => localStorage.setItem('mh.reader', JSON.stringify(cfg));
+// ---- state -----------------------------------------------------------------------------------------------
+const rp = { widthPct: prefs.get('reader.widthPct', 100), gap: prefs.get('reader.gap', 0), dim: prefs.get('reader.dim', 100) };
+let modeNow = prefs.get('mode', 'scroll');             // default reading mode (Settings); the toolbar toggles it for this session only
+let saverNow = prefs.get('saver', false);
+let view = null, book = null, bms = [], chs = [], chMode = 'folder', chN = DEFAULT_PAGES, chDefaults = { mode: 'folder', pages: DEFAULT_PAGES };
+let shown = 0, lastPos = null, endDismissed = false, endArmAt = 0;
 
-applyTheme(); applyI18n(); wireWindow();
-root.dataset.bg = cfg.bg;
-root.style.setProperty('--dim', cfg.dim / 100);
+// ---- small ui helpers ------------------------------------------------------------------------------------
+const pageText = (p) => t('common.pageOf', { p: p + 1, n: book.realPages });
+const epText = (p) => (chs.length ? episodeLabel(t, chs, p, chMode) : pageText(p));
+const applyDim = () => $('host').style.setProperty('--dim', rp.dim / 100);
 
-// ---- chapter state -------------------------------------------------------------------------------
-let book = null;                                     // reader.info
-let chDefaults = { mode: 'folder', pages: DEFAULT_PAGES };
-let chMode = 'folder', chN = DEFAULT_PAGES;          // working values for THIS session
-let chs = [];                                        // effective episodes for (chMode, chN)
-let shown = 0;                                       // page at viewport middle (for labels)
+// ---- panels ----------------------------------------------------------------------------------------------
+const history_ = new HistoryStack($('hist'), { t, esc, ago, coverUrl, onOpen: async (id) => { await leave(`reader.html?book=${id}`); } });
+const strip = new ThumbStrip($('tstrip'), { thumb: (p) => thumbUrl(book, view.layout.gFirst[p]), onJump: (p) => view.jumpTo({ page: p, frac: 0 }) });
+const auto = new AutoScroll({ getView: () => view, onChange: onAutoChange });
 
-const curPos = () => reader.strip.layout.getPosition(reader.strip.scroller.scrollTop);   // viewport TOP, same as what is saved
+async function loadHistory() {
+  const recent = (await lib.recentBooks(12).catch(() => [])).filter(b => b.id !== bookId);
+  const cur = { id: bookId, title: book.title, page: shown, frac: 0, pageCount: book.realPages, coverVer: 0 };
+  const eps = await fetchEpisodeInfo(invoke, [{ id: bookId, page: shown }, ...recent]).catch(() => []);
+  history_.render(cur, recent, eps); history_.updateCurrent({ page: shown, realPages: book.realPages, epText: epText(shown) });
+  $('histCount').textContent = recent.length ? t('reader.historyCount', { n: recent.length + 1 }) : '';
+}
 
+// ---- position -> every readout -------------------------------------------------------------------------
+function onPosition(p) {
+  shown = p.shownPage; lastPos = p;
+  const txt = `${p.shownPage + 1} / ${p.realPages}`;
+  $('pgCount').textContent = txt; $('vpText').textContent = txt; $('bbCount').textContent = txt;
+  const ep = epText(shown);
+  $('bcEp').textContent = ep; $('bbEp').textContent = ep;
+  history_.updateCurrent({ page: shown, realPages: p.realPages, epText: ep });
+  strip.update(shown, p.realPages);
+  updateBmButton();
+  if (p.atEnd && !endDismissed && performance.now() > endArmAt && $('endCard').hidden) showEnd();
+}
+
+// ---- scrubber track: a fresh element per view (drops the old Scrubber's listeners) -----------------------
+function wireTrack() {
+  const tr = $('track');
+  tr.addEventListener('pointerdown', () => tr.classList.add('is-drag'));
+  tr.addEventListener('pointermove', (e) => { const r = tr.getBoundingClientRect(); tr.style.setProperty('--tx', Math.min(Math.max(e.clientX - r.left, 64), r.width - 64) + 'px'); });
+}
+function resetTrack() { const old = $('track'), fresh = old.cloneNode(true); fresh.classList.remove('is-drag'); old.replaceWith(fresh); wireTrack(); trackObserver.disconnect(); trackObserver.observe(fresh); }
+addEventListener('pointerup', () => $('track').classList.remove('is-drag'));
+const trackObserver = new ResizeObserver(() => renderChapterUi());
+
+// ---- opening / switching views ----------------------------------------------------------------------------
+async function largeBookGuard(info) {
+  if (info.realPages < LARGE_BOOK_PAGES || sessionStorage.getItem('mh.big.' + bookId)) return undefined;
+  const v = await choiceDialog({ title: t('big.title'), message: t('big.msg', { n: info.realPages }),
+    choices: [{ label: t('common.cancel'), value: 'cancel' }, { label: t('big.normal'), value: 'normal' }, { label: t('big.saver'), value: 'saver', kind: 'primary' }] });
+  if (!v || v === 'cancel') return false;
+  sessionStorage.setItem('mh.big.' + bookId, '1');
+  return v === 'saver' ? { perf: 'saver' } : undefined;
+}
+
+async function startView({ startPos = null } = {}) {
+  auto.stop(); $('endCard').hidden = true; $('err').hidden = true;
+  if (view) { await view.close(); view = null; }
+  resetTrack(); strip.reset(); applyDim();
+  const Mode = modeNow === 'flip' ? FlipView : Reader;
+  view = new Mode($('host'), { onPosition, scrubber: [$('track'), $('thumb'), $('tiplabel')] });
+  try {
+    await view.open(bookId, { perf: saverNow ? 'saver' : 'balanced', widthPct: rp.widthPct, gap: rp.gap, startPos, beforeMount: largeBookGuard });
+  } catch (e) { view = null; return openFailed(e); }
+  book = view.info; endDismissed = false; endArmAt = performance.now() + 1500;
+  chMode = book.chapterMode; chN = sanePages(book.chapterPages); $('chrem').checked = !!book.chapterOverridden;
+  $('bpCover').src = coverUrl(bookId); $('bbThumb').src = coverUrl(bookId);
+  $('bpTitle').textContent = book.title; $('bcBook').textContent = book.title; $('bbBook').textContent = book.title;
+  $('bpChips').innerHTML = `<span class="chip">${esc(t('book.pages', { n: book.realPages }))}</span>`;
+  view.refresh(); recompute(); syncControls(); await Promise.all([loadBookmarks(), loadHistory()]);
+}
+function openFailed(e) {
+  if (e?.code === 'cancelled') return leave('library.html');
+  $('errTitle').textContent = t(e?.code === 'source_missing' ? 'reader.errMissing' : 'reader.errCorrupt');
+  $('errDetail').textContent = e?.detail ?? String(e?.message ?? e); $('errLocate').hidden = e?.code !== 'source_missing'; $('err').hidden = false;
+}
+async function leave(url) {
+  auto.stop(); await view?.close();
+  if (url) location.href = url; else history.length > 1 ? history.back() : (location.href = 'library.html');
+}
+
+// ---- chapters (navigation + display only) -----------------------------------------------------------------
 function renderChapterUi() {
-  $('epnav').hidden = chs.length === 0;                                          // None / no chapters => no chapter UI at all
-  $('chapter').textContent = episodeLabel(t, chs, shown, chMode);
+  $('epnav').hidden = chs.length === 0;
   const rail = $('track').querySelector('.scrub__rail');
   rail.querySelectorAll('.tick').forEach(n => n.remove());
-  const fr = tickFractions(chs, book?.realPages ?? 0, rail.clientWidth || 600);
-  for (const f of fr) { const i = document.createElement('i'); i.className = 'tick'; i.style.left = f * 100 + '%'; rail.append(i); }
+  for (const f of tickFractions(chs, book?.realPages ?? 0, rail.clientWidth || 600)) { const i = document.createElement('i'); i.className = 'tick'; i.style.left = f * 100 + '%'; rail.append(i); }
   for (const f of bookmarkTicks(bms, book?.realPages ?? 0)) { const i = document.createElement('i'); i.className = 'tick tick--bm'; i.style.left = f * 100 + '%'; rail.append(i); }
-  // popover controls
   document.querySelectorAll('#chmode button').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.chmode === chMode)));
-  $('chnRow').hidden = chMode !== 'pages';
+  $('chnRow').hidden = chMode !== 'pages';                                   // the N-pages control exists ONLY in "pages" mode
   if (document.activeElement !== $('chn')) $('chn').value = chN;
-  const noFolders = chMode === 'folder' && (book?.folderChapters?.length ?? 0) === 0;
-  $('chhint').hidden = !noFolders; $('chhint').textContent = noFolders ? t('noFolders') : '';
+  const none = chMode === 'folder' && (book?.folderChapters?.length ?? 0) === 0;
+  $('chhint').hidden = !none; $('chhint').textContent = none ? t('chapters.noFolders') : '';
   $('chreset').hidden = !($('chrem').checked || book?.chapterOverridden);
+  if (book) { const ep = epText(shown); $('bcEp').textContent = ep; $('bbEp').textContent = ep; }
 }
-function recompute() {                               // instant: no invoke, no rescan, no relayout
-  chs = resolve(chMode, chN, book);
-  renderChapterUi();
-}
+function recompute() { chs = resolve(chMode, chN, book); renderChapterUi(); }
 let persistTimer = 0;
 function persistIfRemembered() {
-  if (!$('chrem').checked) return;                   // unchecked => this session only
+  if (!$('chrem').checked) return;
   clearTimeout(persistTimer);
   persistTimer = setTimeout(() => invoke('set_book_chapter_settings', { bookId, mode: chMode, pages: chN }).catch(() => {}), 400);
 }
-const goEpisode = (target) => { if (target) reader.jumpTo(target); };           // same strip, same jump as the scrubber
-
-// ---- reader --------------------------------------------------------------------------------------
-const reader = new Reader($('host'), {
-  onPosition: (p) => {
-    shown = p.shownPage;
-    $('cnt').textContent = `${p.shownPage + 1} / ${p.realPages}`;
-    $('mini').style.setProperty('--p', (p.shownPage + 1) / p.realPages);
-    $('chapter').textContent = episodeLabel(t, chs, shown, chMode);
-    updateBmButton();
-  },
-  scrubber: [$('track'), $('thumb'), $('tiplabel')],          // Scrubber(track, thumbImg, labelEl)
-});
-
-async function start() {
-  $('err').hidden = true;
-  try {
-    chDefaults = await invoke('get_chapter_defaults').catch(() => chDefaults);
-    await reader.open(bookId, { perf: cfg.saver ? 'saver' : 'balanced', widthPct: cfg.widthPct, gap: cfg.gap });
-    book = reader.info;
-    $('title').textContent = book.title;
-    chMode = book.chapterMode; chN = sanePages(book.chapterPages);      // effective values from the backend
-    $('chrem').checked = !!book.chapterOverridden;
-    reader.tracker.tick();                                     // fill counter immediately
-    recompute();
-    await loadBookmarks();                                     // resolved BY NAME against the current page list
-    poke();                                                    // the resume scroll would have hidden the bars
-    new ResizeObserver(() => renderChapterUi()).observe($('track'));    // tick thinning depends on width
-  } catch (e) {                                                // e = ReaderError {code, detail}
-    $('errTitle').textContent = e?.code === 'source_missing' ? t('errMissing') : t('errCorrupt');
-    $('errDetail').textContent = e?.detail ?? String(e);
-    $('errLocate').hidden = e?.code !== 'source_missing';
-    $('err').hidden = false;
-  }
-}
-
-// ---- overlay: show on pointer move, hide after 2.5 s idle / on scroll; cursor hides after 2 s ----
-let hideTimer = 0, cursorTimer = 0;
-const ui = (show) => root.classList.toggle('hide-ui', !show);
-const popOpen = () => !$('pop').hidden;
-function poke() {
-  ui(true); root.classList.remove('idle');
-  clearTimeout(hideTimer); clearTimeout(cursorTimer);
-  hideTimer = setTimeout(() => { if (!popOpen() && !sideOpen() && !$('cnt').querySelector('input') && !$('track').classList.contains('is-drag')) ui(false); }, 2500);
-  cursorTimer = setTimeout(() => root.classList.add('idle'), 2000);
-}
-addEventListener('pointermove', (e) => { if (Math.abs(e.movementX) + Math.abs(e.movementY) > 0) poke(); });
-$('host').addEventListener('scroll', () => { if (!popOpen() && !sideOpen()) ui(false); }, { capture: true, passive: true });
-$('host').addEventListener('click', () => {
-  if (popOpen()) return setPop(false);
-  root.classList.contains('hide-ui') ? poke() : ui(false);
-});
-const track = $('track');
-track.addEventListener('pointerdown', () => track.classList.add('is-drag'));
-addEventListener('pointerup', () => track.classList.remove('is-drag'));
-track.addEventListener('pointermove', (e) => { const r = track.getBoundingClientRect(); track.style.setProperty('--tx', Math.min(Math.max(e.clientX - r.left, 64), r.width - 64) + 'px'); });
-
-// ---- jump: click the counter, type a page, Enter ---------------------------------------------------
-$('cnt').addEventListener('click', () => {
-  const c = $('cnt'); if (c.querySelector('input')) return;
-  const old = c.textContent, input = Object.assign(document.createElement('input'), { type: 'number', min: 1, max: book.realPages, placeholder: old.split('/')[0].trim() });
-  c.textContent = ''; c.append(input); input.focus();
-  const done = (go) => { const n = +input.value; c.textContent = old; if (go && n >= 1) reader.jumpTo({ page: Math.min(n, book.realPages) - 1, frac: 0 }); };
-  input.addEventListener('keydown', (e) => { if (e.key === 'Enter') done(true); if (e.key === 'Escape') { e.stopPropagation(); done(false); } });
-  input.addEventListener('blur', () => done(false), { once: true });
-});
-
-// ---- episode navigation ------------------------------------------------------------------------------
-$('epPrev').addEventListener('click', () => goEpisode(prevTarget(chs, curPos())));
-$('epNext').addEventListener('click', () => goEpisode(nextTarget(chs, curPos())));
-
-// ---- quick settings popover ---------------------------------------------------------------------------
-function setPop(open) { $('pop').hidden = !open; $('gear').setAttribute('aria-expanded', open); if (open) ui(true); }
-$('gear').addEventListener('click', (e) => { e.stopPropagation(); setPop(!popOpen()); });
-$('pop').addEventListener('click', (e) => e.stopPropagation());
-
-const pressed = (sel, attr, val) => document.querySelectorAll(sel).forEach(b => b.setAttribute('aria-pressed', String(b.dataset[attr] == val)));
-$('w').value = cfg.widthPct; $('dim').value = cfg.dim; $('saver').checked = cfg.saver; pressed('#gap button', 'gap', cfg.gap); pressed('#bgsw button', 'bg', cfg.bg);
-$('w').addEventListener('input',  (e) => { cfg.widthPct = +e.target.value; reader.setWidthPct(cfg.widthPct); save(); });
-$('dim').addEventListener('input', (e) => { cfg.dim = +e.target.value; root.style.setProperty('--dim', cfg.dim / 100); save(); });
-$('gap').addEventListener('click',  (e) => { const b = e.target.closest('button'); if (!b) return; cfg.gap = +b.dataset.gap; reader.setGap(cfg.gap); pressed('#gap button', 'gap', cfg.gap); save(); });
-$('bgsw').addEventListener('click', (e) => { const b = e.target.closest('button'); if (!b) return; cfg.bg = b.dataset.bg; root.dataset.bg = cfg.bg; pressed('#bgsw button', 'bg', cfg.bg); save(); });
-$('saver').addEventListener('change', async (e) => { cfg.saver = e.target.checked; save(); await reader.close(); location.reload(); });
-
-// chapter controls: mode / N recompute instantly; persisted only when "Remember for this book" is on
-$('chmode').addEventListener('click', (e) => {
-  const b = e.target.closest('button'); if (!b) return;
-  chMode = b.dataset.chmode; recompute(); persistIfRemembered();
-});
-$('chn').addEventListener('input', (e) => {
-  if (e.target.value === '' || +e.target.value < 1) return;       // wait for a valid number while typing
-  chN = sanePages(e.target.value); recompute(); persistIfRemembered();
-});
+const goEpisode = (target) => { if (target) view.jumpTo(target); };
+$('epPrev').addEventListener('click', () => goEpisode(prevTarget(chs, view.topPos())));
+$('epNext').addEventListener('click', () => goEpisode(nextTarget(chs, view.topPos())));
+$('chmode').addEventListener('click', (e) => { const b = e.target.closest('button'); if (!b) return; chMode = b.dataset.chmode; recompute(); persistIfRemembered(); });
+$('chn').addEventListener('input', (e) => { if (e.target.value === '' || +e.target.value < 1) return; chN = sanePages(e.target.value); recompute(); persistIfRemembered(); });
 $('chn').addEventListener('blur', () => { $('chn').value = chN; });
 $('chrem').addEventListener('change', async (e) => {
   if (e.target.checked) await invoke('set_book_chapter_settings', { bookId, mode: chMode, pages: chN }).catch(() => {});
-  else await invoke('clear_book_chapter_settings', { bookId }).catch(() => {});   // back to the global default for future opens
+  else await invoke('clear_book_chapter_settings', { bookId }).catch(() => {});
   book.chapterOverridden = e.target.checked; renderChapterUi();
 });
 $('chreset').addEventListener('click', async () => {
   await invoke('clear_book_chapter_settings', { bookId }).catch(() => {});
-  $('chrem').checked = false; book.chapterOverridden = false;
-  chMode = chDefaults.mode; chN = sanePages(chDefaults.pages); recompute();
+  $('chrem').checked = false; book.chapterOverridden = false; chMode = chDefaults.mode; chN = sanePages(chDefaults.pages); recompute();
 });
 
-// ---- navigation / window --------------------------------------------------------------------------------
-// ---- bookmarks: anchored to the IMAGE (entry name), listed in the side panel ----------------------------
-let bms = [];                                                      // as returned by list_bookmarks (resolved by name)
-const sideOpen = () => !$('side').hidden;
-function setSide(open) { $('side').hidden = !open; $('bmPanel').setAttribute('aria-expanded', open); if (open) ui(true); }
-$('bmPanel').addEventListener('click', (e) => { e.stopPropagation(); setSide(!sideOpen()); });
-$('sideClose').addEventListener('click', () => setSide(false));
-$('side').addEventListener('click', (e) => e.stopPropagation());
-
-const centerNow = () => { const sc = reader.strip.scroller; return { sc, pos: centerPosition(reader.strip.layout, sc.scrollTop, sc.clientHeight) }; };
-function updateBmButton() {                                        // filled when a bookmark is within half a screen of the centre
-  if (!book) return;
-  const { sc, pos } = centerNow();
-  $('bmAdd').classList.toggle('is-on', !!findNearby(bms, pos, reader.strip.layout, sc.clientHeight));
-}
-async function loadBookmarks() {
-  bms = await invoke('list_bookmarks', { bookId }).catch(() => []);
-  panel.render(bms); renderChapterUi(); updateBmButton();         // renderChapterUi redraws the scrubber ticks (chapters + bookmarks)
-}
-async function toggleBookmark() {                                  // B or the button: bookmark the image at the viewport CENTER, or remove the one there
-  if (!book) return;
-  const { sc, pos } = centerNow();                                 // pos = { page: REAL page, frac: offset within the whole image }
-  const near = findNearby(bms, pos, reader.strip.layout, sc.clientHeight);
+// ---- bookmarks (anchored to the image; broken ones keep the manual two-choice behaviour) --------------------
+const sideBm = (open) => { $('drawer').hidden = !open; $('tbMarks').classList.toggle('is-on', open); };
+const drawerOpen = () => !$('drawer').hidden;
+function updateBmButton() { if (!book || !view) return; $('bmHere').classList.toggle('is-on', !!findNearby(bms, view.centerPos(), view.layout, view.viewH)); }
+async function loadBookmarks() { bms = await invoke('list_bookmarks', { bookId }).catch(() => []); bmPanel.render(bms); renderChapterUi(); updateBmButton(); }
+async function toggleBookmark() {
+  if (!book || !view) return;
+  const pos = view.centerPos(), near = findNearby(bms, pos, view.layout, view.viewH);
   try {
-    if (near) { await invoke('delete_bookmark', { bookmarkId: near.id }); toast(t('bmRemoved')); }
-    else { await invoke('add_bookmark', { bookId, page: pos.page, frac: pos.frac, note: null }); toast(t('bmAdded')); }
+    if (near) { await invoke('delete_bookmark', { bookmarkId: near.id }); toast(t('bookmarks.removed')); }
+    else { await invoke('add_bookmark', { bookId, page: pos.page, frac: pos.frac, note: null }); toast(t('bookmarks.added')); }
   } catch (e) { toast(String(e?.detail ?? e?.code ?? e)); }
   await loadBookmarks();
 }
-$('bmAdd').addEventListener('click', (e) => { e.stopPropagation(); toggleBookmark(); });
-
 const hintPage = (bm) => Math.min(bm.pageHint, book.realPages - 1);
-const panel = new BookmarkPanel($('bmList'), {
+const bmPanel = new BookmarkPanel($('bmList'), {
   t, esc,
-  thumb: (bm) => thumbUrl(book, thumbVirtualIndex(reader.strip.layout, bm)),     // the slice that contains the bookmarked spot
-  label: (bm) => [episodeLabel(t, chs, bm.page, chMode), t('pageOfN', { p: bm.page + 1, n: book.realPages })].filter(Boolean).join(' · '),
-  onJump: (bm) => reader.jumpTo({ page: bm.page, frac: bm.frac }, { atCenter: true }),   // exact image + offset, same strip
-  onJumpHint: (bm) => reader.jumpTo({ page: hintPage(bm), frac: 0 }),                  // broken bookmark, EXPLICIT user choice
+  thumb: (bm) => thumbUrl(book, thumbVirtualIndex(view.layout, bm)),
+  label: (bm) => [chs.length ? episodeLabel(t, chs, bm.page, chMode) : '', t('bookmarks.pageOf', { p: bm.page + 1, n: book.realPages })].filter(Boolean).join(' · '),
+  onJump: (bm) => view.jumpTo({ page: bm.page, frac: bm.frac }, { atCenter: true }),
+  onJumpHint: (bm) => view.jumpTo({ page: hintPage(bm), frac: 0 }),                                  // explicit user choice
   onReanchor: async (bm) => { await invoke('reanchor_bookmark', { bookmarkId: bm.id, page: hintPage(bm) }).catch(() => {}); loadBookmarks(); },
   onDelete: async (id) => { await invoke('delete_bookmark', { bookmarkId: id }).catch(() => {}); loadBookmarks(); },
   onNote: async (id, note) => { await invoke('update_bookmark_note', { bookmarkId: id, note }).catch(() => {}); loadBookmarks(); },
 });
+$('bmHere').addEventListener('click', toggleBookmark);
+$('tbMarks').addEventListener('click', () => sideBm(!drawerOpen()));
+$('drawerClose').addEventListener('click', () => sideBm(false));
 
-async function leave() { await reader.close(); history.length > 1 ? history.back() : (location.href = 'home.html'); }
-$('back').addEventListener('click', leave); $('errBack').addEventListener('click', leave); $('errRetry').addEventListener('click', start);
-$('errLocate').addEventListener('click', async () => {        // assumed command: relink_book(bookId, path) -> () ; re-points books.path and clears scan_sig
-  const p = await T.dialog.open({ multiple: false, filters: [{ name: 'Comics', extensions: ['zip', 'cbz'] }] });
-  if (p) { await invoke('relink_book', { bookId, path: p }); start(); }
+// ---- toolbar, flyouts ---------------------------------------------------------------------------------------
+const FLY = { flySettings: 'tbSettings', flyAuto: 'tbAuto' };
+function closeFlies(except) {
+  for (const [id, btn] of Object.entries(FLY)) { if (id === except) continue; $(id).hidden = true; $(btn).classList.toggle('is-on', id === 'flyAuto' && auto.running); }
+}
+function toggleFly(id) {
+  const open = $(id).hidden; closeFlies(open ? id : null);
+  $(id).hidden = !open; $(FLY[id]).classList.toggle('is-on', open || (id === 'flyAuto' && auto.running));
+  if (open && id === 'flyAuto') { const rg = $('rg').getBoundingClientRect(), b = $('tbAuto').getBoundingClientRect(); $('flyAuto').style.top = Math.max(8, b.top - rg.top - 40) + 'px'; }
+}
+$('tbSettings').addEventListener('click', () => toggleFly('flySettings'));
+$('tbAuto').addEventListener('click', () => toggleFly('flyAuto'));
+addEventListener('pointerdown', (e) => { if (!e.target.closest('.flyout, #tb')) closeFlies(null); });
+
+function syncControls() {
+  $('w').value = rp.widthPct; $('dim').value = rp.dim; $('saver').checked = saverNow;
+  document.querySelectorAll('#gap button').forEach(b => b.setAttribute('aria-pressed', String(+b.dataset.gap === rp.gap)));
+  document.querySelectorAll('#fMode button').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.mode === modeNow)));
+  document.querySelectorAll('#flySettings [data-for="scroll"]').forEach(r => { r.hidden = modeNow !== 'scroll'; });
+  $('tbModeIcon').innerHTML = `<use href="icons.svg#${modeNow === 'flip' ? 'flip' : 'scroll'}"/>`; $('tbModeText').textContent = t(modeNow === 'flip' ? 'reader.modeFlipShort' : 'reader.modeScrollShort');
+  $('autoSpeed').value = auto.speed; $('autoVal').textContent = auto.speed;
+}
+$('w').addEventListener('input', (e) => { rp.widthPct = +e.target.value; prefs.set('reader.widthPct', rp.widthPct); if (view?.mode === 'scroll') view.setWidthPct(rp.widthPct); });
+$('dim').addEventListener('input', (e) => { rp.dim = +e.target.value; prefs.set('reader.dim', rp.dim); applyDim(); });
+$('gap').addEventListener('click', (e) => { const b = e.target.closest('button'); if (!b) return; rp.gap = +b.dataset.gap; prefs.set('reader.gap', rp.gap); if (view?.mode === 'scroll') view.setGap(rp.gap); syncControls(); });
+$('saver').addEventListener('change', async (e) => { saverNow = e.target.checked; prefs.set('saver', saverNow); await startView({ startPos: view?.topPos() }); });
+const setMode = async (m) => { if (m === modeNow) return; modeNow = m; await startView({ startPos: view?.topPos() }); };
+$('fMode').addEventListener('click', (e) => { const b = e.target.closest('button'); if (b) setMode(b.dataset.mode); });
+$('tbMode').addEventListener('click', () => setMode(modeNow === 'scroll' ? 'flip' : 'scroll'));
+$('tbFit').addEventListener('click', () => { view?.setFit(); if (view?.mode === 'scroll') { rp.widthPct = 100; $('w').value = 100; prefs.set('reader.widthPct', 100); } });
+
+// ---- auto-scroll -----------------------------------------------------------------------------------------------
+function onAutoChange(running) {
+  $('autoBadge').hidden = !running; $('autoText').textContent = t('reader.autoOn', { n: auto.speed });
+  $('tbAuto').querySelector('use').setAttribute('href', `icons.svg#${running ? 'pause' : 'play'}`); $('tbAuto').classList.toggle('is-on', running);
+  $('autoToggle').querySelector('use').setAttribute('href', `icons.svg#${running ? 'pause' : 'play'}`); $('autoToggleText').textContent = t(running ? 'reader.autoStop' : 'reader.autoStart');
+}
+auto.setSpeed(prefs.get('autoSpeed', 4)); onAutoChange(false);
+$('autoSpeed').addEventListener('input', (e) => { auto.setSpeed(+e.target.value); prefs.set('autoSpeed', auto.speed); $('autoVal').textContent = auto.speed; $('autoText').textContent = t('reader.autoOn', { n: auto.speed }); });
+$('autoToggle').addEventListener('click', () => auto.toggle()); $('autoStop').addEventListener('click', () => auto.stop());
+$('host').addEventListener('wheel', () => auto.stop(), { passive: true });
+
+// ---- page directory, prev/next page, jump ----------------------------------------------------------------------
+$('tbDir').addEventListener('click', () => {
+  closeFlies(null);
+  openPageDirectory({ bookId, realPages: book.realPages, current: shown, title: book.title, thumb: (p) => thumbUrl(book, view.layout.gFirst[p]), lib,
+    onJump: (p) => view.jumpTo({ page: p, frac: 0 }), onChanged: () => startView({ startPos: view.topPos() }) });
+});
+$('pgPrev').addEventListener('click', () => view?.stepPage(-1)); $('pgNext').addEventListener('click', () => view?.stepPage(1));
+$('pgCount').addEventListener('click', async () => {
+  const v = await promptDialog({ title: t('reader.jump'), label: t('reader.jumpLabel', { n: book.realPages }), value: String(shown + 1), ok: t('common.go') });
+  const n = Number(v); if (v && n >= 1) view.jumpTo({ page: Math.min(n, book.realPages) - 1, frac: 0 });
+});
+
+// ---- history panel visibility ----------------------------------------------------------------------------------
+const narrow = matchMedia('(max-width:1180px)');
+$('bpToggle').addEventListener('click', () => { if (narrow.matches) $('rg').classList.toggle('show-bp'); else { $('rg').classList.toggle('no-bp'); prefs.set('reader.noHistory', $('rg').classList.contains('no-bp')); } });
+if (prefs.get('reader.noHistory', false)) $('rg').classList.add('no-bp');
+
+// ---- end-of-book card ---------------------------------------------------------------------------------------------
+function showEnd() { auto.stop(); $('endCover').src = coverUrl(bookId); $('endMsg').textContent = t('end.msg', { title: book.title }); $('endCard').hidden = false; }
+$('endKeep').addEventListener('click', () => { endDismissed = true; $('endCard').hidden = true; });
+$('endAgain').addEventListener('click', () => { $('endCard').hidden = true; endDismissed = false; endArmAt = performance.now() + 1500; view.jumpTo({ page: 0, frac: 0 }); });
+$('endLib').addEventListener('click', () => leave('library.html'));
+
+// ---- navigation, fullscreen, window -------------------------------------------------------------------------------
+$('back').addEventListener('click', () => leave()); $('errBack').addEventListener('click', () => leave()); $('errRetry').addEventListener('click', () => startView());
+$('errLocate').addEventListener('click', async () => {
+  const p = await T.dialog.open({ multiple: false, filters: [{ name: t('imp.zipFilter'), extensions: ['zip', 'cbz'] }] });
+  if (p) { await lib.relinkBook(bookId, p).catch(() => {}); startView(); }
 });
 const toggleFs = async () => win.setFullscreen(!(await win.isFullscreen()));
-$('fs').addEventListener('click', toggleFs);
+$('fsBtn').addEventListener('click', toggleFs);
 addEventListener('keydown', (e) => {
-  if (e.target instanceof HTMLInputElement && e.key !== 'Escape') return;
-  if (e.key === 'Escape') { popOpen() ? setPop(false) : sideOpen() ? setSide(false) : win.isFullscreen().then(f => f ? win.setFullscreen(false) : leave()); }
-  else if (e.key === 'F11' || e.key === 'f') { e.preventDefault(); toggleFs(); }
-  else if (e.key === 'g' || (e.ctrlKey && e.key === 'g')) { e.preventDefault(); ui(true); $('cnt').click(); }
-  else if (e.key === 'b' || e.key === 'B') { e.preventDefault(); toggleBookmark(); }
-  else if (e.key === 't' || e.key === 'T') { e.preventDefault(); setSide(!sideOpen()); }
-  else if (e.key === '[') { e.preventDefault(); goEpisode(prevTarget(chs, curPos())); }    // [ / ] = previous / next episode (no-ops without chapters)
-  else if (e.key === ']') { e.preventDefault(); goEpisode(nextTarget(chs, curPos())); }
+  if (isModalOpen() || e.target instanceof HTMLInputElement || e.ctrlKey || e.metaKey || e.altKey) return;
+  const k = e.key.toLowerCase();
+  if (k === 'escape') {
+    if (!$('flySettings').hidden || !$('flyAuto').hidden) closeFlies(null); else if (drawerOpen()) sideBm(false); else if (!$('endCard').hidden) $('endKeep').click();
+    else win.isFullscreen().then(f => (f ? win.setFullscreen(false) : leave())); return;
+  }
+  if (!view) return;
+  if (k === 'b') toggleBookmark(); else if (k === 'm') $('tbMode').click(); else if (k === 'a') auto.toggle(); else if (k === 'd') $('tbDir').click(); else if (k === 'c') $('bpToggle').click();
+  else if (k === 'g') $('pgCount').click(); else if (k === 'f' || k === 'f11') toggleFs(); else if (k === '[') goEpisode(prevTarget(chs, view.topPos())); else if (k === ']') goEpisode(nextTarget(chs, view.topPos())); else return;
+  e.preventDefault();
 });
-win.onCloseRequested(async (e) => { e.preventDefault(); await reader.close(); await win.destroy(); });
+win.onCloseRequested(async (e) => { e.preventDefault(); auto.stop(); await view?.close(); await win.destroy(); });
 
-start(); poke();
+// ---- go ---------------------------------------------------------------------------------------------------------------
+wireTrack(); trackObserver.observe($('track'));
+invoke('get_chapter_defaults').then(d => { chDefaults = d; }).catch(() => {});
+startView();

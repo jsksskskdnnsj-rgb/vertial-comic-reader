@@ -3,142 +3,144 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>mh-reader · 设置</title>
+<title data-i="app.name"></title>
 <link rel="stylesheet" href="mh-ui.css">
-<style>
-  .set-wrap{ display:flex; flex-direction:column; gap:var(--gap); max-width:640px; }
-  .set-wrap h2{ margin:4px 0 0; font-size:18px; color:var(--ink-900); }
-  .set-card label.row{ display:flex; justify-content:space-between; align-items:center; gap:12px; font-size:var(--fs-body); color:var(--ink-700); }
-  .set-card input[type=range]{ width:180px; accent-color:var(--v-600); }
-  .set-card select{ height:32px; border:1px solid var(--line); border-radius:var(--r-input); background:var(--surface-solid); color:var(--ink-700); font:inherit; padding:0 10px; outline:0; }
-  .set-card code{ font-size:var(--fs-meta); color:var(--ink-700); background:var(--v-100); padding:4px 10px; border-radius:8px; word-break:break-all; user-select:text; }
-  .btn-row{ display:flex; flex-wrap:wrap; gap:10px; }
-  .btn--danger{ background:rgba(209,74,94,.10); color:var(--danger); }
-  .btn--danger:hover{ background:rgba(209,74,94,.18); }
-  .danger-zone{ border-top:1px solid var(--line); padding-top:14px; display:flex; flex-direction:column; gap:10px; }
-  .cache-line{ display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
-  .cache-line .field{ width:96px; }
-</style>
 </head>
 <body>
-<div class="window">
+<div class="app">
+  <header id="shell-top"></header>
+  <div class="work">
+    <nav id="shell-rail"></nav>
+    <main class="page-main">
+      <div class="page-head"><h1 data-i="nav.settings"></h1></div>
 
-  <!-- ===== Sidebar: 192px ===== -->
-  <aside class="sb" data-tauri-drag-region>
-    <div class="brand">
-      <div class="logo"><svg viewBox="0 0 24 24"><path d="M5 18V6l7 8 7-8v12"/></svg></div>
-      <div><div class="brand__name">mh-reader</div><div class="brand__sub" data-i="tagline"></div></div>
-    </div>
-    <nav class="nav">
-      <a href="home.html"><svg class="i"><use href="icons.svg#home"/></svg><span data-i="home"></span></a>
-      <a href="library.html"><svg class="i"><use href="icons.svg#shelf"/></svg><span data-i="library"></span></a>
-      <a href="import.html"><svg class="i"><use href="icons.svg#import"/></svg><span data-i="import"></span></a>
-      <a href="settings.html" aria-current="page"><svg class="i"><use href="icons.svg#settings"/></svg><span data-i="settings"></span></a>
-    </nav>
-    <p class="sb__quote" data-i="quote"></p>
-    <div class="sb__art" aria-hidden="true"></div>
-  </aside>
+      <section class="panel glass">
+        <h2><svg class="i"><use href="icons.svg#globe"/></svg><span data-i="settings.language"></span></h2>
+        <div class="set-row">
+          <div class="grow"><span data-i="settings.language"></span><span class="sub muted" data-i="settings.languageHelp"></span></div>
+          <select class="select" id="langSel">
+            <option value="zh-CN">中文</option>
+            <option value="en">English</option>
+          </select>
+        </div>
+      </section>
 
-  <!-- ===== Main ===== -->
-  <div class="main">
-    <header class="topbar" data-tauri-drag-region>
-      <label class="search">
-        <svg class="i"><use href="icons.svg#search"/></svg>
-        <input id="q" type="search" data-i-ph="search" autocomplete="off">
-      </label>
-      <span class="spacer" data-tauri-drag-region></span>
-      <div class="wc">
-        <button data-win="min"   data-i-label="min"><svg class="i"><use href="icons.svg#min"/></svg></button>
-        <button data-win="max"   data-i-label="max"><svg class="i"><use href="icons.svg#max"/></svg></button>
-        <button data-win="close" data-i-label="close"><svg class="i"><use href="icons.svg#close"/></svg></button>
-      </div>
-    </header>
-
-    <main class="body">
-      <div class="set-wrap">
-        <h2 data-i="settings"></h2>
-
-        <!-- 阅读：显示默认值写入 localStorage 'mh.reader'（键与默认值同 reader-boot.js） -->
-        <section class="panel set-card" id="reading">
-          <h3>阅读</h3>
-          <label class="row"><span data-i="width"></span><input id="setW" type="range" min="40" max="100" step="5"></label>
-          <label class="row"><span data-i="gap"></span>
-            <span class="seg" id="setGap"><button data-gap="0">0</button><button data-gap="8">8</button><button data-gap="16">16</button></span></label>
-          <label class="row"><span data-i="bg"></span>
-            <span class="sw" id="setBg">
-              <button data-bg="paper"    style="background:#FFFFFF" data-i-label="paper"></button>
-              <button data-bg="lavender" style="background:#EFEAF9" data-i-label="lavender"></button>
-              <button data-bg="night"    style="background:#121019" data-i-label="night"></button>
-              <button data-bg="black"    style="background:#000000" data-i-label="black"></button>
-            </span></label>
-          <label class="row"><span data-i="dim"></span><input id="setDim" type="range" min="60" max="100" step="5"></label>
-          <label class="row"><span data-i="saver"></span><input id="setSaver" type="checkbox"></label>
-        </section>
-
-        <span id="reading-mode"></span>
-        <!-- 分话默认值：<section id="chapterDefaults"> 取自 chapter-settings.html，逻辑在 settings.js -->
-        <section class="panel set-card" id="chapterDefaults">
-          <h3 data-i="chDefaultTitle"></h3>
-          <p class="hint" data-i="chDefaultHelp"></p>
-          <div class="seg" id="dMode" style="align-self:flex-start">
-            <button data-m="none"   data-i="chNone"></button>
-            <button data-m="folder" data-i="chFolder"></button>
-            <button data-m="pages"  data-i="chPages"></button>
+      <section class="panel glass">
+        <h2><svg class="i"><use href="icons.svg#palette"/></svg><span data-i="settings.appearance"></span></h2>
+        <div class="set-row">
+          <div class="grow"><span data-i="settings.accent"></span></div>
+          <div class="swatches" id="accents">
+            <button class="swatch" data-accent="#80e5b6" style="background:#80e5b6" aria-label="Emerald"></button>
+            <button class="swatch" data-accent="#b7a6f5" style="background:#b7a6f5" aria-label="Lavender"></button>
+            <button class="swatch" data-accent="#7cc4f0" style="background:#7cc4f0" aria-label="Sky"></button>
+            <button class="swatch" data-accent="#f2a0b5" style="background:#f2a0b5" aria-label="Rose"></button>
+            <button class="swatch" data-accent="#eec27f" style="background:#eec27f" aria-label="Amber"></button>
           </div>
-          <p class="hint" id="dHelp"></p>
-          <label id="dNRow" style="display:flex;align-items:center;gap:12px" hidden>
-            <span data-i="pagesPerEp"></span><input class="field" id="dN" type="number" min="1" max="9999" step="1" inputmode="numeric">
-          </label>
-        </section>
+          <input type="color" id="accentCustom" value="#80e5b6">
+          <button class="btn btn--ghost btn--sm" id="accentReset"><span data-i="settings.accentReset"></span></button>
+        </div>
+        <div class="set-row">
+          <div class="grow"><span data-i="settings.background"></span><span class="sub muted" data-i="settings.backgroundHelp"></span></div>
+          <button class="btn btn--ghost btn--sm" id="bgChange"><span data-i="settings.imageChange"></span></button>
+          <button class="btn btn--ghost btn--sm" id="bgReset"><span data-i="settings.imageReset"></span></button>
+        </div>
+        <div class="set-row">
+          <div class="grow"><span data-i="settings.bgDim"></span></div>
+          <input type="range" id="bgDim" min="0" max="90" step="5">
+          <span class="num muted" id="bgDimVal"></span>
+        </div>
+        <div class="set-row">
+          <div class="grow"><span data-i="settings.banner"></span><span class="sub muted" data-i="settings.bannerHelp"></span></div>
+          <span class="muted" style="font-size:12px" data-i="settings.backgroundHelp"></span>
+        </div>
+      </section>
 
-        <!-- 主题：localStorage 'mh.theme'，机制同 shell.js applyTheme -->
-        <section class="panel set-card" id="theme">
-          <h3>主题</h3>
-          <label class="row"><span>外观主题</span>
-            <select id="themeSel">
-              <option value="light">浅色</option>
-              <option value="night">夜间</option>
-            </select>
-          </label>
-          <p class="hint">切换后立即生效，并应用到所有页面。</p>
-        </section>
+      <section class="panel glass" id="reading">
+        <h2><svg class="i"><use href="icons.svg#book-open"/></svg><span data-i="settings.reading"></span></h2>
+        <div class="set-row">
+          <div class="grow"><span data-i="settings.defaultMode"></span></div>
+          <span class="seg" id="modeSeg">
+            <button data-mode="scroll" data-i="reader.modeScroll"></button>
+            <button data-mode="flip" data-i="reader.modeFlip"></button>
+          </span>
+        </div>
+        <div class="set-row">
+          <div class="grow"><span data-i="reader.width"></span></div>
+          <input type="range" id="widthRange" min="40" max="100" step="5">
+          <span class="num muted" id="widthVal"></span>
+        </div>
+        <div class="set-row">
+          <div class="grow"><span data-i="reader.gap"></span></div>
+          <span class="seg" id="gapSeg">
+            <button data-gap="0">0</button><button data-gap="8">8</button><button data-gap="16">16</button>
+          </span>
+        </div>
+        <div class="set-row">
+          <div class="grow"><span data-i="reader.brightness"></span></div>
+          <input type="range" id="dimRange" min="60" max="100" step="5">
+          <span class="num muted" id="dimVal"></span>
+        </div>
+        <div class="set-row">
+          <div class="grow"><span data-i="settings.saver"></span><span class="sub muted" data-i="settings.saverHelp"></span></div>
+          <input type="checkbox" id="saverChk">
+        </div>
+        <div class="set-row">
+          <div class="grow"><span data-i="settings.autoSpeed"></span></div>
+          <input type="range" id="autoRange" min="1" max="10" step="1">
+          <span class="num muted" id="autoVal"></span>
+        </div>
+      </section>
 
-        <!-- 数据目录 -->
-        <section class="panel set-card" id="data">
-          <h3>数据目录</h3>
-          <p class="hint">书架数据库、封面与缓存都存放在数据目录中。当前目录：</p>
-          <code id="dataDir">加载中…</code>
-          <div class="btn-row">
-            <button class="btn btn--soft" id="changeDataDir">更换数据目录</button>
-            <button class="btn btn--soft" id="openDataDir">打开数据目录</button>
-          </div>
-        </section>
+      <section class="panel glass">
+        <h2><svg class="i"><use href="icons.svg#list"/></svg><span data-i="chapters.defaultTitle"></span></h2>
+        <p class="hint" style="margin-bottom:8px" data-i="chapters.defaultHelp"></p>
+        <div class="set-row">
+          <div class="grow"><span data-i="chapters.title"></span></div>
+          <span class="seg" id="chSeg">
+            <button data-chmode="none" data-i="chapters.none"></button>
+            <button data-chmode="folder" data-i="chapters.folder"></button>
+            <button data-chmode="pages" data-i="chapters.pages"></button>
+          </span>
+        </div>
+        <div class="set-row" id="chNRow">
+          <div class="grow"><span data-i="chapters.pagesPer"></span></div>
+          <input class="field" id="chN" type="number" min="1" max="9999" step="1" style="width:110px">
+        </div>
+        <p class="hint" id="chHelp"></p>
+      </section>
 
-        <!-- 缓存 -->
-        <section class="panel set-card" id="cache">
-          <h3>缓存</h3>
-          <p class="hint" id="cacheStats">加载中…</p>
-          <div class="cache-line">
-            <span>缓存上限（MB）</span>
-            <input class="field" id="cacheLimitMb" type="number" min="1" step="1" inputmode="numeric">
-            <button class="btn btn--soft" id="setCacheLimit" style="height:32px;padding:0 16px">保存上限</button>
-          </div>
-          <div class="btn-row">
-            <button class="btn btn--soft" id="clearReaderCache">清理阅读缓存</button>
-            <button class="btn btn--soft" id="clearLegacyCache">清理旧页面缓存</button>
-          </div>
-        </section>
+      <section class="panel glass">
+        <h2><svg class="i"><use href="icons.svg#db"/></svg><span data-i="settings.cache"></span></h2>
+        <div class="set-row">
+          <div class="grow"><span id="cacheStats">…</span></div>
+          <button class="btn btn--ghost btn--sm" id="cacheClearBtn"><span data-i="settings.cacheClear"></span></button>
+        </div>
+        <div class="set-row">
+          <div class="grow"><span data-i="settings.cacheLimit"></span></div>
+          <input class="field" id="cacheLimitMb" type="number" min="64" step="64" style="width:110px">
+          <span class="muted">MB</span>
+          <button class="btn btn--ghost btn--sm" id="cacheLimitBtn"><span data-i="common.save"></span></button>
+        </div>
+        <div class="set-row">
+          <div class="grow"><span data-i="lib.folders"></span><span class="sub path-txt" id="dataDir"></span></div>
+          <button class="btn btn--ghost btn--sm" id="dataDirOpen"><span data-i="lib.reveal"></span></button>
+          <button class="btn btn--ghost btn--sm" id="dataDirChange"><span data-i="settings.imageChange"></span></button>
+        </div>
+      </section>
 
-        <!-- 关于 -->
-        <section class="panel set-card" id="about">
-          <h3>关于</h3>
-          <p class="hint">mh-reader <span class="num" id="ver"></span><br>本地漫画阅读器 · 本地读取 · 不联网</p>
-          <div class="danger-zone">
-            <p class="hint" style="color:var(--danger)">危险操作：清空书架会移除全部书籍记录（源文件不会被删除），且无法撤销。</p>
-            <div class="btn-row"><button class="btn btn--danger" id="clearShelf">清空书架</button></div>
-          </div>
-        </section>
-      </div>
+      <section class="panel glass">
+        <h2><svg class="i"><use href="icons.svg#info"/></svg><span data-i="settings.about"></span></h2>
+        <div class="stats-grid" id="statsGrid"></div>
+        <p class="hint" style="margin-top:12px"><span data-i="settings.version"></span> <span class="num" id="ver">—</span></p>
+      </section>
+
+      <section class="panel glass danger-zone">
+        <h2><svg class="i"><use href="icons.svg#trash"/></svg><span data-i="lib.title"></span></h2>
+        <div class="set-row">
+          <div class="grow"><span data-i="lib.remove"></span><span class="sub muted" data-i="lib.noBooks"></span></div>
+          <button class="btn btn--danger btn--sm" id="clearShelf"><span data-i="settings.cacheClear"></span></button>
+        </div>
+      </section>
     </main>
   </div>
 </div>

@@ -45,7 +45,7 @@ export class BookmarkPanel {
   render(bms) {
     const { t, esc } = this.d;
     this.bms = bms;
-    this.host.innerHTML = bms.length ? bms.map(b => this.row(b)).join('') : `<p class="empty">${esc(t('bmEmpty'))}</p>`;
+    this.host.innerHTML = bms.length ? bms.map(b => this.row(b)).join('') : `<p class="empty">${esc(t('bookmarks.empty'))}</p>`;
   }
 
   row(b) {
@@ -53,15 +53,15 @@ export class BookmarkPanel {
     const thumb = broken
       ? `<div class="bm__thumb bm__thumb--broken" aria-hidden="true">!</div>`
       : `<img class="bm__thumb" alt="" loading="lazy" src="${esc(this.d.thumb(b))}">`;
-    const where = broken ? `<span class="bm__warn">${esc(t('bmBroken'))}</span>` : esc(this.d.label(b));
-    const note = `<div class="bm__note" data-act="note">${b.note ? esc(b.note) : `<i>${esc(t('bmNote'))}</i>`}</div>`;
+    const where = broken ? `<span class="bm__warn">${esc(t('bookmarks.broken'))}</span>` : esc(this.d.label(b));
+    const note = `<div class="bm__note" data-act="note">${b.note ? esc(b.note) : `<i>${esc(t('bookmarks.note'))}</i>`}</div>`;
     const actions = broken
-      ? `<button data-act="hint">${esc(t('bmGoOld', { p: b.pageHint + 1 }))}</button><button data-act="reanchor">${esc(t('bmReanchor', { p: b.pageHint + 1 }))}</button>`
+      ? `<button data-act="hint">${esc(t('bookmarks.goOld', { p: b.pageHint + 1 }))}</button><button data-act="reanchor">${esc(t('bookmarks.reanchor', { p: b.pageHint + 1 }))}</button>`
       : '';
     return `<article class="bm${broken ? ' bm--broken' : ''}" data-id="${b.id}">${thumb}
       <div class="bm__main"><div class="bm__file" title="${esc(b.entryName)}">${esc(b.fileName)}</div>
       <div class="bm__where">${where}</div>${note}
-      <div class="bm__actions">${actions}<button data-act="delete">${esc(t('bmDelete'))}</button></div></div></article>`;
+      <div class="bm__actions">${actions}<button data-act="delete">${esc(t('bookmarks.delete'))}</button></div></div></article>`;
   }
 
   onClick(e) {
@@ -76,7 +76,7 @@ export class BookmarkPanel {
   }
 
   editNote(el, bm) {
-    const input = Object.assign(document.createElement('input'), { className: 'field bm__input', value: bm.note ?? '', maxLength: 500, placeholder: this.d.t('bmNote') });
+    const input = Object.assign(document.createElement('input'), { className: 'field bm__input', value: bm.note ?? '', maxLength: 500, placeholder: this.d.t('bookmarks.note') });
     el.replaceWith(input); input.focus();
     let done = false;
     const commit = (save) => { if (done) return; done = true; save ? this.d.onNote(bm.id, input.value.trim() || null) : this.render(this.bms); };

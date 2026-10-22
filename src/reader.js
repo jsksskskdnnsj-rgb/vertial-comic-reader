@@ -12,6 +12,8 @@ const invoke = T.core.invoke;
 const PAGE_BASE = T.core.convertFileSrc('', 'mhpage').replace(/\/$/, '');
 /** 160px-wide preview of virtual page `i` (a slice for tall images). Used by the bookmarks panel; same URL shape as the scrubber. */
 export const thumbUrl = (info, i) => `${PAGE_BASE}/${info.bookId}/${i}?v=160&s=${info.sig}`;
+/** URL of virtual page `i` at a given width variant (0 = full size). Shared with flip.js. */
+export const pageUrl = (info, i, variant = 0) => `${PAGE_BASE}/${info.bookId}/${i}?v=${variant}&s=${info.sig}`;
 
 export const api = {
   openBook:      (bookId) => invoke('open_book', { bookId }),
@@ -25,7 +27,7 @@ export const api = {
   cacheClear:    (bookId = null) => invoke('cache_clear', { bookId }),
 };
 
-const PERF = {
+export const PERF = {
   balanced: { nearMargin: '150% 0px', farMargin: '300% 0px', maxMounted: 14,
               aheadVh: 5, behindVh: 1.5, maxAhead: 10, maxBehind: 3, variant: 0 },
   saver:    { nearMargin: '80% 0px',  farMargin: '160% 0px', maxMounted: 6,
@@ -268,7 +270,7 @@ class Prefetcher {
 // ---------------------------------------------------------------- ProgressSaver
 // Writes (page, frac) when it changed: 1.5 s after scrolling pauses, but never less often
 // than every 4 s during continuous reading. flush() is awaited on close/blur/hide.
-class ProgressSaver {
+export class ProgressSaver {
   constructor(bookId) { this.bookId = bookId; this.dirty = null; this.saved = null; this.lastAt = performance.now(); this.timer = 0; }
 
   mark(pos, reachedEnd) {
@@ -294,7 +296,7 @@ class ProgressSaver {
 // ---------------------------------------------------------------- Scrubber
 // Track maps linearly to REAL pages. While dragging we only preview (label + 160px thumb);
 // nothing is mounted or requested for intermediate pages. The jump happens once, on release.
-class Scrubber {
+export class Scrubber {
   constructor(track, thumbImg, label, reader) {
     this.track = track; this.thumb = thumbImg; this.label = label; this.r = reader;
     this.dragging = false; this.thumbTimer = 0;
@@ -335,11 +337,18 @@ export class Reader {
 
   layoutParams() { return { viewW: this.strip.viewW, ...this.params }; }
 
-  async open(bookId, { perf = 'balanced', widthPct = 100, gap = 0 } = {}) {
+  // opts: perf, widthPct, gap, startPos ({page,frac}: overrides the saved resume point),
+  //       beforeMount(info) -> false (cancel) | {perf} | undefined   (used for the large-book warning)
+  async open(bookId, { perf = 'balanced', widthPct = 100, gap = 0, startPos = null, beforeMount = null } = {}) {
     this.perfName = perf; this.perf = PERF[perf];
     Object.assign(this.params, { widthPct, gap });
     this.info = await api.openBook(bookId);                 // { bookId, sig, dims, src, realPages, chapters, resume, ... }
-    const { dims, src, resume } = this.info;
+    if (beforeMount) {
+      const r = await beforeMount(this.info);
+      if (r === false) { await api.closeBook(bookId).catch(() => {}); throw { code: 'cancelled' }; }
+      if (r?.perf) { this.perfName = r.perf; this.perf = PERF[r.perf]; }
+    }
+    const { dims, src } = this.info, resume = startPos ?? this.info.resume;
 
     this.strip.build(dims, src);
     this.strip.apply(this.layoutParams());
@@ -379,6 +388,17 @@ export class Reader {
     const behind = clamp(center - L.findVirtual(Math.max(0, y - vh * p.behindVh)), 0, p.maxBehind);
     return { center, direction: dir >= 0 ? 1 : -1, ahead, behind };
   }
+
+  // ---- common view API (flip.js implements the same surface) ----
+  get mode() { return 'scroll'; }
+  get layout() { return this.strip.layout; }
+  get viewH() { return this.strip.viewH; }
+  topPos() { return this.strip.layout.getPosition(this.strip.scroller.scrollTop); }                       // what is saved
+  centerPos() { return this.strip.layout.getPosition(this.strip.scroller.scrollTop + this.strip.viewH / 2); }   // what B bookmarks
+  stepPage(dir) { const p = this.topPos(); const to = clamp(p.page + dir, 0, this.strip.layout.realPages - 1); this.jumpTo({ page: to, frac: 0 }, { smooth: true }); }
+  refresh() { this.tracker?.tick(); }
+  setFit() { this.params.zoom = 1; this.params.widthPct = 100; this.strip.relayout(this.layoutParams()); }   // "fit to panel"
+  keysEnabled = true;
 
   emitPosition(p) {
     this.onPosition(p);
@@ -425,6 +445,7 @@ export class Reader {
   }
 
   onKey(e) {
+    if (!this.keysEnabled || document.documentElement.dataset.modal === '1') return;     // dialogs own the keyboard
     const sc = this.strip.scroller, vh = sc.clientHeight;
     if (e.target instanceof HTMLInputElement) return;
     const page = this.strip.layout.getPosition(sc.scrollTop).page;
@@ -452,6 +473,7 @@ export class Reader {
     document.removeEventListener('visibilitychange', this.visHandler);
     window.removeEventListener('blur', this.blurHandler);
     this.ro?.disconnect(); this.tracker?.destroy(); this.imageWindow?.destroy(); this.prefetcher?.destroy();
+    this.strip.scroller.remove();                              // leave the host empty for the next view
     if (this.info) await api.closeBook(this.info.bookId).catch(() => {});
   }
 }
