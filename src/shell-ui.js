@@ -1,19 +1,18 @@
-// shell-ui.js - the app shell the repaired package left empty:
-// reader.html (and the library pages) contain <header id="shell-top"> and
-// <nav id="shell-rail"> placeholders; this module fills them, matching the
-// target UI: brand + search + language + window controls on top, an icon
-// rail (home / library / history / favourites / import / settings) on the
-// left, the user's custom background image behind the glass, and the
-// chosen accent colour.
-import { T, invoke, t, esc, prefs, applyTheme, applyI18n, wireWindow } from './shell.js';
+// shell-ui.js - fills <header id="shell-top"> and <nav id="shell-rail">, applies the accent colour,
+// the whole-window background and the home banner (separate images since v0.6). Changes vs v0.5.1: the dim strength is a CSS variable (--bg-dim) that
+// drives BOTH the default background (painted by mh-ui.css) and a custom image, so the Settings
+// slider works either way; a custom image also becomes --banner-image for the Home banner;
+// resetting to the default removes the layer; language button label is translated; the drop-queue
+// poll pauses while the window is hidden.
+import { T, invoke, t, esc, prefs, applyTheme, applyI18n, wireWindow, lang, setLang } from './shell.js';
 
 export const COVER_BASE = T.core?.convertFileSrc
   ? T.core.convertFileSrc('', 'mhcover').replace(/\/$/, '')
   : '';
 export const coverUrl = (id, v = 0) => `${COVER_BASE}/${id}?v=${v ?? 0}`;
 
-/** Cover <img data-cover="id"> fallback: a 404 means "not generated yet" ->
- *  ask Rust once (ensure_cover), then reload the image. Call once per page. */
+/** Cover <img data-cover="id"> fallback: a 404 means "not generated yet" -> ask Rust once
+ *  (ensure_cover), then reload the image. Call once per page. */
 export function wireCoverFallback() {
   document.addEventListener('error', async (e) => {
     const img = e.target;
@@ -34,7 +33,7 @@ const RAIL = [
   { key: 'import', href: 'import.html', icon: 'download', label: 'nav.import' },
 ];
 
-/** Fill #shell-top / #shell-rail (either may be absent), apply accent + bg.
+/** Fill #shell-top / #shell-rail (either may be absent), apply accent + background.
  *  opts: { onSearch(q), searchValue } */
 export function mountShell(active = '', opts = {}) {
   applyTheme();
@@ -55,7 +54,7 @@ export function mountShell(active = '', opts = {}) {
         <input id="shellSearch" type="search" autocomplete="off" placeholder="${esc(t('search.placeholder'))}">
       </label>
       <span class="spacer" data-tauri-drag-region></span>
-      <button class="ibtn" id="shellLang" aria-label="Language"><svg class="i"><use href="icons.svg#globe"/></svg></button>
+      <button class="ibtn" id="shellLang" aria-label="${esc(t('settings.language'))}" title="${esc(t('settings.language'))}"><svg class="i"><use href="icons.svg#globe"/></svg></button>
       <div class="wc">
         <button data-window-minimize aria-label="${esc(t('win.min'))}"><svg class="i"><use href="icons.svg#min"/></svg></button>
         <button data-window-maximize aria-label="${esc(t('win.max'))}"><svg class="i"><use href="icons.svg#max"/></svg></button>
@@ -70,8 +69,7 @@ export function mountShell(active = '', opts = {}) {
       else if (v) location.href = `library.html?q=${encodeURIComponent(v)}`;
     });
     top.querySelector('#shellLang').addEventListener('click', () => {
-      const cur = localStorage.getItem('mh.lang') || 'zh-CN';
-      localStorage.setItem('mh.lang', cur === 'en' ? 'zh-CN' : 'en');
+      setLang(lang() === 'en' ? 'zh-CN' : 'en');
       location.reload();
     });
   }
@@ -98,28 +96,40 @@ function applyAccent() {
   }
 }
 
-/** Custom whole-window background (Settings -> set_hero_image stores the file
- *  in the data dir and theme config's `hero` points at it). */
+/** Whole-window background (theme config `hero`) and home banner (`banner`), independent of each other.
+ *  The default background is painted by mh-ui.css; a custom background is drawn by .bg-layer above it.
+ *  A custom banner becomes the CSS variable --banner-image used by .hero. Call again after changing either
+ *  image or the dim slider. */
 export async function applyBackground() {
-  try {
-    const cfg = await invoke('get_theme_config');
-    if (!cfg || !cfg.hero || cfg.hero === 'default') return;
-    let layer = document.querySelector('.bg-layer');
+  const root = document.documentElement;
+  const dim = Math.min(90, Math.max(0, +prefs.get('bgDim', 55))) / 100;
+  root.style.setProperty('--bg-dim', String(dim)); // runs before the first await: no flash
+  let cfg = {};
+  try { cfg = (await invoke('get_theme_config')) || {}; } catch {}
+  const conv = T.core?.convertFileSrc;
+  const hero = cfg.hero || 'default', banner = cfg.banner || 'default'; // `banner` is absent on a backend without v0.6
+  let layer = document.querySelector('.bg-layer');
+  if (hero === 'default' || !conv) {
+    layer?.remove();
+    document.body.classList.remove('has-bg');
+  } else {
     if (!layer) {
       layer = document.createElement('div');
       layer.className = 'bg-layer';
       document.body.prepend(layer);
     }
-    const dim = prefs.get('bgDim', 55); // 0..100: strength of the dark overlay
     layer.style.backgroundImage =
-      `linear-gradient(rgba(4,14,15,${dim / 100}), rgba(4,14,15,${Math.min(0.92, dim / 100 + 0.12)})), url("${T.core.convertFileSrc(cfg.hero)}")`;
+      `linear-gradient(rgba(4,14,15,var(--bg-dim)), rgba(4,14,15,calc(var(--bg-dim) + .12))), url("${conv(hero)}")`;
     document.body.classList.add('has-bg');
-  } catch {}
+  }
+  if (banner === 'default' || !conv) root.style.removeProperty('--banner-image');
+  else root.style.setProperty('--banner-image', `url("${conv(banner)}")`);
 }
 
 /** Poll the Rust drop queue (native drag-drop writes paths there). */
 export function watchDrops(onPaths) {
   setInterval(async () => {
+    if (document.hidden) return;
     try {
       const q = await invoke('take_drop_queue');
       if (Array.isArray(q) && q.length) onPaths(q);

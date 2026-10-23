@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title data-i="app.name"></title>
+<link rel="stylesheet" href="mh-ui.css">
+</head>
+<body>
+<div class="app">
+  <header id="shell-top"></header>
+  <div class="work">
+    <nav id="shell-rail"></nav>
+    <main class="page-main">
+      <div class="page-head"><a class="linklike" href="library.html" data-i="common.back"></a></div>
+      <section class="panel glass book-hero" id="hero" hidden>
+        <img class="cover book-cover" id="cover" alt="">
+        <div class="book-info">
+          <h1 id="name"></h1>
+          <div class="chips" id="chips"></div>
+          <div class="book-progress">
+            <div class="bar"><i id="barFill"></i></div>
+            <div class="hcard__meta"><span class="num" id="progText"></span><span id="epText"></span></div>
+          </div>
+          <p class="hint warn" id="missingHint" hidden data-i="book.missingHint"></p>
+          <div class="book-actions">
+            <button class="btn btn--primary" id="continueBtn"><svg class="i"><use href="icons.svg#book-open"/></svg><span id="continueLbl"></span></button>
+            <button class="btn btn--ghost" id="startOverBtn"><span data-i="lib.startOver"></span></button>
+            <button class="btn btn--ghost" id="renameBtn"><svg class="i"><use href="icons.svg#pencil"/></svg><span data-i="lib.rename"></span></button>
+            <button class="btn btn--ghost" id="relinkBtn" hidden><span data-i="reader.locate"></span></button>
+            <button class="btn btn--ghost" id="revealBtn"><span data-i="lib.reveal"></span></button>
+            <button class="btn btn--danger" id="removeBtn"><svg class="i"><use href="icons.svg#trash"/></svg><span data-i="lib.remove"></span></button>
+          </div>
+        </div>
+      </section>
+      <section class="panel glass" id="details" hidden>
+        <dl class="kv" id="kv"></dl>
+        <div class="set-row">
+          <div class="grow"><span data-i="lib.folders"></span></div>
+          <select class="select" id="folderSel"><option value="" data-i="lib.noFolder"></option></select>
+        </div>
+        <div class="set-row" id="resetEditRow" hidden>
+          <div class="grow"><span data-i="book.edited"></span></div>
+          <button class="btn btn--ghost btn--sm" id="resetEditBtn"><span data-i="lib.resetEdits"></span></button>
+        </div>
+      </section>
+      <p class="empty" id="notFound" hidden data-i="book.notFound"></p>
+    </main>
+  </div>
+</div>
+<script type="module" src="book.js"></script>
+</body>
+</html>

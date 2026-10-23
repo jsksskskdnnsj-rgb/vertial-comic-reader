@@ -15,17 +15,17 @@
       <div class="lib-layout">
         <aside class="panel glass folder-panel">
           <h3 data-i="lib.folders"></h3>
-          <div id="folders" style="display:flex;flex-direction:column;gap:3px"></div>
-          <button class="btn btn--ghost btn--sm" id="newFolder" style="margin-top:9px">
+          <div class="folder-list" id="folders"></div>
+          <button class="btn btn--ghost btn--sm folder-new" id="newFolder">
             <svg class="i"><use href="icons.svg#plus"/></svg><span data-i="lib.newFolder"></span>
           </button>
         </aside>
         <section>
           <div class="page-head">
-            <h1 data-i="lib.title"></h1>
+            <h1 id="title" data-i="lib.title"></h1>
             <span class="muted num" id="count"></span>
-            <span class="spacer" style="flex:1"></span>
-            <label style="font-size:12px;color:var(--muted)"><span data-i="lib.sort"></span>
+            <span class="spacer"></span>
+            <label class="sort-label"><span data-i="lib.sort"></span>
               <select class="select" id="sortSel">
                 <option value="recent" data-i="lib.sortRecent"></option>
                 <option value="added" data-i="lib.sortAdded"></option>
@@ -33,7 +33,7 @@
               </select>
             </label>
           </div>
-          <div class="cards-row" id="grid" style="grid-template-columns:repeat(auto-fill,minmax(148px,1fr))"></div>
+          <div class="cards-row lib-grid" id="grid"></div>
           <p class="empty" id="empty" hidden></p>
         </section>
       </div>

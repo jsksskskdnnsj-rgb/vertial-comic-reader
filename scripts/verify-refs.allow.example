@@ -1,0 +1,5 @@
+# Copy to scripts/verify-refs.allow to accept a known, pre-existing condition (the failure is then shown as ALLW).
+# Format: <text in the message> :: <more text>
+# Your staging run reported these two; they exist in the untouched repo too. Prefer deleting src/legacy-reader-boot.js
+# if no HTML loads it, instead of allowing them.
+src/legacy-reader-boot.js :: index.html

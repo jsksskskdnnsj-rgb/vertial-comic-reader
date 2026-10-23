@@ -1,10 +1,12 @@
-// legacy-api.js - central Tauri adapter for the reader + library pages.
-// v0.5: every call below is backed by a REAL command (main.rs shelf/folder
-// commands, adapters.rs, chapters/bookmarks, and the new library.rs page-edit
-// + library-management commands). Nothing here guesses a command name.
+// legacy-api.js - central Tauri adapter (v0.6). Every call is backed by a real command; no new
+// commands are introduced. Changes vs v0.5.1: connection error comes from the dictionaries;
+// shelfGet added (shelf_get). Note: shelf_move declares rename_all = "snake_case" in main.rs, so
+// moveTo must send folder_id (snake_case) - unlike every other call here, which is camelCase.
+import { t } from './shell.js';
+
 const T = window.__TAURI__;
 const invoke = (cmd, args = {}) => {
-  if (!T?.core?.invoke) return Promise.reject(new Error('当前页面未连接桌面端后端（Tauri）。'));
+  if (!T?.core?.invoke) return Promise.reject(new Error(t('err.noBackend')));
   return T.core.invoke(cmd, args);
 };
 
@@ -26,6 +28,7 @@ export const lib = {
 
   // library management
   allBooks: () => invoke('shelf_list'),
+  shelfGet: (id) => invoke('shelf_get', { id }),
   rename: (bookId, name) => invoke('shelf_rename', { bookId, name }),
   remove: (id) => invoke('shelf_remove', { id }),
   moveTo: (id, folderId) => invoke('shelf_move', { id, folder_id: folderId }),

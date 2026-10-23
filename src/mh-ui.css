@@ -132,3 +132,79 @@
 .glass,.glass-strong{backdrop-filter:none;-webkit-backdrop-filter:none}
 .shell-top,.shell-rail,.flyout,.drawer,.toast,.modal,.vp__pill,.vp__auto{backdrop-filter:blur(14px) saturate(1.25);-webkit-backdrop-filter:blur(14px) saturate(1.25)}
 .bg-layer{z-index:-1;transform:translateZ(0);will-change:transform}
+
+/* ==== v0.6 append: add at the END of src/mh-ui.css (PowerShell: Get-Content mh-ui.v06-append.css | Add-Content mh-ui.css) ====
+   Do not add a second stylesheet link; every page already loads mh-ui.css. */
+
+/* 1. Real bug: author rules such as .btn{display:inline-flex} and .set-row{display:flex} beat the
+      browser's [hidden]{display:none}, so hidden buttons/rows were always visible. */
+[hidden]{display:none!important}
+
+/* 2. Default whole-window background (src/assets/bg-default.jpg) painted on the canvas. --bg-dim is set
+      by shell-ui.js from the Settings slider (0..0.9) and drives this overlay AND the overlay on a
+      custom image; a custom image is drawn by .bg-layer (z-index:-1) above this one. */
+:root{--bg-dim:.55}
+html{background:
+  linear-gradient(rgba(4,14,15,var(--bg-dim)),rgba(4,14,15,calc(var(--bg-dim) + .12))),
+  url("assets/bg-default.jpg") center/cover no-repeat,
+  #061315}
+body{background:transparent}
+
+/* 3. Banner: custom image (--banner-image, set by shell-ui.js) or the default banner picture. */
+.hero{background:
+  linear-gradient(120deg,rgba(10,36,34,.84),rgba(10,36,34,.42)),
+  var(--banner-image,url("assets/banner-default.jpg")) center/cover no-repeat}
+
+/* 4. Home: reading-history stack + main column (reference layout: stacked cards on the left) */
+.home-grid{display:grid;grid-template-columns:minmax(290px,360px) minmax(0,1fr);gap:16px;align-items:start}
+.home-col{min-width:0}
+.history-panel{position:sticky;top:0;margin-bottom:0}
+.hstack{display:flex;flex-direction:column}
+.hcard:focus-visible,.book-card:focus-visible,.folder-row:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.dz-btns{display:flex;gap:9px;justify-content:center;flex-wrap:wrap}
+.dz-note{margin-top:12px}
+@media(max-width:900px){.home-grid{grid-template-columns:1fr}.history-panel{position:static}}
+
+/* 5. Library cards: type badge + progress strip on the cover */
+.lib-grid{grid-template-columns:repeat(auto-fill,minmax(148px,1fr))}
+.sort-label{font-size:12px;color:var(--muted);display:inline-flex;align-items:center;gap:8px}
+.folder-list{display:flex;flex-direction:column;gap:3px}
+.folder-new{margin-top:9px}
+.folder-row{cursor:pointer}
+.folder-row .fname{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.folder-row:focus-within .f-act{opacity:1}
+.kind-badge{position:absolute;right:7px;bottom:11px;padding:2px 7px;border-radius:7px;background:#0a2422d9;border:1px solid #80e5b655;color:var(--accent2);font-size:10px}
+.cover-wrap .cover-bar{position:absolute;left:0;right:0;bottom:0;height:4px;border-radius:0;background:#0006}
+.missing-badge{bottom:11px}
+
+/* 6. Book details page */
+.book-hero{display:grid;grid-template-columns:200px minmax(0,1fr);gap:22px}
+.book-cover{width:200px;height:auto;aspect-ratio:3/4;border-radius:14px}
+.book-info{min-width:0;display:flex;flex-direction:column;gap:12px}
+.book-info h1{margin:0;font-size:24px;font-weight:700;overflow-wrap:anywhere}
+.book-progress{max-width:520px}
+.book-progress .bar{height:5px;margin-bottom:6px}
+.book-actions{display:flex;gap:9px;flex-wrap:wrap;margin-top:4px}
+.hint.warn{color:var(--danger)}
+.kv{margin:0 0 6px;display:grid;grid-template-columns:150px 1fr;gap:9px 16px;font-size:13px}
+.kv dt{color:var(--muted)}
+.kv dd{margin:0;overflow-wrap:anywhere}
+@media(max-width:700px){.book-hero{grid-template-columns:1fr}.book-cover{width:150px}.kv{grid-template-columns:110px 1fr}}
+
+/* 7. Import page */
+.src-head{display:flex;align-items:center;gap:10px;margin-top:16px;flex-wrap:wrap}
+.src-head h2{margin:0;font-size:14px}
+.go-row{display:flex;gap:9px;margin-top:16px;flex-wrap:wrap}
+.summary{margin-top:12px}
+.name-field{width:min(300px,100%)}
+.src-row .idx{width:22px;flex-shrink:0;text-align:right;color:var(--muted);font-size:11px}
+.src-row button:disabled{opacity:.3;cursor:default;background:none}
+
+/* 8. Settings */
+.num-field{width:110px}
+.color-pick{display:inline-flex;align-items:center;gap:8px}
+.swatch:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.hint{margin:0 0 8px}
+
+.state-chip{display:inline-block;margin-top:5px;padding:2px 9px;border-radius:999px;font-size:11px;background:#9ce6c61c;border:1px solid #a5e5c21c;color:#c8e7d9}
+.state-chip.is-custom{border-color:#eec27f66;color:#eec27f}

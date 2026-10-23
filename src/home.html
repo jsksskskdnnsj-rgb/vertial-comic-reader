@@ -22,40 +22,44 @@
         </div>
       </section>
 
-      <section class="panel glass">
-        <div class="dropzone" id="zone">
-          <svg class="dz-icon"><use href="icons.svg#cloud-up"/></svg>
-          <h3 data-i="home.dropTitle"></h3>
-          <p data-i="home.dropSub"></p>
-          <div style="display:flex;gap:9px;justify-content:center;flex-wrap:wrap">
-            <button class="btn btn--primary" id="pickFiles"><svg class="i"><use href="icons.svg#folder"/></svg><span data-i="imp.addZips"></span></button>
-            <button class="btn btn--ghost" id="pickFolders"><svg class="i"><use href="icons.svg#folder"/></svg><span data-i="imp.addFolders"></span></button>
-          </div>
-          <p style="margin-top:12px" data-i="home.dropNote"></p>
+      <div class="home-grid">
+        <aside class="panel glass history-panel">
+          <h2><svg class="i"><use href="icons.svg#clock"/></svg><span data-i="home.recent"></span><span class="spacer"></span><a class="linklike" href="library.html?view=recent" data-i="home.more"></a></h2>
+          <div class="hstack" id="recent"></div>
+          <p class="empty" id="noRecent" hidden data-i="home.noRecent"></p>
+        </aside>
+
+        <div class="home-col">
+          <section class="panel glass">
+            <div class="dropzone" id="zone">
+              <svg class="dz-icon"><use href="icons.svg#cloud-up"/></svg>
+              <h3 data-i="home.dropTitle"></h3>
+              <p data-i="home.dropSub"></p>
+              <div class="dz-btns">
+                <button class="btn btn--primary" id="pickFiles"><svg class="i"><use href="icons.svg#folder"/></svg><span data-i="imp.addZips"></span></button>
+                <button class="btn btn--ghost" id="pickFolders"><svg class="i"><use href="icons.svg#folder"/></svg><span data-i="imp.addFolders"></span></button>
+              </div>
+              <p class="dz-note" data-i="home.dropNote"></p>
+            </div>
+          </section>
+
+          <section class="panel glass">
+            <h2><svg class="i"><use href="icons.svg#sparkle"/></svg><span data-i="home.quick"></span></h2>
+            <div class="quick-grid">
+              <a class="quick-tile" href="import.html"><svg class="i"><use href="icons.svg#download"/></svg><span><b data-i="home.qImport"></b><span data-i="home.qImportD"></span></span></a>
+              <a class="quick-tile" href="library.html"><svg class="i"><use href="icons.svg#shelf"/></svg><span><b data-i="home.qLib"></b><span data-i="home.qLibD"></span></span></a>
+              <a class="quick-tile" href="settings.html"><svg class="i"><use href="icons.svg#settings"/></svg><span><b data-i="home.qSet"></b><span data-i="home.qSetD"></span></span></a>
+              <a class="quick-tile" href="settings.html#reading"><svg class="i"><use href="icons.svg#scroll"/></svg><span><b data-i="home.qMode"></b><span data-i="home.qModeD"></span></span></a>
+            </div>
+          </section>
+
+          <section class="panel glass">
+            <h2><svg class="i"><use href="icons.svg#plus"/></svg><span data-i="home.added"></span><span class="spacer"></span><a class="linklike" href="library.html?sort=added" data-i="home.more"></a></h2>
+            <div class="cards-row" id="added"></div>
+            <p class="empty" id="noAdded" hidden data-i="home.noAdded"></p>
+          </section>
         </div>
-      </section>
-
-      <section class="panel glass">
-        <h2><svg class="i"><use href="icons.svg#sparkle"/></svg><span data-i="home.quick"></span></h2>
-        <div class="quick-grid">
-          <a class="quick-tile" href="import.html"><svg class="i"><use href="icons.svg#download"/></svg><span><b data-i="home.qImport"></b><span data-i="home.qImportD"></span></span></a>
-          <a class="quick-tile" href="library.html"><svg class="i"><use href="icons.svg#shelf"/></svg><span><b data-i="home.qLib"></b><span data-i="home.qLibD"></span></span></a>
-          <a class="quick-tile" href="settings.html"><svg class="i"><use href="icons.svg#settings"/></svg><span><b data-i="home.qSet"></b><span data-i="home.qSetD"></span></span></a>
-          <a class="quick-tile" href="settings.html#reading"><svg class="i"><use href="icons.svg#scroll"/></svg><span><b data-i="home.qMode"></b><span data-i="home.qModeD"></span></span></a>
-        </div>
-      </section>
-
-      <section class="panel glass">
-        <h2><svg class="i"><use href="icons.svg#clock"/></svg><span data-i="home.recent"></span><span class="spacer"></span><a class="linklike" href="library.html?view=recent" data-i="home.more"></a></h2>
-        <div class="cards-row" id="recent"></div>
-        <p class="empty" id="noRecent" hidden data-i="home.noRecent"></p>
-      </section>
-
-      <section class="panel glass">
-        <h2><svg class="i"><use href="icons.svg#plus"/></svg><span data-i="home.added"></span><span class="spacer"></span><a class="linklike" href="library.html?sort=added" data-i="home.more"></a></h2>
-        <div class="cards-row" id="added"></div>
-        <p class="empty" id="noAdded" hidden data-i="home.noAdded"></p>
-      </section>
+      </div>
     </main>
   </div>
 </div>

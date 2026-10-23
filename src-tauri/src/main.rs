@@ -469,14 +469,21 @@ struct ThemeConfig {
     theme: String,      // lavender | pink | blue | mint | dark | custom
     custom_pri: String, // 自定义主色 hex
     hero: String,       // "default" 或自定义横幅绝对路径
+    /// "default" 或自定义首页横幅绝对路径（数据目录下的 banner-custom.<ext>），与整体背景 hero 相互独立
+    #[serde(default = "default_banner")]
+    banner: String,
 }
 
+fn default_banner() -> String {
+    "default".to_string()
+}
 impl Default for ThemeConfig {
     fn default() -> Self {
         ThemeConfig {
             theme: "lavender".to_string(),
             custom_pri: "#8b5cf6".to_string(),
             hero: "default".to_string(),
+            banner: default_banner(),
         }
     }
 }
@@ -533,6 +540,45 @@ fn reset_hero_image() -> Result<(), String> {
     Ok(())
 }
 
+/// 把用户选的图复制为数据目录下的首页横幅（banner-custom.<ext>），返回目标路径
+#[tauri::command]
+fn set_banner_image(src: String) -> Result<String, String> {
+    let dir = data_dir()?;
+    let ext = PathBuf::from(&src)
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_lowercase())
+        .filter(|e| !e.is_empty() && e.len() <= 5 && e.chars().all(|c| c.is_ascii_alphanumeric()))
+        .unwrap_or_else(|| "jpg".to_string());
+    let dest = dir.join(format!("banner-custom.{}", ext));
+    // 先复制到临时文件再替换旧横幅：选的图本身就是当前横幅时不会被先删掉
+    let tmp = dir.join(format!("banner-custom.tmp-{}", now_secs()));
+    std::fs::copy(&src, &tmp).map_err(|e| e.to_string())?;
+    clear_banner_files(&dir);
+    std::fs::rename(&tmp, &dest).map_err(|e| e.to_string())?;
+    Ok(dest.to_string_lossy().to_string())
+}
+fn clear_banner_files(dir: &PathBuf) {
+    if let Ok(rd) = std::fs::read_dir(dir) {
+        for e in rd.flatten() {
+            let n = e.file_name().to_string_lossy().to_string();
+            if n.starts_with("banner-custom.") && !n.starts_with("banner-custom.tmp-") {
+                let _ = std::fs::remove_file(e.path());
+            }
+        }
+    }
+}
+#[tauri::command]
+fn reset_banner_image() -> Result<(), String> {
+    clear_banner_files(&data_dir()?);
+    Ok(())
+}
+/// 默认数据目录（exe 所在目录）。前端用它判断当前是否为默认位置，并作为"恢复默认位置"的目标：
+/// set_data_dir 选中 exe 目录即删除 data-dir.txt、恢复默认
+#[tauri::command]
+fn get_default_data_dir() -> Result<String, String> {
+    Ok(exe_dir()?.to_string_lossy().to_string())
+}
 #[tauri::command]
 fn pick_data_dir(app: AppHandle) -> Result<Option<String>, String> {
     Ok(app
@@ -566,6 +612,21 @@ fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<(), String> {
     Ok(())
 }
 
+/// 迁移一个主题资源（hero/banner 自定义图）：把文件复制到新目录（已存在则不覆盖），返回新路径
+fn migrate_theme_asset(old_dir: &Path, new_dir: &Path, p: &mut String) -> Result<(), String> {
+    if p.as_str() == "default" {
+        return Ok(());
+    }
+    if let Some(name) = Path::new(p.as_str()).file_name() {
+        let old_f = old_dir.join(name);
+        let new_f = new_dir.join(name);
+        if old_f.exists() && !new_f.exists() {
+            std::fs::copy(&old_f, &new_f).map_err(|e| format!("迁移图片失败：{}", e))?;
+        }
+        *p = new_f.to_string_lossy().to_string();
+    }
+    Ok(())
+}
 /// 切换数据目录：把现有数据（数据库、阅读配置、页面缓存）复制到新位置（不删除旧文件，
 /// 新目录已有同名文件不覆盖），写入 exe 旁的 data-dir.txt；
 /// 若选的就是 exe 目录则删除配置文件，即恢复默认
@@ -595,6 +656,22 @@ fn set_data_dir(path: String) -> Result<String, String> {
         if old_cache.is_dir() {
             copy_dir_recursive(&old_cache, &new_cache)?;
         }
+
+        // 主题配置 + 自定义背景图/横幅（路径改指向新目录）
+        let old_theme = old_dir.join("theme-config.json");
+        let new_theme = new_dir.join("theme-config.json");
+        if old_theme.exists() && !new_theme.exists() {
+            let mut cfg: ThemeConfig = std::fs::read_to_string(&old_theme)
+                .ok()
+                .and_then(|s| serde_json::from_str::<ThemeConfig>(&s).ok())
+                .unwrap_or_default();
+            migrate_theme_asset(&old_dir, &new_dir, &mut cfg.hero)?;
+            migrate_theme_asset(&old_dir, &new_dir, &mut cfg.banner)?;
+            let s = serde_json::to_string(&cfg).map_err(|e| e.to_string())?;
+            std::fs::write(&new_theme, s).map_err(|e| format!("迁移主题配置失败：{}", e))?;
+        }
+        // 封面缓存（可再生，复制只为省去重新生成）
+        copy_dir_recursive(&old_dir.join("covers"), &new_dir.join("covers"))?;
     }
     let exe = exe_dir()?;
     let cfg = exe.join("data-dir.txt");
@@ -918,6 +995,9 @@ fn main() {
             get_data_dir,
             pick_data_dir,
             set_data_dir,
+            set_banner_image,
+            reset_banner_image,
+            get_default_data_dir,
             get_reader_config,
             set_reader_config,
             get_theme_config,

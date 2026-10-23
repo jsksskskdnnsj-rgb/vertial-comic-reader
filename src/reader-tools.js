@@ -3,7 +3,7 @@
 //   openPageDirectory : thumbnail grid of every page: tap to jump, select + delete, smart sort, reverse order, append pages
 // Backend calls arrive through `ctx.lib` (legacy-api.js), so the real command names live in ONE file.
 import { openModal, confirmDialog, choiceDialog, toast, T, esc, t } from './shell.js';
-import { sortSources } from './naming.js';
+import { orderByRange } from './merge-order.js';
 
 // ---------------------------------------------------------------------------------------------------- AutoScroll
 const PX_PER_SEC = [20, 35, 55, 80, 115, 160, 220, 300, 400, 520];          // strip mode, speed 1..10
@@ -58,7 +58,7 @@ export function openPageDirectory(ctx) {
     const kind = await choiceDialog({ title: t('dir.append'), message: t('dir.appendMsg'), choices: [{ label: t('common.cancel'), value: null }, { label: t('imp.addFolders'), value: 'folder' }, { label: t('imp.addZips'), value: 'files', kind: 'primary' }] });
     if (!kind) return;
     const picked = [].concat(await T.dialog.open(kind === 'folder' ? { directory: true, multiple: true } : { multiple: true, filters: [{ name: t('imp.zipFilter'), extensions: ['zip', 'cbz'] }, { name: t('imp.imageFilter'), extensions: ['jpg', 'jpeg', 'png', 'webp', 'gif', 'avif', 'bmp'] }] }) ?? []);
-    if (picked.length) run(() => ctx.lib.appendPages(ctx.bookId, sortSources(picked)), 'dir.appended');
+    if (picked.length) run(() => ctx.lib.appendPages(ctx.bookId, orderByRange(picked)), 'dir.appended');
   });
   return m;
 }

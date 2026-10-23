@@ -1,85 +1,68 @@
-// settings.js - every control writes to the store its consumer actually reads:
-//   language  -> localStorage 'mh.lang' (shell.js t())
-//   accent    -> localStorage 'mh.accent' (shell-ui.js applyAccent)
-//   background-> theme config hero via set_hero_image/reset_hero_image (shell-ui.js applyBackground)
-//   bg dim    -> prefs 'bgDim' (shell-ui.js)
-//   reading   -> prefs keys reader-boot.js reads: 'mode', 'reader.widthPct',
-//                'reader.gap', 'reader.dim', 'saver', 'autoSpeed'
-//   chapters  -> backend get/set_chapter_defaults
-//   cache     -> cache_stats / cache_set_limit / cache_clear (+ legacy clear_cache)
-//   data dir  -> get_data_dir / pick_data_dir / set_data_dir / open_data_dir
-import { T, invoke, t, toast, bootPage, prefs, confirmDialog, lang } from './shell.js';
+// settings.js - every control writes to the store its consumer reads:
+//   language   -> localStorage 'mh.lang' (shell.js t())
+//   accent     -> localStorage 'mh.accent' (shell-ui.js applyAccent)
+//   background -> theme config `hero` via set_hero_image / reset_hero_image (shell-ui.js applyBackground)
+//   bg dim     -> prefs 'bgDim' -> --bg-dim (works for the default AND a custom image)
+//   reading    -> prefs keys reader-boot.js reads: 'mode', 'reader.widthPct', 'reader.gap',
+//                 'reader.dim', 'saver', 'autoSpeed'
+//   chapters   -> get/set_chapter_defaults
+//   cache      -> cache_stats / cache_set_limit / cache_clear (+ legacy clear_cache)
+//   data dir   -> get_data_dir / pick_data_dir / set_data_dir / open_data_dir (behaviour unchanged)
+// v0.6 fixes: esc() was used but never imported, so the stats grid silently stayed empty; the
+// "clear library" button was labelled "clear cache" with a "no books" confirmation; the data-folder
+// row used the "Folders" and "Change image" strings; swatch labels are translated; stat label
+// "Pages" comes from the dictionaries; the dim slider also affects the default background.
+import { T, invoke, t, esc, toast, bootPage, prefs, confirmDialog, choiceDialog, lang, setLang } from './shell.js';
 import { lib } from './legacy-api.js';
 import { mountShell, applyBackground } from './shell-ui.js';
 import { sanePages, DEFAULT_PAGES } from './chapters.js';
+import { setBackground, resetBackground, setBanner, resetBanner } from './theme-api.js';
 
 bootPage('settings');
 mountShell('settings');
 const $ = (id) => document.getElementById(id);
 const IMG_EXTS = ['jpg', 'jpeg', 'png', 'webp', 'gif', 'avif', 'bmp', 'jfif'];
+const errText = (e) => String(e?.detail ?? e?.message ?? e);
 
-// ---- language ------------------------------------------------------------------
-$('langSel').value = localStorage.getItem('mh.lang') || 'zh-CN';
-$('langSel').addEventListener('change', (e) => {
-  localStorage.setItem('mh.lang', e.target.value);
-  location.reload();
-});
+// ---- language ----------------------------------------------------------------------
+$('langSel').value = lang();
+$('langSel').addEventListener('change', (e) => { setLang(e.target.value); location.reload(); });
 
-// ---- accent ---------------------------------------------------------------------
+// ---- accent -------------------------------------------------------------------------
+const ACCENTS = [
+  ['#80e5b6', 'accent.emerald'], ['#b7a6f5', 'accent.lavender'], ['#7cc4f0', 'accent.sky'], ['#f2a0b5', 'accent.rose'], ['#eec27f', 'accent.amber'],
+];
+$('accents').innerHTML = ACCENTS.map(([hex, key]) =>
+  `<button class="swatch" data-accent="${hex}" style="background:${hex}" title="${esc(t(key))}" aria-label="${esc(t(key))}"></button>`).join('');
+function setAccent(hex) {
+  const root = document.documentElement.style;
+  if (hex) { localStorage.setItem('mh.accent', hex); root.setProperty('--accent', hex); root.setProperty('--accent2', hex); }
+  else { localStorage.removeItem('mh.accent'); root.removeProperty('--accent'); root.removeProperty('--accent2'); }
+  syncAccent();
+}
 function syncAccent() {
   const cur = localStorage.getItem('mh.accent') || '#80e5b6';
   document.querySelectorAll('#accents .swatch').forEach((b) =>
     b.setAttribute('aria-pressed', String(b.dataset.accent.toLowerCase() === cur.toLowerCase())));
   $('accentCustom').value = cur;
 }
-$('accents').addEventListener('click', (e) => {
-  const b = e.target.closest('[data-accent]'); if (!b) return;
-  localStorage.setItem('mh.accent', b.dataset.accent);
-  document.documentElement.style.setProperty('--accent', b.dataset.accent);
-  document.documentElement.style.setProperty('--accent2', b.dataset.accent);
-  syncAccent();
-});
-$('accentCustom').addEventListener('input', (e) => {
-  localStorage.setItem('mh.accent', e.target.value);
-  document.documentElement.style.setProperty('--accent', e.target.value);
-  document.documentElement.style.setProperty('--accent2', e.target.value);
-  syncAccent();
-});
-$('accentReset').addEventListener('click', () => {
-  localStorage.removeItem('mh.accent');
-  document.documentElement.style.removeProperty('--accent');
-  document.documentElement.style.removeProperty('--accent2');
-  syncAccent();
-});
+$('accents').addEventListener('click', (e) => { const b = e.target.closest('[data-accent]'); if (b) setAccent(b.dataset.accent); });
+$('accentCustom').addEventListener('input', (e) => setAccent(e.target.value));
+$('accentReset').addEventListener('click', () => setAccent(null));
 syncAccent();
 
-// ---- background ------------------------------------------------------------------
-$('bgChange').addEventListener('click', async () => {
-  const picked = await T.dialog.open({
-    multiple: false,
-    filters: [{ name: t('settings.imageFilter'), extensions: IMG_EXTS }],
-  }).catch(() => null);
-  if (!picked) return;
-  try {
-    const dest = await invoke('set_hero_image', { src: picked });
-    const cfg = await invoke('get_theme_config').catch(() => ({ theme: 'dark', custom_pri: '', hero: 'default' }));
-    await invoke('set_theme_config', { cfg: { ...cfg, hero: dest } });
-    toast(t('settings.imageSaved'));
-    applyBackground();
-  } catch (e) {
-    toast(t('settings.imageFailed', { e: String(e?.detail ?? e?.message ?? e) }));
-  }
-});
-$('bgReset').addEventListener('click', async () => {
-  try {
-    await invoke('reset_hero_image');
-    const cfg = await invoke('get_theme_config').catch(() => ({ theme: 'dark', custom_pri: '', hero: 'default' }));
-    await invoke('set_theme_config', { cfg: { ...cfg, hero: 'default' } });
-    toast(t('settings.imageRestored'));
-    document.querySelector('.bg-layer')?.remove();
-    document.body.classList.remove('has-bg');
-  } catch {}
-});
+// ---- background and banner: two independent images (theme config `hero` and `banner`) -------------------
+async function pickImage() {
+  return T.dialog.open({ multiple: false, filters: [{ name: t('settings.imageFilter'), extensions: IMG_EXTS }] }).catch(() => null);
+}
+async function imageAction(fn, okKey) {
+  try { await fn(); toast(t(okKey)); applyBackground(); }
+  catch (e) { toast(t('settings.imageFailed', { e: errText(e) })); }
+}
+$('bgChange').addEventListener('click', async () => { const p = await pickImage(); if (p) imageAction(() => setBackground(p), 'settings.imageSaved'); });
+$('bgReset').addEventListener('click', () => imageAction(resetBackground, 'settings.imageRestored'));
+$('bannerChange').addEventListener('click', async () => { const p = await pickImage(); if (p) imageAction(() => setBanner(p), 'settings.imageSaved'); });
+$('bannerReset').addEventListener('click', () => imageAction(resetBanner, 'settings.imageRestored'));
 $('bgDim').value = prefs.get('bgDim', 55);
 $('bgDimVal').textContent = $('bgDim').value + '%';
 $('bgDim').addEventListener('input', (e) => {
@@ -88,7 +71,7 @@ $('bgDim').addEventListener('input', (e) => {
   applyBackground();
 });
 
-// ---- reading defaults --------------------------------------------------------------
+// ---- reading defaults -------------------------------------------------------------------
 const pressed = (sel, attr, val) =>
   document.querySelectorAll(sel).forEach((b) => b.setAttribute('aria-pressed', String(b.dataset[attr] == val)));
 function syncReading() {
@@ -102,49 +85,37 @@ function syncReading() {
   $('autoRange').value = prefs.get('autoSpeed', 4);
   $('autoVal').textContent = $('autoRange').value;
 }
-$('modeSeg').addEventListener('click', (e) => {
-  const b = e.target.closest('[data-mode]'); if (!b) return;
-  prefs.set('mode', b.dataset.mode); syncReading();
-});
+$('modeSeg').addEventListener('click', (e) => { const b = e.target.closest('[data-mode]'); if (b) { prefs.set('mode', b.dataset.mode); syncReading(); } });
 $('widthRange').addEventListener('input', (e) => { prefs.set('reader.widthPct', +e.target.value); syncReading(); });
-$('gapSeg').addEventListener('click', (e) => {
-  const b = e.target.closest('[data-gap]'); if (!b) return;
-  prefs.set('reader.gap', +b.dataset.gap); syncReading();
-});
+$('gapSeg').addEventListener('click', (e) => { const b = e.target.closest('[data-gap]'); if (b) { prefs.set('reader.gap', +b.dataset.gap); syncReading(); } });
 $('dimRange').addEventListener('input', (e) => { prefs.set('reader.dim', +e.target.value); syncReading(); });
 $('saverChk').addEventListener('change', (e) => prefs.set('saver', e.target.checked));
 $('autoRange').addEventListener('input', (e) => { prefs.set('autoSpeed', +e.target.value); syncReading(); });
 syncReading();
 
-// ---- chapter defaults ---------------------------------------------------------------
+// ---- chapter defaults ----------------------------------------------------------------------
 let chMode = 'folder', chPages = DEFAULT_PAGES, chTimer = 0;
 const CH_HELP = { none: 'chapters.noneHelp', folder: 'chapters.folderHelp', pages: 'chapters.pagesHelp' };
 function syncCh() {
   pressed('#chSeg button', 'chmode', chMode);
-  $('chNRow').style.display = chMode === 'pages' ? '' : 'none';
+  $('chNRow').hidden = chMode !== 'pages'; // only "pages" mode has an N
   $('chHelp').textContent = t(CH_HELP[chMode]);
   if (document.activeElement !== $('chN')) $('chN').value = chPages;
 }
 const saveCh = () => {
   clearTimeout(chTimer);
-  chTimer = setTimeout(() =>
-    invoke('set_chapter_defaults', { mode: chMode, pages: chPages })
-      .then(() => toast(t('common.saved'))).catch(() => {}), 400);
+  chTimer = setTimeout(() => invoke('set_chapter_defaults', { mode: chMode, pages: chPages })
+    .then(() => toast(t('common.saved'))).catch((e) => toast(errText(e))), 400);
 };
-$('chSeg').addEventListener('click', (e) => {
-  const b = e.target.closest('[data-chmode]'); if (!b) return;
-  chMode = b.dataset.chmode; syncCh(); saveCh();
-});
+$('chSeg').addEventListener('click', (e) => { const b = e.target.closest('[data-chmode]'); if (b) { chMode = b.dataset.chmode; syncCh(); saveCh(); } });
 $('chN').addEventListener('input', (e) => {
   if (e.target.value === '' || +e.target.value < 1) return;
   chPages = sanePages(e.target.value); syncCh(); saveCh();
 });
-invoke('get_chapter_defaults')
-  .then((d) => { chMode = d.mode; chPages = sanePages(d.pages); syncCh(); })
-  .catch(syncCh);
+invoke('get_chapter_defaults').then((d) => { chMode = d.mode; chPages = sanePages(d.pages); syncCh(); }).catch(syncCh);
 syncCh();
 
-// ---- cache ---------------------------------------------------------------------------
+// ---- cache -----------------------------------------------------------------------------------
 const fmtMB = (bytes) => `${((bytes || 0) / 1048576).toFixed(1)} MB`;
 async function refreshCache() {
   try {
@@ -157,7 +128,7 @@ $('cacheLimitBtn').addEventListener('click', async () => {
   const mb = +$('cacheLimitMb').value;
   if (!(mb >= 64)) return;
   try { await invoke('cache_set_limit', { bytes: Math.round(mb * 1048576) }); toast(t('common.saved')); refreshCache(); }
-  catch (e) { toast(String(e?.detail ?? e?.message ?? e)); }
+  catch (e) { toast(errText(e)); }
 });
 $('cacheClearBtn').addEventListener('click', async () => {
   try {
@@ -165,36 +136,64 @@ $('cacheClearBtn').addEventListener('click', async () => {
     await invoke('clear_cache').catch(() => {});
     toast(t('settings.cacheCleared'));
     refreshCache();
-  } catch (e) { toast(String(e?.detail ?? e?.message ?? e)); }
+  } catch (e) { toast(errText(e)); }
 });
 refreshCache();
 
-// ---- data dir ---------------------------------------------------------------------------
+// ---- data directory (default = the app's own folder; user-changeable; explicit "restore default") --------------
+// set_data_dir COPIES the database, reader config and page cache into the chosen folder (files that already exist
+// there are NOT overwritten, old files are kept) and writes data-dir.txt; choosing the app's own folder deletes
+// data-dir.txt, which is what "restore default" does. get_default_data_dir returns that folder.
+let defaultDir = null;
 async function refreshDataDir() {
-  try { $('dataDir').textContent = await invoke('get_data_dir'); } catch { $('dataDir').textContent = '—'; }
+  let cur = '';
+  try { cur = await invoke('get_data_dir'); } catch {}
+  $('dataDir').textContent = cur || '—';
+  try { defaultDir = await invoke('get_default_data_dir'); } catch { defaultDir = null; }
+  const known = defaultDir !== null && cur !== '';
+  const isDefault = known && cur === defaultDir;
+  $('dataDirState').hidden = !known;
+  $('dataDirState').textContent = known ? t(isDefault ? 'settings.dataDirDefault' : 'settings.dataDirCustom') : '';
+  $('dataDirState').classList.toggle('is-custom', known && !isDefault);
+  $('dataDirRestore').hidden = !known || isDefault;
+}
+async function switchDataDir(path, confirmKey) {
+  if (!await confirmDialog({ title: t('settings.dataDir'), message: t(confirmKey, { path }), ok: t('common.ok') })) return;
+  try {
+    toast(t('settings.dataDirWorking'));
+    await invoke('set_data_dir', { path });
+    await refreshDataDir();
+    toast(t('common.saved'));
+    // main.rs opens the reader database, cache and covers ONCE at start-up from the old folder, while the shelf commands
+    // re-resolve the folder on every call: until the app restarts the two halves disagree. Keep a visible notice and
+    // offer to close the app (win_close).
+    $('dataDirRestart').hidden = false;
+    const choice = await choiceDialog({
+      title: t('settings.dataDirRestartTitle'), message: t('settings.dataDirRestartMsg'),
+      choices: [{ label: t('settings.dataDirCloseNow'), value: 'close', kind: 'primary' }, { label: t('settings.dataDirLater'), value: 'later' }],
+    });
+    if (choice === 'close') invoke('win_close').catch(() => {});
+  } catch (e) { toast(errText(e)); }
 }
 $('dataDirChange').addEventListener('click', async () => {
-  try {
-    const picked = await invoke('pick_data_dir');
-    if (!picked) return;
-    $('dataDir').textContent = await invoke('set_data_dir', { path: picked });
-    toast(t('common.saved'));
-  } catch (e) { toast(String(e?.detail ?? e?.message ?? e)); }
+  try { const picked = await invoke('pick_data_dir'); if (picked) await switchDataDir(picked, 'settings.dataDirConfirm'); }
+  catch (e) { toast(errText(e)); }
 });
+$('dataDirRestore').addEventListener('click', () => { if (defaultDir) switchDataDir(defaultDir, 'settings.dataDirRestoreConfirm'); });
 $('dataDirOpen').addEventListener('click', () => invoke('open_data_dir').catch(() => {}));
 refreshDataDir();
 
-// ---- about / stats / danger ----------------------------------------------------------------
+// ---- about / stats / clear library -------------------------------------------------------------------
 T.app?.getVersion?.().then((v) => { $('ver').textContent = `v${v}`; }).catch(() => {});
 lib.stats().then((s) => {
   const cell = (v, label) => `<div class="stat"><b class="num">${v}</b><span>${esc(label)}</span></div>`;
   $('statsGrid').innerHTML =
-    cell(s.books, t('lib.title')) + cell(s.pages, lang() === 'en' ? 'Pages' : '总页数') +
+    cell(s.books, t('lib.title')) + cell(s.pages, t('settings.statPages')) +
     cell(s.folders, t('lib.folders')) + cell(s.inProgress, t('reader.history')) +
     cell(s.finished, t('end.title')) + cell(s.bookmarkedBooks, t('bookmarks.title'));
 }).catch(() => {});
 $('clearShelf').addEventListener('click', async () => {
-  if (!await confirmDialog({ title: t('lib.remove'), message: t('lib.noBooks'), ok: t('common.delete'), danger: true })) return;
-  try { await invoke('shelf_clear'); toast(t('common.saved')); }
-  catch (e) { toast(String(e?.detail ?? e?.message ?? e)); }
+  if (!await confirmDialog({ title: t('settings.clearLibrary'), message: t('settings.clearLibraryConfirm'), ok: t('common.delete'), danger: true })) return;
+  try { await invoke('shelf_clear'); toast(t('common.saved')); setTimeout(() => location.reload(), 600); }
+  catch (e) { toast(errText(e)); }
 });

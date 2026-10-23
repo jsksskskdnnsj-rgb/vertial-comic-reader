@@ -24,4 +24,7 @@
 <symbol id="palette" viewBox="0 0 24 24"><path d="M12 4a8 8 0 1 0 0 16c1.4 0 2-.9 2-1.8 0-.8-.6-1.2-.6-2 0-.9.7-1.5 1.9-1.5H17a4 4 0 0 0 4-4c0-3.9-4-6.7-9-6.7z"/><circle cx="7.5" cy="10.5" r="1.1"/><circle cx="12" cy="7.5" r="1.1"/><circle cx="16.5" cy="10" r="1.1"/></symbol>
 <symbol id="db" viewBox="0 0 24 24"><ellipse cx="12" cy="5.5" rx="7.5" ry="2.8"/><path d="M4.5 5.5v13c0 1.6 3.4 2.8 7.5 2.8s7.5-1.2 7.5-2.8v-13M4.5 12c0 1.6 3.4 2.8 7.5 2.8s7.5-1.2 7.5-2.8"/></symbol>
 <symbol id="info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M12 11v5m0-9.5v.01"/></symbol>
+<symbol id="chevron-up" viewBox="0 0 24 24"><path d="m6 15 6-6 6 6"/></symbol>
+<symbol id="chevron-down" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></symbol>
+<symbol id="pencil" viewBox="0 0 24 24"><path d="M4 20h4L19 9a2.1 2.1 0 0 0-3-3L5 17z"/><path d="m14 7 3 3"/></symbol>
 </svg>

@@ -29,14 +29,8 @@
         <h2><svg class="i"><use href="icons.svg#palette"/></svg><span data-i="settings.appearance"></span></h2>
         <div class="set-row">
           <div class="grow"><span data-i="settings.accent"></span></div>
-          <div class="swatches" id="accents">
-            <button class="swatch" data-accent="#80e5b6" style="background:#80e5b6" aria-label="Emerald"></button>
-            <button class="swatch" data-accent="#b7a6f5" style="background:#b7a6f5" aria-label="Lavender"></button>
-            <button class="swatch" data-accent="#7cc4f0" style="background:#7cc4f0" aria-label="Sky"></button>
-            <button class="swatch" data-accent="#f2a0b5" style="background:#f2a0b5" aria-label="Rose"></button>
-            <button class="swatch" data-accent="#eec27f" style="background:#eec27f" aria-label="Amber"></button>
-          </div>
-          <input type="color" id="accentCustom" value="#80e5b6">
+          <div class="swatches" id="accents"></div>
+          <label class="color-pick"><span class="muted" data-i="settings.accentCustom"></span><input type="color" id="accentCustom" value="#80e5b6"></label>
           <button class="btn btn--ghost btn--sm" id="accentReset"><span data-i="settings.accentReset"></span></button>
         </div>
         <div class="set-row">
@@ -45,13 +39,14 @@
           <button class="btn btn--ghost btn--sm" id="bgReset"><span data-i="settings.imageReset"></span></button>
         </div>
         <div class="set-row">
+          <div class="grow"><span data-i="settings.bannerImage"></span><span class="sub muted" data-i="settings.bannerImageHelp"></span></div>
+          <button class="btn btn--ghost btn--sm" id="bannerChange"><span data-i="settings.imageChange"></span></button>
+          <button class="btn btn--ghost btn--sm" id="bannerReset"><span data-i="settings.imageReset"></span></button>
+        </div>
+        <div class="set-row">
           <div class="grow"><span data-i="settings.bgDim"></span></div>
           <input type="range" id="bgDim" min="0" max="90" step="5">
           <span class="num muted" id="bgDimVal"></span>
-        </div>
-        <div class="set-row">
-          <div class="grow"><span data-i="settings.banner"></span><span class="sub muted" data-i="settings.bannerHelp"></span></div>
-          <span class="muted" style="font-size:12px" data-i="settings.backgroundHelp"></span>
         </div>
       </section>
 
@@ -93,7 +88,7 @@
 
       <section class="panel glass">
         <h2><svg class="i"><use href="icons.svg#list"/></svg><span data-i="chapters.defaultTitle"></span></h2>
-        <p class="hint" style="margin-bottom:8px" data-i="chapters.defaultHelp"></p>
+        <p class="hint" data-i="chapters.defaultHelp"></p>
         <div class="set-row">
           <div class="grow"><span data-i="chapters.title"></span></div>
           <span class="seg" id="chSeg">
@@ -104,7 +99,7 @@
         </div>
         <div class="set-row" id="chNRow">
           <div class="grow"><span data-i="chapters.pagesPer"></span></div>
-          <input class="field" id="chN" type="number" min="1" max="9999" step="1" style="width:110px">
+          <input class="field num-field" id="chN" type="number" min="1" max="9999" step="1">
         </div>
         <p class="hint" id="chHelp"></p>
       </section>
@@ -117,28 +112,29 @@
         </div>
         <div class="set-row">
           <div class="grow"><span data-i="settings.cacheLimit"></span></div>
-          <input class="field" id="cacheLimitMb" type="number" min="64" step="64" style="width:110px">
+          <input class="field num-field" id="cacheLimitMb" type="number" min="64" step="64">
           <span class="muted">MB</span>
           <button class="btn btn--ghost btn--sm" id="cacheLimitBtn"><span data-i="common.save"></span></button>
         </div>
         <div class="set-row">
-          <div class="grow"><span data-i="lib.folders"></span><span class="sub path-txt" id="dataDir"></span></div>
+          <div class="grow"><span data-i="settings.dataDir"></span><span class="sub muted" data-i="settings.dataDirHelp"></span><span class="sub path-txt" id="dataDir"></span><span class="state-chip" id="dataDirState" hidden></span><span class="sub hint warn" id="dataDirRestart" hidden data-i="settings.dataDirRestartMsg"></span></div>
           <button class="btn btn--ghost btn--sm" id="dataDirOpen"><span data-i="lib.reveal"></span></button>
-          <button class="btn btn--ghost btn--sm" id="dataDirChange"><span data-i="settings.imageChange"></span></button>
+          <button class="btn btn--ghost btn--sm" id="dataDirChange"><span data-i="settings.dataDirChange"></span></button>
+          <button class="btn btn--ghost btn--sm" id="dataDirRestore" hidden><span data-i="settings.dataDirRestore"></span></button>
         </div>
       </section>
 
       <section class="panel glass">
         <h2><svg class="i"><use href="icons.svg#info"/></svg><span data-i="settings.about"></span></h2>
         <div class="stats-grid" id="statsGrid"></div>
-        <p class="hint" style="margin-top:12px"><span data-i="settings.version"></span> <span class="num" id="ver">—</span></p>
+        <p class="hint"><span data-i="settings.version"></span> <span class="num" id="ver">—</span></p>
       </section>
 
       <section class="panel glass danger-zone">
-        <h2><svg class="i"><use href="icons.svg#trash"/></svg><span data-i="lib.title"></span></h2>
+        <h2><svg class="i"><use href="icons.svg#trash"/></svg><span data-i="settings.clearLibrary"></span></h2>
         <div class="set-row">
-          <div class="grow"><span data-i="lib.remove"></span><span class="sub muted" data-i="lib.noBooks"></span></div>
-          <button class="btn btn--danger btn--sm" id="clearShelf"><span data-i="settings.cacheClear"></span></button>
+          <div class="grow"><span data-i="settings.clearLibraryHelp"></span></div>
+          <button class="btn btn--danger btn--sm" id="clearShelf"><span data-i="settings.clearLibraryBtn"></span></button>
         </div>
       </section>
     </main>

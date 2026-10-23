@@ -18,16 +18,16 @@
         <div class="dropzone" id="zone">
           <svg class="dz-icon"><use href="icons.svg#cloud-up"/></svg>
           <h3 data-i="imp.dropTitle"></h3>
-          <p data-i="home.dropSub"></p>
-          <div style="display:flex;gap:9px;justify-content:center;flex-wrap:wrap">
+          <p data-i="imp.dropSub"></p>
+          <div class="dz-btns">
             <button class="btn btn--primary" id="addZips"><svg class="i"><use href="icons.svg#folder"/></svg><span data-i="imp.addZips"></span></button>
             <button class="btn btn--ghost" id="addFolders"><svg class="i"><use href="icons.svg#folder"/></svg><span data-i="imp.addFolders"></span></button>
           </div>
         </div>
 
-        <div style="display:flex;align-items:center;gap:10px;margin-top:16px;flex-wrap:wrap">
-          <h2 style="margin:0;font-size:14px"><span data-i="imp.sources"></span> <span class="muted num" id="srcCount"></span></h2>
-          <span style="flex:1"></span>
+        <div class="src-head">
+          <h2><span data-i="imp.sources"></span> <span class="muted num" id="srcCount"></span></h2>
+          <span class="spacer"></span>
           <button class="btn btn--ghost btn--sm" id="sortBtn"><svg class="i"><use href="icons.svg#wand"/></svg><span data-i="imp.sortByName"></span></button>
           <button class="btn btn--ghost btn--sm" id="clearBtn"><span data-i="imp.clear"></span></button>
         </div>
@@ -41,15 +41,19 @@
             <button data-merge="on" data-i="imp.mergeOn"></button>
           </span>
         </div>
+        <div class="set-row" id="nameRow" hidden>
+          <div class="grow"><span data-i="imp.mergeName"></span><span class="sub muted" data-i="imp.mergeNameHint"></span></div>
+          <input class="field name-field" id="mergeName" type="text" maxlength="120" autocomplete="off">
+        </div>
         <div class="set-row">
           <div class="grow"><span data-i="lib.folders"></span></div>
           <select class="select" id="folderSel"><option value="" data-i="lib.noFolder"></option></select>
         </div>
-        <div style="display:flex;gap:9px;margin-top:16px;flex-wrap:wrap">
+        <div class="go-row">
           <button class="btn btn--primary" id="goBtn"><svg class="i"><use href="icons.svg#download"/></svg><span data-i="nav.import"></span></button>
           <button class="btn btn--ghost" id="openNew" hidden><span data-i="imp.openBook"></span></button>
         </div>
-        <p class="hint" id="summary" style="margin-top:12px"></p>
+        <p class="hint summary" id="summary"></p>
         <ul class="fail-list" id="failList"></ul>
       </section>
     </main>
