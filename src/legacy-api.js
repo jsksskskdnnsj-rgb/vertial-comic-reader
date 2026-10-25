@@ -14,6 +14,7 @@ export const lib = {
   // reading
   recentBooks: (limit = 12) => invoke('list_recent_books', { limit }),
   recentAdded: (limit = 12) => invoke('list_recent_added', { limit }),
+  listImages: (path) => invoke('list_images', { path }),   // recursive: every nested subfolder, names relative to `path`
   open: (bookId) => invoke('open_book', { bookId }),
   rescan: (bookId) => invoke('rescan_book', { bookId }),
   relinkBook: (bookId, path) => invoke('relink_book', { bookId, path }),

@@ -7,6 +7,7 @@ import { lib } from './legacy-api.js';
 import { mountShell, coverUrl, wireCoverFallback, watchDrops, applyBackground } from './shell-ui.js';
 import { fetchEpisodeInfo } from './chapters.js';
 import { setBanner, resetBanner } from './theme-api.js';
+import { inspectFolder, looksLikeFile } from './folder-scan.js';
 
 bootPage('home');
 mountShell('home');
@@ -18,11 +19,20 @@ const errText = (e) => String(e?.detail ?? e?.message ?? e);
 
 async function doImport(paths) {
   if (!paths?.length) return;
+  // folders are imported with all their subfolders; one with no images at any depth is refused, not added silently
+  const keep = []; let empty = 0;
+  for (const p of paths) {
+    if (looksLikeFile(p)) { keep.push(p); continue; }
+    const r = await inspectFolder(p, lib.listImages);
+    if (r.ok && r.empty) empty++; else keep.push(p);
+  }
+  const note = empty ? ' · ' + t('imp.emptySkipped') : '';
+  if (!keep.length) { toast(t('imp.emptySkipped')); return; }
   try {
-    const r = await lib.importPaths(paths, null);
-    if (r.added) toast(t('imp.importedToast', { n: r.added }));
-    else if (!r.failed?.length) toast(t('imp.nothingNew'));
-    if (r.failed?.length) toast(t('imp.failed', { e: r.failed[0].reason }));
+    const r = await lib.importPaths(keep, null);
+    if (r.added) toast(t('imp.importedToast', { n: r.added }) + note);
+    else if (!r.failed?.length) toast(t('imp.nothingNew') + note);
+    if (r.failed?.length) toast(t('imp.failed', { e: r.failed[0].reason }) + note);
     loadLists();
   } catch (e) { toast(errText(e)); }
 }

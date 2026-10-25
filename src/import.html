@@ -32,13 +32,15 @@
           <button class="btn btn--ghost btn--sm" id="clearBtn"><span data-i="imp.clear"></span></button>
         </div>
         <div class="src-list" id="srcList"></div>
+        <p class="hint" id="scanTotals" hidden></p>
+        <ul class="fail-list" id="skipList"></ul>
         <p class="empty" id="srcEmpty" data-i="imp.empty"></p>
 
         <div class="set-row">
           <div class="grow"><span data-i="imp.merge"></span><span class="sub muted" data-i="imp.note"></span></div>
           <span class="seg" id="mergeSeg">
-            <button data-merge="off" data-i="imp.mergeOff"></button>
-            <button data-merge="on" data-i="imp.mergeOn"></button>
+            <button data-merge="off" data-i="imp.goSeparate"></button>
+            <button data-merge="on" data-i="imp.goMerge"></button>
           </span>
         </div>
         <div class="set-row" id="nameRow" hidden>

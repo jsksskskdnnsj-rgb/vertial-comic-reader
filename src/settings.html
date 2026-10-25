@@ -48,6 +48,23 @@
           <input type="range" id="bgDim" min="0" max="90" step="5">
           <span class="num muted" id="bgDimVal"></span>
         </div>
+        <div class="set-row">
+          <div class="grow"><span data-i="settings.panelOpacity"></span><span class="sub muted" data-i="settings.panelOpacityHelp"></span></div>
+          <input type="range" id="panelOpacity" min="40" max="100" step="2">
+          <span class="num muted" id="panelOpacityVal"></span>
+        </div>
+        <div class="set-row">
+          <div class="grow"><span data-i="settings.bgFit"></span><span class="sub muted" data-i="settings.fitHelp"></span></div>
+          <span class="seg" id="fitSeg">
+            <button data-fit="cover" data-i="settings.fitCover"></button>
+            <button data-fit="contain" data-i="settings.fitContain"></button>
+            <button data-fit="stretch" data-i="settings.fitStretch"></button>
+          </span>
+        </div>
+        <div class="set-row">
+          <div class="grow"></div>
+          <button class="btn btn--ghost btn--sm" id="appearanceReset"><span data-i="settings.appearanceDefaults"></span></button>
+        </div>
       </section>
 
       <section class="panel glass" id="reading">

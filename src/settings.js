@@ -14,7 +14,8 @@
 // "Pages" comes from the dictionaries; the dim slider also affects the default background.
 import { T, invoke, t, esc, toast, bootPage, prefs, confirmDialog, choiceDialog, lang, setLang } from './shell.js';
 import { lib } from './legacy-api.js';
-import { mountShell, applyBackground } from './shell-ui.js';
+import { mountShell, applyBackground, applyAppearance } from './shell-ui.js';
+import { DEFAULTS, PANEL_MIN, PANEL_MAX } from './appearance.js';
 import { sanePages, DEFAULT_PAGES } from './chapters.js';
 import { setBackground, resetBackground, setBanner, resetBanner } from './theme-api.js';
 
@@ -92,6 +93,26 @@ $('dimRange').addEventListener('input', (e) => { prefs.set('reader.dim', +e.targ
 $('saverChk').addEventListener('change', (e) => prefs.set('saver', e.target.checked));
 $('autoRange').addEventListener('input', (e) => { prefs.set('autoSpeed', +e.target.value); syncReading(); });
 syncReading();
+
+// ---- panel opacity + wallpaper fit (CSS variables only; applyAppearance writes --panel-a, --panel2-a, --bg-size) ------------
+function syncAppearance() {
+  const op = Math.min(PANEL_MAX, Math.max(PANEL_MIN, +prefs.get('panelOpacity', DEFAULTS.panelOpacity) || DEFAULTS.panelOpacity));
+  $('panelOpacity').value = op;
+  $('panelOpacityVal').textContent = $('panelOpacity').value + '%';
+  pressed('#fitSeg button', 'fit', prefs.get('bgFit', DEFAULTS.bgFit));
+}
+$('panelOpacity').addEventListener('input', (e) => { prefs.set('panelOpacity', +e.target.value); syncAppearance(); applyAppearance(); });
+$('fitSeg').addEventListener('click', (e) => {
+  const b = e.target.closest('[data-fit]'); if (!b) return;
+  prefs.set('bgFit', b.dataset.fit); syncAppearance(); applyAppearance();
+});
+$('appearanceReset').addEventListener('click', () => {
+  prefs.set('panelOpacity', DEFAULTS.panelOpacity); prefs.set('bgFit', DEFAULTS.bgFit); prefs.set('bgDim', DEFAULTS.bgDim);
+  $('bgDim').value = DEFAULTS.bgDim; $('bgDimVal').textContent = DEFAULTS.bgDim + '%';
+  syncAppearance(); applyAppearance(); applyBackground();
+  toast(t('common.saved'));
+});
+syncAppearance();
 
 // ---- chapter defaults ----------------------------------------------------------------------
 let chMode = 'folder', chPages = DEFAULT_PAGES, chTimer = 0;

@@ -30,8 +30,22 @@
                 <option value="recent" data-i="lib.sortRecent"></option>
                 <option value="added" data-i="lib.sortAdded"></option>
                 <option value="name" data-i="lib.sortName"></option>
+                <option value="title" data-i="lib.sortTitle"></option>
               </select>
             </label>
+          </div>
+          <div class="lib-toolbar">
+            <span class="seg" id="statusSeg" role="group" data-i-label="lib.statusFilter">
+              <button data-status="all"><span data-i="lib.statusAll"></span> <span class="cnt num"></span></button>
+              <button data-status="unread"><span data-i="lib.statusUnread"></span> <span class="cnt num"></span></button>
+              <button data-status="progress"><span data-i="lib.statusProgress"></span> <span class="cnt num"></span></button>
+              <button data-status="finished"><span data-i="lib.statusFinished"></span> <span class="cnt num"></span></button>
+            </span>
+            <span class="spacer"></span>
+            <span class="seg" id="modeSeg" role="group" data-i-label="lib.viewMode">
+              <button data-mode="grid" data-i-label="lib.viewGrid" data-i-title="lib.viewGrid"><svg class="i"><use href="icons.svg#grid"/></svg></button>
+              <button data-mode="list" data-i-label="lib.viewList" data-i-title="lib.viewList"><svg class="i"><use href="icons.svg#list"/></svg></button>
+            </span>
           </div>
           <div class="cards-row lib-grid" id="grid"></div>
           <p class="empty" id="empty" hidden></p>

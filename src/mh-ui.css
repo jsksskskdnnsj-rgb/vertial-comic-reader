@@ -208,3 +208,45 @@ body{background:transparent}
 
 .state-chip{display:inline-block;margin-top:5px;padding:2px 9px;border-radius:999px;font-size:11px;background:#9ce6c61c;border:1px solid #a5e5c21c;color:#c8e7d9}
 .state-chip.is-custom{border-color:#eec27f66;color:#eec27f}
+
+/* ==== v0.6.1 subfolders append: add at the END of src/mh-ui.css (apply-subfolders.mjs does it, replacing a previous copy of this block) ==== */
+.src-item{display:flex;flex-direction:column}
+.scan-chip{flex-shrink:0;font-size:10px;padding:3px 8px;border-radius:999px;background:#ffffff0d;border:1px solid var(--line);color:var(--muted);white-space:nowrap}
+.scan-chip.has-sub{background:#9ce6c61c;border-color:#80e5b655;color:var(--accent2)}
+.src-note{margin:4px 12px 0;font-size:11px;color:var(--danger)}
+
+/* ==== v0.6.3 appearance + library append: add at the END of src/mh-ui.css (apply-koipage12.mjs replaces a previous copy of this block, up to the end marker) ==== */
+
+/* Panel opacity: --panel-a / --panel2-a are set on <html> by shell-ui.js (Settings slider, default .82 / .94). */
+:root{--panel:rgba(10,29,32,var(--panel-a,.82));--panel2:rgba(12,37,39,var(--panel2-a,.94));--bg-size:cover}
+/* Wallpaper fit: --bg-size is cover | contain | 100% 100% (stretch). Default picture on the canvas, custom picture on .bg-layer. */
+html{background:
+  linear-gradient(rgba(4,14,15,var(--bg-dim)),rgba(4,14,15,calc(var(--bg-dim) + .12))),
+  url("assets/bg-default.jpg") center/var(--bg-size) no-repeat,
+  #061315}
+.bg-layer{background-color:#061315;background-repeat:no-repeat;background-size:var(--bg-size)}
+
+/* Library: status filter + view switch */
+.lib-toolbar{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin:-4px 0 14px}
+.lib-toolbar .seg{flex-wrap:wrap}
+.lib-toolbar .seg button .i{width:16px;height:16px}
+.lib-toolbar .seg button .cnt{margin-left:3px;font-size:10px;color:var(--muted)}
+.lib-toolbar .seg button[aria-pressed=true] .cnt{color:inherit}
+
+/* Library: list view */
+.lib-list{display:flex;flex-direction:column;gap:8px}
+.lib-row{display:flex;align-items:center;gap:12px;padding:8px 10px;border:1px solid var(--line);border-radius:13px;background:#ffffff06;cursor:pointer;transition:background .18s,border-color .18s}
+.lib-row:hover{background:#9beac512;border-color:#a8ebd64d}
+.lib-row:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.lib-row .cover{width:42px;height:56px;border-radius:7px;object-fit:cover;flex-shrink:0}
+.lib-row__main{flex:1;min-width:0;display:flex;flex-direction:column;gap:5px}
+.lib-row__main b{font-size:13px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.lib-row__main .meta{font-size:11px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.lib-row__chips{display:flex;align-items:center;gap:6px;flex-shrink:0}
+.lib-chip{font-size:10px;padding:3px 8px;border-radius:999px;background:#ffffff0d;border:1px solid var(--line);color:var(--muted);white-space:nowrap}
+.lib-chip--progress{color:var(--accent2);border-color:#80e5b655;background:#9ce6c61c}
+.lib-chip--finished{color:#c8e7d9;border-color:#a5e5c21c}
+.lib-chip--warn{color:var(--danger);border-color:#ff8e9155}
+.lib-row .more-btn{position:static;flex-shrink:0}
+@media(max-width:700px){.lib-row__chips{display:none}}
+/* ==== end v0.6.3 appearance + library ==== */

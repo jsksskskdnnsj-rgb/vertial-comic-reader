@@ -8,11 +8,15 @@
 // calls); name sort sorts the book objects (no duplicate/dropped same-name books); a click that
 // closes the menu no longer opens the book underneath; keyboard support on cards and folders;
 // type badge + progress strip on covers; "details" opens the book page.
+// v0.6.3: reading-status filter (All / Unread / In progress / Finished, with counts) and a grid/list view switch; the folder
+// filter, status filter and view mode are remembered next to the sort (prefs libFolder / libStatus / libMode / libSort); ?status=
+// overrides the saved status like ?sort= does. Filtering and status rules live in library-filters.js (pure, unit-tested).
 import { invoke, t, esc, toast, bootPage, prefs, confirmDialog, promptDialog } from './shell.js';
 import { lib } from './legacy-api.js';
 import { mountShell, coverUrl, wireCoverFallback } from './shell-ui.js';
 import { fetchEpisodeInfo } from './chapters.js';
-import { sortBy } from './naming.js';
+import { sortBy, compareTitles } from './naming.js';
+import { filterBooks, countStatuses, statusOf, readLibraryState, validFolder } from './library-filters.js';
 import * as act from './book-actions.js';
 
 const params = new URLSearchParams(location.search);
@@ -28,10 +32,11 @@ let bmCounts = new Map();
 let missing = new Set();
 let edited = new Set();
 const bust = new Map();    // book id -> cover cache-buster after relink / reset edits
-let filter = 'all';        // 'all' | 'none' | folder id
-const SORTS = ['recent', 'added', 'name'];
-let sortMode = SORTS.includes(params.get('sort')) ? params.get('sort') : prefs.get('libSort', 'recent');
-if (!SORTS.includes(sortMode)) sortMode = 'recent';
+const saved = readLibraryState((k, d) => prefs.get(k, d), location.search);
+let filter = saved.folder;          // 'all' | 'none' | folder id (remembered)
+let statusFilter = saved.status;    // 'all' | 'unread' | 'progress' | 'finished' (remembered; ?status= overrides)
+let viewMode = saved.mode;          // 'grid' | 'list' (remembered)
+let sortMode = saved.sort;          // 'recent' | 'added' | 'name' | 'title' (remembered; ?sort= overrides)
 let query = (params.get('q') || '').trim();
 let loadSeq = 0;
 
@@ -45,17 +50,10 @@ const KIND_KEY = { zip: 'type.zip', folder: 'type.folder', images: 'type.images'
 const coverOf = (b) => coverUrl(b.id, bust.get(b.id) ?? 0);
 
 function visibleBooks() {
-  const q = query.toLowerCase();
-  const list = books.filter((b) => {
-    if (view === 'recent' && !(b.last_page > 0)) return false;
-    if (view === 'marked' && !(bmCounts.get(b.id) > 0)) return false;
-    if (filter === 'none' && b.folder_id != null) return false;
-    if (typeof filter === 'number' && b.folder_id !== filter) return false;
-    if (q && !String(b.name || '').toLowerCase().includes(q)) return false;
-    return true;
-  });
+  const list = filterBooks(books, { view, folder: filter, status: statusFilter, query, bmCounts });
   if (sortMode === 'added') return list.sort((a, b) => (b.created_at || 0) - (a.created_at || 0));
   if (sortMode === 'name') return sortBy(list, (b) => b.name);
+  if (sortMode === 'title') return list.sort((a, b) => compareTitles(a.name, b.name));   // alphabetical, zh-CN collation
   return list.sort((a, b) => (b.updated_at || 0) - (a.updated_at || 0));
 }
 
@@ -74,17 +72,48 @@ function renderFolders() {
         </span><span class="cnt num">${f.count ?? books.filter((b) => b.folder_id === f.id).length}</span></div>`).join('');
 }
 
+const STATUS_KEY = { unread: 'lib.statusUnread', progress: 'lib.statusProgress', finished: 'lib.statusFinished' };
+function rowHtml(b, { cnt, pct, meta, kind }) {
+  const st = statusOf(b);
+  return `<article class="lib-row" data-id="${b.id}" tabindex="0" role="link">
+    <img class="cover" alt="" loading="lazy" data-cover="${b.id}" src="${coverOf(b)}">
+    <div class="lib-row__main">
+      <b title="${esc(b.name)}">${esc(b.name)}</b>
+      <div class="meta num">${esc(meta)}${edited.has(b.id) ? ' · ✎' : ''}</div>
+      <div class="bar"><i style="width:${pct}%"></i></div>
+    </div>
+    <span class="lib-row__chips">
+      <span class="lib-chip lib-chip--${st}">${esc(t(STATUS_KEY[st]))} · <span class="num">${pct}%</span></span>
+      ${kind ? `<span class="lib-chip">${esc(t(kind))}</span>` : ''}
+      ${cnt > 0 ? `<span class="lib-chip" title="${esc(t('bookmarks.title'))}">★ <span class="num">${cnt}</span></span>` : ''}
+      ${missing.has(b.id) ? `<span class="lib-chip lib-chip--warn">${esc(t('lib.missing'))}</span>` : ''}
+    </span>
+    <button class="more-btn" data-more="${b.id}" aria-label="${esc(t('lib.menu'))}"><svg class="i"><use href="icons.svg#more"/></svg></button>
+  </article>`;
+}
+function renderStatus() {
+  const counts = countStatuses(books, { view, folder: filter, query, bmCounts });
+  document.querySelectorAll('#statusSeg button').forEach((b) => {
+    b.setAttribute('aria-pressed', String(b.dataset.status === statusFilter));
+    const c = b.querySelector('.cnt'); if (c) c.textContent = counts[b.dataset.status];
+  });
+  document.querySelectorAll('#modeSeg button').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.mode === viewMode)));
+}
+
 function renderGrid() {
   const list = visibleBooks();
+  renderStatus();
   $('count').textContent = t('lib.count', { n: list.length });
+  $('grid').className = viewMode === 'list' ? 'lib-list' : 'cards-row lib-grid';
   $('grid').innerHTML = list.map((b) => {
     const ep = episodes.get(b.id);
     const cnt = bmCounts.get(b.id) || 0;
-    const pct = b.page_count ? Math.min(100, Math.round(((b.last_page || 0) / b.page_count) * 100)) : 0;
+    const pct = statusOf(b) === 'finished' ? 100 : b.page_count ? Math.min(100, Math.round(((b.last_page || 0) / b.page_count) * 100)) : 0;
     const meta = ep
       ? `${t('common.episodeOf', { i: ep.index, n: ep.total })} · ${t('book.pages', { n: b.page_count })}`
       : t('book.pages', { n: b.page_count });
     const kind = KIND_KEY[b.kind];
+    if (viewMode === 'list') return rowHtml(b, { cnt, pct, meta, kind: kind || null });
     return `<article class="book-card" data-id="${b.id}" tabindex="0" role="link">
       <div class="cover-wrap">
         <img class="cover" alt="" loading="lazy" data-cover="${b.id}" src="${coverOf(b)}">
@@ -182,7 +211,7 @@ async function renameFolder(id) {
 async function deleteFolder(id) {
   const f = folders.find((x) => x.id === id);
   if (!await confirmDialog({ title: t('lib.deleteFolder'), message: t('lib.deleteFolderMsg', { name: f?.name ?? '' }), ok: t('common.delete'), danger: true })) return;
-  try { await lib.deleteFolder(id); if (filter === id) filter = 'all'; toast(t('common.saved')); load(); } catch (e) { toast(errText(e)); }
+  try { await lib.deleteFolder(id); if (filter === id) { filter = 'all'; prefs.set('libFolder', filter); } toast(t('common.saved')); load(); } catch (e) { toast(errText(e)); }
 }
 
 // ---- events ----------------------------------------------------------------------
@@ -195,8 +224,8 @@ document.addEventListener('click', (e) => {
   const fd = e.target.closest('[data-fdel]');
   if (fd) { e.stopPropagation(); deleteFolder(+fd.dataset.fdel); return; }
   const frow = e.target.closest('[data-f]');
-  if (frow) { const v = frow.dataset.f; filter = v === 'all' || v === 'none' ? v : +v; render(); return; }
-  const card = e.target.closest('.book-card');
+  if (frow) { const v = frow.dataset.f; filter = v === 'all' || v === 'none' ? v : +v; prefs.set('libFolder', filter); render(); return; }
+  const card = e.target.closest('.book-card, .lib-row');
   if (card && !closedMenu) location.href = `reader.html?book=${card.dataset.id}`;
 });
 document.addEventListener('keydown', (e) => {
@@ -204,12 +233,20 @@ document.addEventListener('keydown', (e) => {
   if (e.target.closest('button, select, input')) return;
   const frow = e.target.closest('[data-f]');
   if (frow) { e.preventDefault(); frow.click(); return; }
-  const card = e.target.closest('.book-card');
+  const card = e.target.closest('.book-card, .lib-row');
   if (card) { e.preventDefault(); location.href = `reader.html?book=${card.dataset.id}`; }
 });
 $('sortSel').value = sortMode;
 $('sortSel').addEventListener('change', () => { sortMode = $('sortSel').value; prefs.set('libSort', sortMode); renderGrid(); });
 $('newFolder').addEventListener('click', newFolder);
+$('statusSeg').addEventListener('click', (e) => {
+  const b = e.target.closest('[data-status]'); if (!b) return;
+  statusFilter = b.dataset.status; prefs.set('libStatus', statusFilter); renderGrid();
+});
+$('modeSeg').addEventListener('click', (e) => {
+  const b = e.target.closest('[data-mode]'); if (!b) return;
+  viewMode = b.dataset.mode; prefs.set('libMode', viewMode); renderGrid();
+});
 
 // ---- loading ------------------------------------------------------------------------
 async function pool(items, n, fn) {
@@ -220,10 +257,10 @@ async function pool(items, n, fn) {
 }
 async function load() {
   const my = ++loadSeq;
-  const [bk, fl] = await Promise.all([lib.allBooks().catch(() => []), lib.folders().catch(() => [])]);
+  const [bk, fl] = await Promise.all([lib.allBooks().catch(() => []), lib.folders().catch(() => null)]);
   if (my !== loadSeq) return;
-  books = bk; folders = fl;
-  if (filter !== 'all' && filter !== 'none' && !folders.some((f) => f.id === filter)) filter = 'all';
+  books = bk; folders = fl ?? [];
+  if (fl) { const f = validFolder(filter, folders); if (f !== filter) { filter = f; prefs.set('libFolder', f); } }   // a remembered folder that was deleted -> All (a failed folder_list must not wipe it)
   render(); // first paint: covers, names, progress
 
   const [eps, counts, miss] = await Promise.all([

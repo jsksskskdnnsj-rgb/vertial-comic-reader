@@ -5,6 +5,7 @@
 // resetting to the default removes the layer; language button label is translated; the drop-queue
 // poll pauses while the window is hidden.
 import { T, invoke, t, esc, prefs, applyTheme, applyI18n, wireWindow, lang, setLang } from './shell.js';
+import { appearanceVars } from './appearance.js';
 
 export const COVER_BASE = T.core?.convertFileSrc
   ? T.core.convertFileSrc('', 'mhcover').replace(/\/$/, '')
@@ -96,11 +97,19 @@ function applyAccent() {
   }
 }
 
+/** Panel opacity and wallpaper fit (prefs panelOpacity / bgFit) -> CSS variables --panel-a, --panel2-a, --bg-size on <html>.
+ *  mh-ui.css derives --panel / --panel2 and the wallpaper sizing from them. Variables only: no blur is added anywhere. */
+export function applyAppearance() {
+  const { vars } = appearanceVars({ panelOpacity: prefs.get('panelOpacity', null), bgFit: prefs.get('bgFit', null) });
+  for (const [k, v] of Object.entries(vars)) document.documentElement.style.setProperty(k, v);
+}
+
 /** Whole-window background (theme config `hero`) and home banner (`banner`), independent of each other.
  *  The default background is painted by mh-ui.css; a custom background is drawn by .bg-layer above it.
  *  A custom banner becomes the CSS variable --banner-image used by .hero. Call again after changing either
  *  image or the dim slider. */
 export async function applyBackground() {
+  applyAppearance();
   const root = document.documentElement;
   const dim = Math.min(90, Math.max(0, +prefs.get('bgDim', 55))) / 100;
   root.style.setProperty('--bg-dim', String(dim)); // runs before the first await: no flash
