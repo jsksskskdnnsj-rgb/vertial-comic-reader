@@ -17,7 +17,7 @@ cache_clear get_chapter_defaults set_chapter_defaults set_book_chapter_settings 
 episode_info add_bookmark list_bookmarks delete_bookmark update_bookmark_note reanchor_bookmark bookmark_counts
 ensure_cover list_recent_books list_recent_added import_paths reveal_book relink_book reorder_pages delete_pages
 append_pages reset_page_edits page_edit_info shelf_rename book_reset_progress check_books_missing import_merged
-library_stats set_banner_image reset_banner_image get_default_data_dir`.split(/\s+/);
+library_stats set_banner_image reset_banner_image get_default_data_dir win_start_drag win_hide_if_tray app_exit`.split(/\s+/);
 
 const results = []; let failures = 0, warnings = 0;
 // Optional allow-list scripts/verify-refs.allow: lines "<text in message> :: <more text>" downgrade matching
@@ -60,7 +60,7 @@ const stripComments = s => s.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:'"`
     const unregistered = [...defined].filter(c => !reg.has(c));
     missingDef.forEach(c => fail(sec, `command "${c}" has no #[tauri::command] fn`));
     missingReg.forEach(c => fail(sec, `command "${c}" not in generate_handler!`));
-    extraReg.forEach(c => warn(sec, `registered command "${c}" is outside the agreed command surface (69 + set_banner_image, reset_banner_image, get_default_data_dir)`));
+    extraReg.forEach(c => warn(sec, `registered command "${c}" is outside the agreed command surface (72 + win_start_drag, win_hide_if_tray, app_exit)`));
     unregistered.forEach(c => warn(sec, `#[tauri::command] fn "${c}" is not registered`));
     ok(sec, `${defined.size} command fns, ${reg.size} registered, surface=${COMMANDS.length}`);
   }

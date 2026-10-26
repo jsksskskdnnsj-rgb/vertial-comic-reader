@@ -1,6 +1,6 @@
 [package]
 name = "mh-reader"
-version = "0.6.3"
+version = "0.6.4"
 description = "MH漫画阅读器 - 本地漫画竖滑阅读"
 authors = ["mh"]
 edition = "2021"
@@ -9,7 +9,7 @@ edition = "2021"
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = ["protocol-asset"] }
+tauri = { version = "2", features = ["protocol-asset", "tray-icon"] }
 tauri-plugin-dialog = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

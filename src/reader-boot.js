@@ -255,7 +255,12 @@ addEventListener('keydown', (e) => {
   else if (k === 'g') $('pgCount').click(); else if (k === 'f' || k === 'f11') toggleFs(); else if (k === '[') goEpisode(prevTarget(chs, view.topPos())); else if (k === ']') goEpisode(nextTarget(chs, view.topPos())); else return;
   e.preventDefault();
 });
-win.onCloseRequested(async (e) => { e.preventDefault(); auto.stop(); await view?.close(); await win.destroy(); });
+win.onCloseRequested(async (e) => {
+  e.preventDefault(); auto.stop();
+  // close-to-tray: hide the window and keep the book open (progress is flushed when the page becomes hidden); otherwise quit as before
+  if (await invoke('win_hide_if_tray').catch(() => false)) return;
+  await view?.close(); await win.destroy();
+});
 
 // ---- go ---------------------------------------------------------------------------------------------------------------
 wireTrack(); trackObserver.observe($('track'));

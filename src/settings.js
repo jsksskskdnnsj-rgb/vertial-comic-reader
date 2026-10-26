@@ -14,7 +14,8 @@
 // "Pages" comes from the dictionaries; the dim slider also affects the default background.
 import { T, invoke, t, esc, toast, bootPage, prefs, confirmDialog, choiceDialog, lang, setLang } from './shell.js';
 import { lib } from './legacy-api.js';
-import { mountShell, applyBackground, applyAppearance } from './shell-ui.js';
+import { mountShell, applyBackground, applyAppearance, applyExtras } from './shell-ui.js';
+import { BORDER_PRESETS, BG_COLOR_PRESETS, BG_COLOR_DEFAULT, isHex } from './appearance-extras.js';
 import { DEFAULTS, PANEL_MIN, PANEL_MAX } from './appearance.js';
 import { sanePages, DEFAULT_PAGES } from './chapters.js';
 import { setBackground, resetBackground, setBanner, resetBanner } from './theme-api.js';
@@ -114,6 +115,50 @@ $('appearanceReset').addEventListener('click', () => {
 });
 syncAppearance();
 
+// ---- background style + colour, border colour, close-to-tray (v0.6.4). Added after the panel-opacity / fit code; that code is untouched. ----
+$('bgSwatches').innerHTML = BG_COLOR_PRESETS.map((hex) => `<button class="swatch" data-bgc="${hex}" style="background:${hex}" title="${hex}" aria-label="${hex}"></button>`).join('');
+$('borderSwatches').innerHTML = BORDER_PRESETS.map(([v, key]) =>
+  `<button class="swatch${v === 'accent' ? ' swatch--accent' : ''}" data-border="${v}"${v === 'accent' ? '' : ` style="background:${v}"`} title="${esc(t(key))}" aria-label="${esc(t(key))}"></button>`).join('');
+function syncExtras() {
+  pressed('#bgModeSeg button', 'bgmode', prefs.get('bgMode', 'image') === 'color' ? 'color' : 'image');
+  const bgc = prefs.get('bgColor', null); const bgHex = isHex(bgc) ? bgc.toLowerCase() : BG_COLOR_DEFAULT;
+  $('bgColor').value = bgHex;
+  document.querySelectorAll('#bgSwatches .swatch').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.bgc === bgHex)));
+  const bd = prefs.get('borderColor', null);
+  document.querySelectorAll('#borderSwatches .swatch').forEach((b) => b.setAttribute('aria-pressed', String(bd !== null && b.dataset.border.toLowerCase() === String(bd).toLowerCase())));
+  if (isHex(bd)) $('borderColor').value = bd;
+}
+$('bgModeSeg').addEventListener('click', (e) => {
+  const b = e.target.closest('[data-bgmode]'); if (!b) return;
+  prefs.set('bgMode', b.dataset.bgmode); syncExtras(); applyBackground();
+});
+$('bgSwatches').addEventListener('click', (e) => {
+  const b = e.target.closest('[data-bgc]'); if (!b) return;
+  prefs.set('bgColor', b.dataset.bgc); syncExtras(); applyBackground();
+});
+$('bgColor').addEventListener('input', (e) => { prefs.set('bgColor', e.target.value); syncExtras(); applyBackground(); });
+$('borderSwatches').addEventListener('click', (e) => {
+  const b = e.target.closest('[data-border]'); if (!b) return;
+  prefs.set('borderColor', b.dataset.border); syncExtras(); applyExtras();
+});
+$('borderColor').addEventListener('input', (e) => { prefs.set('borderColor', e.target.value); syncExtras(); applyExtras(); });
+$('borderReset').addEventListener('click', () => { prefs.set('borderColor', null); syncExtras(); applyExtras(); toast(t('common.saved')); });
+// "Match accent" follows the accent colour: re-apply when the accent changes (these run after the accent handlers above)
+$('accents').addEventListener('click', applyExtras); $('accentCustom').addEventListener('input', applyExtras); $('accentReset').addEventListener('click', applyExtras);
+// "Restore appearance defaults" (panel opacity / fit / dim, handled above) also resets the three new prefs
+$('appearanceReset').addEventListener('click', () => {
+  prefs.set('bgMode', 'image'); prefs.set('bgColor', null); prefs.set('borderColor', null); syncExtras(); applyBackground();
+});
+syncExtras();
+
+// close-to-tray: stored in the existing reader config (get_reader_config / set_reader_config), read by main.rs when the window is closed
+$('closeToTray').addEventListener('change', async (e) => {
+  const on = e.target.checked;
+  try { const cfg = await invoke('get_reader_config'); await invoke('set_reader_config', { cfg: { ...cfg, close_to_tray: on } }); toast(t('common.saved')); }
+  catch (err) { e.target.checked = !on; toast(errText(err)); }
+});
+invoke('get_reader_config').then((c) => { $('closeToTray').checked = c?.close_to_tray !== false; }).catch(() => {});
+
 // ---- chapter defaults ----------------------------------------------------------------------
 let chMode = 'folder', chPages = DEFAULT_PAGES, chTimer = 0;
 const CH_HELP = { none: 'chapters.noneHelp', folder: 'chapters.folderHelp', pages: 'chapters.pagesHelp' };
@@ -193,7 +238,8 @@ async function switchDataDir(path, confirmKey) {
       title: t('settings.dataDirRestartTitle'), message: t('settings.dataDirRestartMsg'),
       choices: [{ label: t('settings.dataDirCloseNow'), value: 'close', kind: 'primary' }, { label: t('settings.dataDirLater'), value: 'later' }],
     });
-    if (choice === 'close') invoke('win_close').catch(() => {});
+    // a real exit: with "close hides to the tray" on, win_close would only hide the window and the restart would never happen
+    if (choice === 'close') invoke('app_exit').catch(() => invoke('win_close').catch(() => {}));
   } catch (e) { toast(errText(e)); }
 }
 $('dataDirChange').addEventListener('click', async () => {

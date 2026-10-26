@@ -250,3 +250,21 @@ html{background:
 .lib-row .more-btn{position:static;flex-shrink:0}
 @media(max-width:700px){.lib-row__chips{display:none}}
 /* ==== end v0.6.3 appearance + library ==== */
+
+/* ==== v0.6.4 window + border + background append: add at the END of src/mh-ui.css (apply-v064.mjs replaces a previous copy of this block, up to the end marker) ==== */
+
+/* Background: --bg-color / --bg-image are set by shell-ui.js only when the user picks a colour or "Solid color" (Settings);
+   without them these fall back to the picture and colour of v0.6.3, so the default look is unchanged. */
+html{background:
+  linear-gradient(rgba(4,14,15,var(--bg-dim)),rgba(4,14,15,calc(var(--bg-dim) + .12))),
+  var(--bg-image,url("assets/bg-default.jpg")) center/var(--bg-size) no-repeat,
+  var(--bg-color,#061315)}
+.bg-layer{background-color:var(--bg-color,#061315)}
+
+/* Border colour: --line (panels, buttons, inputs, menus, drawers) and --line-strong (glass-strong overlays) are overridden on <html>
+   by the Settings control; unset = the built-in soft borders. --frame-color draws a 1px window frame, only when a colour is set. */
+.glass-strong{border-color:var(--line-strong,#b7e8d51f)}
+body::after{content:"";position:fixed;inset:0;z-index:300;pointer-events:none;box-shadow:inset 0 0 0 1px var(--frame-color,transparent)}
+.swatch--accent{background:var(--accent);outline:2px dashed #ffffff80;outline-offset:2px}
+.swatch--accent[aria-pressed="true"]{outline-style:solid}
+/* ==== end v0.6.4 window + border + background ==== */

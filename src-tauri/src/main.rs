@@ -21,6 +21,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
 use tauri::{AppHandle, State};
 use tauri_plugin_dialog::{DialogExt, FilePath};
 
@@ -436,11 +437,16 @@ fn get_data_dir() -> Result<String, String> {
 struct ReaderConfig {
     memory_saver: bool,
     mode: String, // scroll | page
+    #[serde(default = "default_close_to_tray")]
+    close_to_tray: bool,
 }
 
+fn default_close_to_tray() -> bool {
+    true
+}
 impl Default for ReaderConfig {
     fn default() -> Self {
-        ReaderConfig { memory_saver: false, mode: "scroll".to_string() }
+        ReaderConfig { memory_saver: false, mode: "scroll".to_string(), close_to_tray: default_close_to_tray() }
     }
 }
 
@@ -920,6 +926,74 @@ fn shelf_move(id: i64, folder_id: Option<i64>) -> Result<(), String> {
 
 /* ================= 入口 ================= */
 
+// ---- v0.6.4: system tray, close-to-tray, window drag, real exit ----
+// Hiding to the tray is only allowed once the tray icon exists (otherwise a hidden window could never be brought back).
+static TRAY_OK: AtomicBool = AtomicBool::new(false);
+fn hide_to_tray_enabled() -> bool {
+    TRAY_OK.load(Ordering::SeqCst) && get_reader_config().map(|c| c.close_to_tray).unwrap_or(false)
+}
+fn show_main_window(app: &tauri::AppHandle) {
+    use tauri::Manager;
+    let w = app.get_webview_window("main").or_else(|| app.webview_windows().into_values().next());
+    if let Some(w) = w {
+        let _ = w.unminimize();
+        let _ = w.show();
+        let _ = w.set_focus();
+    }
+}
+fn init_tray(app: &tauri::App) -> tauri::Result<()> {
+    use tauri::menu::{Menu, MenuItem};
+    use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
+    // no icon -> no tray, and hide-to-tray stays off (see TRAY_OK)
+    let icon = match app.default_window_icon() {
+        Some(i) => i.clone(),
+        None => return Ok(()),
+    };
+    let show = MenuItem::with_id(app, "tray_show", "显示 / Show", true, None::<&str>)?;
+    let quit = MenuItem::with_id(app, "tray_quit", "退出 / Quit", true, None::<&str>)?;
+    let menu = Menu::with_items(app, &[&show, &quit])?;
+    #[allow(deprecated)] // renamed show_menu_on_left_click in tauri 2.2; the old name compiles on every 2.x
+    let builder = TrayIconBuilder::with_id("mh-tray")
+        .icon(icon)
+        .tooltip("MH Reader")
+        .menu(&menu)
+        .menu_on_left_click(false)
+        .on_menu_event(|app, event| match event.id.as_ref() {
+            "tray_show" => show_main_window(app),
+            "tray_quit" => app.exit(0),
+            _ => {}
+        })
+        .on_tray_icon_event(|tray, event| {
+            if let TrayIconEvent::Click { button: MouseButton::Left, button_state: MouseButtonState::Up, .. } = event {
+                show_main_window(tray.app_handle());
+            }
+        });
+    builder.build(app)?;
+    TRAY_OK.store(true, Ordering::SeqCst);
+    Ok(())
+}
+/// 拖动窗口（自定义标题栏按下鼠标时调用）
+#[tauri::command]
+fn win_start_drag(window: tauri::Window) -> Result<(), String> {
+    window.start_dragging().map_err(|e| e.to_string())
+}
+/// 关闭到托盘开启时隐藏窗口并返回 true；否则返回 false（调用方自行退出）。阅读页用它代替 destroy()
+#[tauri::command]
+fn win_hide_if_tray(window: tauri::Window) -> Result<bool, String> {
+    if hide_to_tray_enabled() {
+        window.hide().map_err(|e| e.to_string())?;
+        Ok(true)
+    } else {
+        Ok(false)
+    }
+}
+/// 真正退出程序（设置页"立即关闭程序"用；win_close 在关闭到托盘时只会隐藏窗口）
+#[tauri::command]
+fn app_exit(app: AppHandle) -> Result<(), String> {
+    app.exit(0);
+    Ok(())
+}
+
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
@@ -957,6 +1031,10 @@ fn main() {
             app.manage(cover_protocol::CoversDir(std::sync::Arc::new(
                 dir.join("covers"),
             )));
+            // v0.6.4 system tray; a failure here must not stop the app, it only keeps close-to-tray off
+            if let Err(e) = init_tray(app) {
+                eprintln!("tray: {}", e);
+            }
             Ok(())
         })
         .register_asynchronous_uri_scheme_protocol("mhpage", |ctx, req, responder| {
@@ -1007,6 +1085,9 @@ fn main() {
             win_minimize,
             win_toggle_maximize,
             win_close,
+            win_start_drag,
+            win_hide_if_tray,
+            app_exit,
             take_drop_queue,
             folder_add,
             folder_list,
@@ -1057,10 +1138,17 @@ fn main() {
             library::import_merged,
             library::library_stats
         ])
-        .on_window_event(|_window, event| {
-            if let tauri::WindowEvent::DragDrop(tauri::DragDropEvent::Drop { paths, .. }) = event {
+        .on_window_event(|window, event| match event {
+            tauri::WindowEvent::DragDrop(tauri::DragDropEvent::Drop { paths, .. }) => {
                 let _ = push_drop_queue(paths);
             }
+            tauri::WindowEvent::CloseRequested { api, .. } => {
+                if hide_to_tray_enabled() {
+                    api.prevent_close();
+                    let _ = window.hide();
+                }
+            }
+            _ => {}
         })
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -6,6 +6,7 @@
 // poll pauses while the window is hidden.
 import { T, invoke, t, esc, prefs, applyTheme, applyI18n, wireWindow, lang, setLang } from './shell.js';
 import { appearanceVars } from './appearance.js';
+import { extrasVars } from './appearance-extras.js';
 
 export const COVER_BASE = T.core?.convertFileSrc
   ? T.core.convertFileSrc('', 'mhcover').replace(/\/$/, '')
@@ -44,7 +45,6 @@ export function mountShell(active = '', opts = {}) {
   const top = document.getElementById('shell-top');
   if (top) {
     top.className = 'shell-top';
-    top.setAttribute('data-tauri-drag-region', '');
     top.innerHTML = `
       <a class="brand" href="home.html">
         <span class="brand__logo"><svg class="i"><use href="icons.svg#book-open"/></svg></span>
@@ -54,7 +54,7 @@ export function mountShell(active = '', opts = {}) {
         <svg class="i"><use href="icons.svg#search"/></svg>
         <input id="shellSearch" type="search" autocomplete="off" placeholder="${esc(t('search.placeholder'))}">
       </label>
-      <span class="spacer" data-tauri-drag-region></span>
+      <span class="spacer"></span>
       <button class="ibtn" id="shellLang" aria-label="${esc(t('settings.language'))}" title="${esc(t('settings.language'))}"><svg class="i"><use href="icons.svg#globe"/></svg></button>
       <div class="wc">
         <button data-window-minimize aria-label="${esc(t('win.min'))}"><svg class="i"><use href="icons.svg#min"/></svg></button>
@@ -68,6 +68,15 @@ export function mountShell(active = '', opts = {}) {
       const v = q.value.trim();
       if (opts.onSearch) opts.onSearch(v);
       else if (v) location.href = `library.html?q=${encodeURIComponent(v)}`;
+    });
+    // Window drag: the whole top bar except its controls drags the window; double-click toggles maximize. Done through our own
+    // Rust commands (like the window buttons), so it does not depend on the webview's window-API permissions or on which
+    // elements carry Tauri's drag-region attribute (only the element carrying it counted, which left just the thin spacer).
+    top.addEventListener('mousedown', (e) => {
+      if (e.button !== 0) return;
+      if (e.target.closest?.('a, button, input, select, textarea, label, [data-no-drag]')) return;
+      e.preventDefault();
+      invoke(e.detail === 2 ? 'win_toggle_maximize' : 'win_start_drag').catch(() => {});
     });
     top.querySelector('#shellLang').addEventListener('click', () => {
       setLang(lang() === 'en' ? 'zh-CN' : 'en');
@@ -104,21 +113,34 @@ export function applyAppearance() {
   for (const [k, v] of Object.entries(vars)) document.documentElement.style.setProperty(k, v);
 }
 
+/** Background style, background colour and border colour (prefs bgMode / bgColor / borderColor) -> CSS variables on <html>
+ *  (--bg-color, --bg-image, --line, --line-strong, --frame-color; see appearance-extras.js). Returns true in plain-colour mode. */
+export function applyExtras() {
+  const { set, remove, colorMode } = extrasVars(
+    { bgMode: prefs.get('bgMode', 'image'), bgColor: prefs.get('bgColor', null), borderColor: prefs.get('borderColor', null) },
+    localStorage.getItem('mh.accent'));
+  const st = document.documentElement.style;
+  for (const [k, v] of Object.entries(set)) st.setProperty(k, v);
+  for (const k of remove) st.removeProperty(k);
+  return colorMode;
+}
+
 /** Whole-window background (theme config `hero`) and home banner (`banner`), independent of each other.
  *  The default background is painted by mh-ui.css; a custom background is drawn by .bg-layer above it.
  *  A custom banner becomes the CSS variable --banner-image used by .hero. Call again after changing either
  *  image or the dim slider. */
 export async function applyBackground() {
   applyAppearance();
+  const colorMode = applyExtras();            // plain-colour mode: no picture, and the dim overlay would only tint the colour
   const root = document.documentElement;
-  const dim = Math.min(90, Math.max(0, +prefs.get('bgDim', 55))) / 100;
+  const dim = colorMode ? 0 : Math.min(90, Math.max(0, +prefs.get('bgDim', 55))) / 100;
   root.style.setProperty('--bg-dim', String(dim)); // runs before the first await: no flash
   let cfg = {};
   try { cfg = (await invoke('get_theme_config')) || {}; } catch {}
   const conv = T.core?.convertFileSrc;
   const hero = cfg.hero || 'default', banner = cfg.banner || 'default'; // `banner` is absent on a backend without v0.6
   let layer = document.querySelector('.bg-layer');
-  if (hero === 'default' || !conv) {
+  if (hero === 'default' || !conv || colorMode) {
     layer?.remove();
     document.body.classList.remove('has-bg');
   } else {

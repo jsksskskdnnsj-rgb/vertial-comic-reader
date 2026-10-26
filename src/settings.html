@@ -62,8 +62,34 @@
           </span>
         </div>
         <div class="set-row">
+          <div class="grow"><span data-i="settings.bgStyle"></span><span class="sub muted" data-i="settings.bgStyleHelp"></span></div>
+          <span class="seg" id="bgModeSeg">
+            <button data-bgmode="image" data-i="settings.bgStylePicture"></button>
+            <button data-bgmode="color" data-i="settings.bgStyleColor"></button>
+          </span>
+        </div>
+        <div class="set-row">
+          <div class="grow"><span data-i="settings.bgColor"></span><span class="sub muted" data-i="settings.bgColorHelp"></span></div>
+          <div class="swatches" id="bgSwatches"></div>
+          <input type="color" id="bgColor" value="#061315">
+        </div>
+        <div class="set-row">
+          <div class="grow"><span data-i="settings.borderColor"></span><span class="sub muted" data-i="settings.borderHelp"></span></div>
+          <div class="swatches" id="borderSwatches"></div>
+          <input type="color" id="borderColor" value="#80e5b6">
+          <button class="btn btn--ghost btn--sm" id="borderReset"><span data-i="settings.borderReset"></span></button>
+        </div>
+        <div class="set-row">
           <div class="grow"></div>
           <button class="btn btn--ghost btn--sm" id="appearanceReset"><span data-i="settings.appearanceDefaults"></span></button>
+        </div>
+      </section>
+
+      <section class="panel glass">
+        <h2><svg class="i"><use href="icons.svg#settings"/></svg><span data-i="settings.tray"></span></h2>
+        <div class="set-row">
+          <div class="grow"><span data-i="settings.closeToTray"></span><span class="sub muted" data-i="settings.closeToTrayHelp"></span></div>
+          <input type="checkbox" id="closeToTray" checked>
         </div>
       </section>
 
