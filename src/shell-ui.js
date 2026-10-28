@@ -150,7 +150,7 @@ export async function applyBackground() {
       document.body.prepend(layer);
     }
     layer.style.backgroundImage =
-      `linear-gradient(rgba(4,14,15,var(--bg-dim)), rgba(4,14,15,calc(var(--bg-dim) + .12))), url("${conv(hero)}")`;
+      `linear-gradient(rgba(250,253,252,calc(var(--bg-dim) * .45)), rgba(250,253,252,calc(var(--bg-dim) * .55))), url("${conv(hero)}")`;   // soft white veil (v0.7); the slider value still scales it
     document.body.classList.add('has-bg');
   }
   if (banner === 'default' || !conv) root.style.removeProperty('--banner-image');

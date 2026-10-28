@@ -1,5 +1,14 @@
 # 更新日志
 
+## v0.7.0（2026-10-28）
+
+- 透明＋柔光主题：mh-ui.css 末尾追加 v0.7 柔光块（删除该块可回深色）；面板与浮层改为半透明白＋微光渐变＋白顶高光＋青灰细边＋柔和阴影，未新增 blur（v0.5.1 旧小面积 blur 原样保留）
+- 背景暗罩改为柔白 veil，dim 滑杆缩放它；默认壁纸与横幅换成新的柔光图（自选图/横幅不动）；薄荷 accent 预设不动，accent 文字图标用派生深色（需 Chromium 111+，旧 WebView2 回退固定青色）
+- 除 CSS 外只改 3 个文件常量：shell-ui.js 自选图罩色、appearance-extras.js 颜色默认与预设、settings.html 取色器默认值；面板不透明度滑杆映射新透明度（默认 82% 约等于 64% 白），边框颜色、背景控件行为不变、不重复
+- 应用脚本 scripts/apply-v07.mjs + 测试 scripts/test-softlight.mjs（495 选择器、0 暗色残留；对比度最差 8.0/4.3/4.3/4.5、默认 11.0/5.9/5.8/6.1）；引用校验仅 2 处已知旧问题（legacy-reader-boot.js 的 index.html）
+- 应用图标换成用户自供图（src-tauri/icons/）；scripts/gen-icons.py 改为只补缺失图标、不再覆盖已有图标
+- 注意：主题未在真机渲染验证（Claude 侧无浏览器，只有示意预览图）；旧版应用脚本重跑会盖掉柔光块，需再跑 apply-v07.mjs 使其居末
+
 ## v0.6.4（2026-10-26）
 
 - 托盘常驻：系统托盘图标（左键恢复、菜单 Show/Quit），关窗口可藏托盘而非退出（设置页开关）；新增后端命令 win_start_drag / win_hide_if_tray / app_exit（后端命令 72 → 75）

@@ -3,12 +3,12 @@
 //   bgColor  '#rrggbb' - the plain colour; it also fills the empty area when the wallpaper fit is Contain
 //   borderColor  null (built-in soft border) | '#rrggbb' | 'accent' (follow the accent colour)
 // With nothing set every variable is removed and the stylesheet fallbacks apply, so the look is exactly the old one.
-export const BG_COLOR_DEFAULT = '#061315';
+export const BG_COLOR_DEFAULT = '#e9f2f2';
 export const BORDER_PRESETS = [   // [value, label key]; 'accent' = follow the accent colour; the five colours reuse the accent preset names
   ['accent', 'settings.borderMatch'], ['#ffffff', 'settings.borderWhite'], ['#80e5b6', 'accent.emerald'],
   ['#b7a6f5', 'accent.lavender'], ['#7cc4f0', 'accent.sky'], ['#f2a0b5', 'accent.rose'], ['#eec27f', 'accent.amber'],
 ];
-export const BG_COLOR_PRESETS = ['#061315', '#0b1020', '#140b1a', '#101010', '#1a1410'];   // dark presets for the dark glass UI
+export const BG_COLOR_PRESETS = ['#e9f2f2', '#eceaf8', '#f7ebee', '#f4efe4', '#e6f0fa'];   // soft light presets: mist, lavender, blush, sand, sky
 export const BORDER_ALPHA = 0.5;          // custom colours are drawn translucent, like the built-in .13 border but visible
 export const BORDER_STRONG_ALPHA = 0.6;   // overlays (.glass-strong) and the window frame
 export const isHex = (v) => typeof v === 'string' && /^#[0-9a-f]{6}$/i.test(v);

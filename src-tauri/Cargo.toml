@@ -1,6 +1,6 @@
 [package]
 name = "mh-reader"
-version = "0.6.4"
+version = "0.7.0"
 description = "MH漫画阅读器 - 本地漫画竖滑阅读"
 authors = ["mh"]
 edition = "2021"

@@ -268,3 +268,126 @@ body::after{content:"";position:fixed;inset:0;z-index:300;pointer-events:none;bo
 .swatch--accent{background:var(--accent);outline:2px dashed #ffffff80;outline-offset:2px}
 .swatch--accent[aria-pressed="true"]{outline-style:solid}
 /* ==== end v0.6.4 window + border + background ==== */
+
+/* ==== v0.7 soft light append: add at the END of src/mh-ui.css (apply-v07.mjs replaces a previous copy of this block, up to the end marker).
+   Transparent + soft light instead of dark glass + mint glow: light translucent panels, gradients and soft shadows (no new blur).
+   To go back to the dark look, delete this block (everything else is unchanged). ==== */
+
+/* ---- tokens ------------------------------------------------------------------------------------------------------------- */
+:root{
+  color-scheme:light;
+  --bg:#e9f2f2;
+  --text:#1d3a3c;--muted:#446366;--danger:#a62f3f;
+  --accent-ink:#25695a;--accent-tint:rgba(128,229,182,.26);                    /* fallbacks; replaced by the accent-derived values below when color-mix exists */
+  /* panel opacity slider (Settings) -> alpha: slider .40 -> .15, default .82 -> .64, 1.00 -> .85; overlays are a little more solid */
+  --panel:rgba(255,255,255,calc(var(--panel-a,.82) * 1.1667 - .3167));
+  --panel2:rgba(255,255,255,calc(var(--panel2-a,.94) * .98 - .06));
+  --line:rgba(60,110,120,.22);--line-strong:rgba(60,110,120,.28);              /* the border-colour setting overrides these two inline */
+  --hl:inset 0 1px 0 rgba(255,255,255,.85);                                    /* top edge highlight */
+  --shadow-soft:0 10px 34px rgba(70,110,125,.16),0 2px 8px rgba(70,110,125,.08);
+  --ctl:linear-gradient(180deg,rgba(255,255,255,.82),rgba(255,255,255,.46));
+  --ctl-hover:linear-gradient(180deg,#fff,rgba(255,255,255,.80));
+  --reader-bg:linear-gradient(180deg,rgba(228,238,238,.88),rgba(214,228,228,.88));   /* reading surface; change here for a different surround */
+}
+@supports (color:color-mix(in srgb,red,blue)){
+  :root{--accent-ink:color-mix(in srgb,var(--accent) 38%,#0b3a33);--accent-tint:color-mix(in srgb,var(--accent) 30%,transparent)}
+}
+
+/* ---- background: soft white veil (the dim slider scales it), light fallback colour ------------------------------------------------ */
+html{background:
+  linear-gradient(rgba(250,253,252,calc(var(--bg-dim) * .45)),rgba(250,253,252,calc(var(--bg-dim) * .55))),
+  var(--bg-image,url("assets/bg-default.jpg")) center/var(--bg-size) no-repeat,
+  var(--bg-color,#e9f2f2)}
+.bg-layer{background-color:var(--bg-color,#e9f2f2)}
+::selection{background:var(--accent-tint)}
+button:focus-visible{outline:2px solid var(--accent-ink)}
+
+/* ---- glass panels and overlays: translucent white, top sheen, edge highlight, soft shadow (no blur added) ---------------------------- */
+.glass,.glass-strong{border:1px solid var(--line);box-shadow:var(--hl),var(--shadow-soft);
+  background:linear-gradient(180deg,rgba(255,255,255,.24),rgba(255,255,255,0) 40%),var(--panel)}
+.glass-strong{border-color:var(--line-strong);background:linear-gradient(180deg,rgba(255,255,255,.30),rgba(255,255,255,0) 42%),var(--panel2)}
+.drawer{background:linear-gradient(180deg,rgba(255,255,255,.30),rgba(255,255,255,0) 42%),var(--panel2);box-shadow:var(--hl),var(--shadow-soft)}
+.menu{box-shadow:var(--hl),0 16px 40px rgba(70,110,125,.22)}
+.menu button:hover{background:var(--accent-tint)}
+.toast{background:rgba(255,255,255,.94);color:var(--text);box-shadow:var(--hl),var(--shadow-soft)}
+.modal-backdrop{background:rgba(210,226,228,.5)}
+.endcard,.reader-err{background:rgba(236,245,244,.74)}
+.dialog p{color:var(--muted)}
+.hero{background:linear-gradient(120deg,rgba(255,255,255,.84),rgba(255,255,255,.26)),var(--banner-image,url("assets/banner-default.jpg")) center/cover no-repeat}
+.hero p{color:var(--muted)}
+
+/* ---- shell: top bar, search, window buttons, rail ------------------------------------------------------------------------------------- */
+.brand__logo{background:linear-gradient(145deg,#fff,var(--accent) 75%);color:var(--accent-ink);box-shadow:var(--hl),0 6px 16px rgba(70,110,125,.22)}
+.shell-search{background:linear-gradient(180deg,rgba(255,255,255,.8),rgba(255,255,255,.5));box-shadow:var(--hl),0 2px 8px rgba(70,110,125,.08)}
+.shell-search input::placeholder{color:#7b9496}
+.wc button:hover{background:rgba(255,255,255,.72)}
+.shell-rail a{color:#3d5c5f}
+.shell-rail a:hover{background:rgba(255,255,255,.55)}
+.shell-rail a.is-on{background:linear-gradient(180deg,rgba(255,255,255,.92),rgba(255,255,255,.58));border-color:var(--line);color:var(--accent-ink);box-shadow:var(--hl),0 4px 12px rgba(70,110,125,.14)}
+
+/* ---- text accents, chips, covers, progress ----------------------------------------------------------------------------------------- */
+.panel h2 .i,.dropzone .dz-icon,.quick-tile .i{color:var(--accent-ink)}
+.linklike,.linkbtn,.hcard__tag{color:var(--accent-ink)}
+.bp__fav.is-on{border-color:var(--accent);color:var(--accent-ink)}
+.sep{color:#7b9496}
+.cover{background:#d9e8e6}
+.chips>*{color:var(--accent-ink);background:var(--accent-tint);border-color:var(--line)}
+.bar,.cover-wrap .cover-bar{background:rgba(60,110,120,.14)}
+.bar i{background:linear-gradient(90deg,var(--accent),var(--accent2));box-shadow:inset 0 1px 0 rgba(255,255,255,.5)}
+.hcard:hover{background:rgba(255,255,255,.55);border-color:var(--line)}
+.hcard.is-current{background:linear-gradient(110deg,var(--accent-tint),rgba(255,255,255,.4));border-color:var(--accent);box-shadow:var(--hl)}
+.tick{background:var(--accent-ink)}
+.tick--bm{background:#d68a1f}
+
+/* ---- controls --------------------------------------------------------------------------------------------------------------------------- */
+.btn,.ibtn,.pgcount{background:var(--ctl);border-color:var(--line);box-shadow:var(--hl),0 1px 3px rgba(70,110,125,.10)}
+.btn:hover,.ibtn:hover,.pgcount:hover{background:var(--ctl-hover);border-color:var(--accent)}
+.btn--ghost{background:var(--ctl)}
+.btn--primary{background:linear-gradient(180deg,rgba(255,255,255,.5),rgba(255,255,255,0) 55%),var(--accent);color:#143f37;border-color:rgba(255,255,255,.7);box-shadow:var(--hl),0 6px 16px rgba(90,190,150,.30)}
+.btn--primary:hover{background:linear-gradient(180deg,rgba(255,255,255,.62),rgba(255,255,255,.08) 55%),var(--accent)}
+.btn--danger{background:linear-gradient(180deg,#cf5667,#b53c4d);color:#fff;border-color:rgba(255,255,255,.5);box-shadow:var(--hl),0 4px 12px rgba(181,60,77,.25)}
+.tbtn{color:#3d5c5f}
+.tbtn:hover,.tbtn.is-on{background:linear-gradient(180deg,rgba(255,255,255,.92),rgba(255,255,255,.58));border-color:var(--line);color:var(--accent-ink);box-shadow:var(--hl)}
+.seg{background:rgba(60,110,120,.10);box-shadow:inset 0 1px 2px rgba(70,110,125,.12)}
+.seg button[aria-pressed=true],.seg button:hover{background:linear-gradient(180deg,#fff,rgba(255,255,255,.72));color:var(--accent-ink);box-shadow:0 1px 3px rgba(70,110,125,.18)}
+.field,.select{background:rgba(255,255,255,.74);border-color:var(--line);color:var(--text);box-shadow:inset 0 1px 2px rgba(70,110,125,.10)}
+.set-row{border-bottom-color:rgba(60,110,120,.12)}
+.set-row input[type="range"],.set-row input[type="checkbox"]{accent-color:var(--accent-ink)}
+.set-row input[type="color"]{border-color:var(--line);background:rgba(255,255,255,.6)}
+.swatch{box-shadow:0 1px 3px rgba(70,110,125,.28)}
+.swatch[aria-pressed="true"]{border-color:#fff;box-shadow:0 0 0 2px rgba(60,110,120,.55)}
+.swatch--accent{outline-color:rgba(60,110,120,.5)}
+.dropzone{border-color:rgba(60,110,120,.35);background:rgba(255,255,255,.35)}
+.dropzone.is-over{border-color:var(--accent-ink);background:var(--accent-tint)}
+.quick-tile,.stat,.src-row,.lib-row{background:rgba(255,255,255,.5);border-color:var(--line);box-shadow:var(--hl)}
+.quick-tile:hover,.lib-row:hover{background:rgba(255,255,255,.82);border-color:var(--accent)}
+.src-row .kind,.lib-chip,.scan-chip{background:rgba(255,255,255,.6);color:var(--muted);border-color:var(--line)}
+.src-row button:hover{background:rgba(255,255,255,.7)}
+.lib-chip--progress,.scan-chip.has-sub,.state-chip{background:var(--accent-tint);color:var(--accent-ink);border-color:var(--line)}
+.lib-chip--finished{color:var(--muted)}
+.lib-chip--warn{color:var(--danger);border-color:rgba(166,47,63,.35)}
+.state-chip.is-custom{background:rgba(238,194,127,.3);color:#7a4f0e}
+.folder-row{color:#3d5c5f}
+.folder-row:hover{background:rgba(255,255,255,.55)}
+.folder-row[aria-current="true"]{background:linear-gradient(180deg,rgba(255,255,255,.92),rgba(255,255,255,.58));border-color:var(--accent);color:var(--accent-ink)}
+.ribbon,.more-btn,.kind-badge{background:rgba(255,255,255,.9);color:var(--accent-ink);border-color:rgba(255,255,255,.7);box-shadow:0 1px 4px rgba(40,80,90,.28)}
+.more-btn{color:var(--text)}
+
+/* ---- reader surfaces -------------------------------------------------------------------------------------------------------------------- */
+.viewport{background:var(--reader-bg);box-shadow:inset 0 2px 10px rgba(70,110,125,.12)}
+.page{background:#dfe9e8}
+.page-label{color:rgba(60,110,120,.25)}
+.vp__pill,.vp__auto{background:rgba(255,255,255,.88);color:var(--text);border-color:var(--line);box-shadow:var(--hl),0 4px 14px rgba(70,110,125,.18)}
+.scrub__rail{background:rgba(60,110,120,.16)}
+.scrub__fill{background:linear-gradient(90deg,var(--accent),var(--accent2))}
+.scrub__thumb{background:#fff;box-shadow:0 1px 4px rgba(40,90,95,.4),0 0 0 4px var(--accent-tint)}
+.thumbtip{background:rgba(255,255,255,.96);box-shadow:0 6px 18px rgba(70,110,125,.25)}
+.thumbstrip button{background:#dbe8e6}
+.thumbstrip button.is-active{border-color:var(--accent);box-shadow:0 0 0 1px var(--accent-tint)}
+.dir__item{background:#dbe8e6}
+.dir__n{background:rgba(255,255,255,.84);color:var(--text)}
+.flip-arrow{background:rgba(255,255,255,.82);color:var(--text);box-shadow:var(--hl),0 4px 12px rgba(70,110,125,.16)}
+
+/* ---- scrollbars (standard properties; the thumb is a soft teal-grey) -------------------------------------------------------------------- */
+.bp__list,.scroller,.page-main{scrollbar-color:rgba(60,110,120,.38) transparent}
+/* ==== end v0.7 soft light ==== */
