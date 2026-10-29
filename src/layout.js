@@ -41,8 +41,12 @@ export class Layout {
 
   // Recompute all tops/heights. Heights are rounded to integers HERE and the DOM is given
   // exactly these numbers (absolute positioning), so JS math and the browser never disagree.
+  // maxW defaults to 1000 so flip mode (which omits it) stays as before.
+  // Scroll mode passes Infinity and the column tracks the pane, including after
+  // the side bars tuck away. widthPct still scales that pane (the 40–100 slider).
   compute({ viewW, widthPct = 100, maxW = 1000, zoom = 1, gap = 0, endPad = 0 }) {
-    const base = Math.min(Math.round(viewW * widthPct / 100), maxW);
+    const scaled = Math.round(viewW * widthPct / 100);
+    const base = Number.isFinite(maxW) ? Math.min(scaled, maxW) : scaled;
     this.colW = Math.max(120, Math.round(base * zoom));
     this.sizerW = Math.max(this.colW, viewW);
     this.left = Math.round((this.sizerW - this.colW) / 2);

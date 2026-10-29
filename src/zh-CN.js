@@ -137,6 +137,8 @@ export default {
   'settings.accentReset': '\u91cd\u7f6e', // Reset
   'settings.appearance': '\u5916\u89c2', // Appearance
   'settings.autoSpeed': '\u9ed8\u8ba4\u81ea\u52a8\u6eda\u52a8\u901f\u5ea6', // Default auto-scroll speed
+  'settings.wheelSpeed': '\u9f20\u6807\u6eda\u8f6e\u901f\u5ea6', // Mouse wheel speed
+  'settings.wheelSpeedHelp': '\u7ad6\u6ed1\u65f6\u6bcf\u4e00\u683c\u6eda\u8f6e\u79fb\u52a8\u7684\u8ddd\u79bb\u30021 \u662f\u539f\u6765\u7684\u901f\u5ea6\uff0c\u9ed8\u8ba4 2\uff0c\u660e\u663e\u66f4\u5feb\u3002\u7ffb\u9875\u6a21\u5f0f\u4e0d\u7528\u8fd9\u4e2a\u3002', // How far one notch moves in vertical scroll. 1 is the previous speed; 2 is the default and clearly faster. Page-flip mode does not use this.
   'settings.background': '\u80cc\u666f\u56fe\u7247', // Background image
   'settings.backgroundHelp': '\u6574\u4e2a\u5e94\u7528\u5171\u7528\u4e00\u5f20\u80cc\u666f\u56fe\uff0c\u6240\u6709\u9875\u9762\u90fd\u4f1a\u663e\u793a\u3002\u9762\u677f\u662f\u53e0\u5728\u5176\u4e0a\u7684\u534a\u900f\u660e\u73bb\u7483\u3002', // One picture behind the whole app, on every page. Panels are translucent glass on top of it.
   'settings.banner': '\u9996\u9875\u6a2a\u5e45', // Home banner
@@ -194,6 +196,7 @@ export default {
   'reader.tbPages': '\u76ee\u5f55', // Pages
   'reader.tbSettings': '\u9605\u8bfb\u8bbe\u7f6e', // Settings
   'reader.toggleHistory': '\u663e\u793a / \u9690\u85cf\u9605\u8bfb\u5386\u53f2', // Show / hide reading history
+  'reader.wheel': '\u6eda\u8f6e\u901f\u5ea6', // Wheel speed
   'reader.width': '\u9875\u9762\u5bbd\u5ea6', // Page width
   'chapters.defaultHelp': '\u5bf9\u6240\u6709\u4e66\u751f\u6548\uff0c\u9664\u975e\u4f60\u5728\u9605\u8bfb\u5668\u91cc\u4e3a\u67d0\u672c\u4e66\u5355\u72ec\u4fee\u6539\u3002', // Applies to every book unless you change it for one book in the reader.
   'chapters.defaultTitle': '\u7ae0\u8282\u6a21\u5f0f\uff08\u9ed8\u8ba4\uff09', // Chapter mode (default)

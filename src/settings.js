@@ -4,7 +4,7 @@
 //   background -> theme config `hero` via set_hero_image / reset_hero_image (shell-ui.js applyBackground)
 //   bg dim     -> prefs 'bgDim' -> --bg-dim (works for the default AND a custom image)
 //   reading    -> prefs keys reader-boot.js reads: 'mode', 'reader.widthPct', 'reader.gap',
-//                 'reader.dim', 'saver', 'autoSpeed'
+//                 'reader.dim', 'reader.wheelSpeed', 'saver', 'autoSpeed'
 //   chapters   -> get/set_chapter_defaults
 //   cache      -> cache_stats / cache_set_limit / cache_clear
 //   data dir   -> get_data_dir / pick_data_dir / set_data_dir / open_data_dir (behaviour unchanged)
@@ -84,6 +84,8 @@ function syncReading() {
   $('dimRange').value = prefs.get('reader.dim', 100);
   $('dimVal').textContent = $('dimRange').value + '%';
   $('saverChk').checked = !!prefs.get('saver', false);
+  $('wheelRange').value = Math.min(5, Math.max(1, Math.round(+prefs.get('reader.wheelSpeed', 2)) || 2));
+  $('wheelVal').textContent = $('wheelRange').value;
   $('autoRange').value = prefs.get('autoSpeed', 4);
   $('autoVal').textContent = $('autoRange').value;
 }
@@ -96,6 +98,7 @@ invoke('merge_auto_get').then((v) => { $('mergeAuto').checked = v !== false; }).
 $('mergeAuto').addEventListener('change', (e) => {
   invoke('merge_auto_set', { on: e.target.checked }).catch((err) => toast(errText(err)));
 });
+$('wheelRange').addEventListener('input', (e) => { prefs.set('reader.wheelSpeed', Math.min(5, Math.max(1, Math.round(+e.target.value) || 2))); syncReading(); });
 $('autoRange').addEventListener('input', (e) => { prefs.set('autoSpeed', +e.target.value); syncReading(); });
 syncReading();
 
