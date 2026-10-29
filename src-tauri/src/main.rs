@@ -891,7 +891,7 @@ fn main() {
                 dir.join("cache"),
                 512 << 20,
             )?);
-            let extractor = extractor::Extractor::start(cache.clone(), 2);
+            let extractor = extractor::Extractor::start(cache.clone(), extractor::worker_count());
             app.manage(commands::ReaderState {
                 db: rdb,
                 cache,
@@ -1053,6 +1053,8 @@ mod image_ext_contract {
             !crate::DECODE_EXTS.contains(&"avif"),
             "avif is passthrough-only until the image crate avif feature is enabled"
         );
+        let n = crate::extractor::worker_count();
+        assert!((2..=4).contains(&n), "extract workers {n} out of 2..=4");
         for banned in ["svg", "tif", "tiff", "heic", "heif", "jxl", "ico", "apng", "dib"] {
             assert!(!crate::IMAGE_EXTS.contains(&banned), "{banned} must not be imported");
             assert!(!crate::DECODE_EXTS.contains(&banned), "{banned} must not be a cover candidate");

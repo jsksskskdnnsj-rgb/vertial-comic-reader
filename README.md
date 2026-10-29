@@ -1,4 +1,4 @@
-# MH漫画阅读器（Tauri 桌面版）v0.7.6
+# MH漫画阅读器（Tauri 桌面版）v0.7.7
 
 > **普通用户直接下载**：去 [Releases](https://github.com/jsksskskdnnsj-rgb/vertial-comic-reader/releases) 下载 `mh-reader.exe`，双击即用，无需编译。
 > 开发者从源码构建请看下面的「构建运行」。

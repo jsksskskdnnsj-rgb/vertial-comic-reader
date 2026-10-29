@@ -6,7 +6,7 @@
 //           ProgressSaver (debounced save)   Scrubber (bottom slider)   Reader (glue)
 import { Layout } from './layout.js';
 
-const T = window.__TAURI__;
+const T = globalThis.window?.__TAURI__;
 const invoke = (cmd, args) => (T?.core?.invoke ? T.core.invoke(cmd, args) : Promise.reject(new Error('no backend')));
 // Windows/WebView2: "http://mhpage.localhost"   (macOS/Linux would be "mhpage://localhost")
 const PAGE_BASE = T?.core?.convertFileSrc ? T.core.convertFileSrc('', 'mhpage').replace(/\/$/, '') : '';
@@ -27,19 +27,56 @@ export const api = {
   cacheClear:    (bookId = null) => invoke('cache_clear', { bookId }),
 };
 
+// Margins are IntersectionObserver rootMargins. A page mounts inside `near` and stays
+// mounted until it leaves `far`, so a short scroll back does not drop the bitmap.
+// v0.7.6 closed the mount gate above ~3 viewport-heights/sec and waited 90ms of calm,
+// so a fast scroll showed empty boxes on the first open and on every re-read, ZIP or
+// folder. Mounting now tracks the viewport the whole time. `warm` is how many
+// not-yet-mounted pages in the reading direction get a browser fetch started early.
+// Saver still uses the width-variant decode path; balanced non-slice pages do not.
 export const PERF = {
-  balanced: { nearMargin: '150% 0px', farMargin: '300% 0px', maxMounted: 14,
-              aheadVh: 5, behindVh: 1.5, maxAhead: 10, maxBehind: 3, variant: 0 },
-  saver:    { nearMargin: '80% 0px',  farMargin: '160% 0px', maxMounted: 6,
-              aheadVh: 2.5, behindVh: 0, maxAhead: 4, maxBehind: 0, variant: 1600 },
+  balanced: { nearVh: 2, farVh: 4.2, maxMounted: 18,
+              aheadVh: 7, behindVh: 2, maxAhead: 14, maxBehind: 4, variant: 0, warm: 4 },
+  saver:    { nearVh: 1, farVh: 2.2, maxMounted: 8,
+              aheadVh: 3.5, behindVh: 0.5, maxAhead: 6, maxBehind: 1, variant: 1600, warm: 2 },
 };
+const rootMargin = (vh) => `${Math.round(vh * 100)}% 0px`;
+// Virtual pages overlapping the viewport expanded by `nearVh` screens.
+// Used on every scroll frame so mounting does not wait for IntersectionObserver.
+export function virtualsNear(layout, scrollTop, viewH, nearVh) {
+  if (!layout.n || viewH <= 0) return [];
+  const i0 = layout.findVirtual(Math.max(0, scrollTop - viewH * nearVh));
+  const i1 = layout.findVirtual(scrollTop + viewH * (1 + nearVh));
+  const out = [];
+  for (let i = i0; i <= i1 && i < layout.n; i++) out.push(i);
+  return out;
+}
 const CFG = {
-  prefetchMinGapMs: 120,       // at most ~8 set_reading_window calls/sec
-  fastVhPerSec: 3,             // faster than 3 viewport-heights/sec = "flinging": hold off mounting
-  settleMs: 90,                // ...until scrolling has been calm this long
+  prefetchMinGapMs: 40,        // trailing send still lets the final position win
   saveDebounceMs: 1500, saveMaxWaitMs: 4000,
   endPad: 360,                 // room under the last page for the end card
 };
+export const WHEEL_GEAR_MIN = 1;
+export const WHEEL_GEAR_MAX = 5;
+export const WHEEL_GEAR_DEFAULT = 2;   // one step above native; multiplier 2
+const WHEEL_MUL = [1, 2, 3, 4, 6];     // gear 1 keeps the browser's own wheel distance
+export function wheelGear(v) {
+  const n = Math.round(Number(v));
+  if (!Number.isFinite(n)) return WHEEL_GEAR_DEFAULT;
+  return Math.min(WHEEL_GEAR_MAX, Math.max(WHEEL_GEAR_MIN, n));
+}
+export function wheelMultiplier(gear) { return WHEEL_MUL[wheelGear(gear) - 1]; }
+// Gear 1 returns null: the caller must leave that notch to the browser.
+// `page` is {w,h} in px, used only for deltaMode page (2).
+export function wheelScrollDelta(e, gear, page) {
+  const mul = wheelMultiplier(gear);
+  if (mul === 1) return null;
+  let dx = e.deltaX || 0, dy = e.deltaY || 0;
+  if (e.deltaMode === 1) { dx *= 32; dy *= 32; }
+  else if (e.deltaMode === 2) { dx *= page?.w || 0; dy *= page?.h || 0; }
+  if (!dx && !dy) return null;
+  return { dx: dx * mul, dy: dy * mul };
+}
 const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
 const el = (tag, cls) => { const e = document.createElement(tag); if (cls) e.className = cls; return e; };
 
@@ -87,7 +124,10 @@ class Strip {
     const sc = this.scroller;
     const pos = this.layout.getPosition(sc.scrollTop + anchorY);   // 1. read BEFORE touching anything
     this.apply(params);                                            // 2. new tops/heights/sizer
+    // The scroll event this assignment fires is not the reader scrolling.
+    this.ignoreChromeScroll = true;
     sc.scrollTop = this.layout.posToY(pos) - anchorY;              // 3. restore in the same task
+    this.ignoreChromeScroll = false;
   }
 }
 
@@ -96,7 +136,7 @@ class Strip {
 // page at viewport middle (what we SHOW), direction and speed.
 class ViewportTracker {
   constructor(reader) {
-    this.r = reader; this.raf = 0; this.settle = 0;
+    this.r = reader; this.raf = 0;
     this.lastY = reader.strip.scroller.scrollTop; this.lastT = performance.now(); this.dir = 1;
     this.onScroll = () => { if (!this.raf) this.raf = requestAnimationFrame(() => this.tick()); };
     reader.strip.scroller.addEventListener('scroll', this.onScroll, { passive: true });
@@ -109,15 +149,9 @@ class ViewportTracker {
     const { strip, imageWindow: iw, prefetcher, saver } = this.r;
     const sc = strip.scroller, L = strip.layout;
     const y = sc.scrollTop, vh = sc.clientHeight, now = performance.now();
-    const dy = y - this.lastY, dt = Math.max(1, now - this.lastT);
+    const dy = y - this.lastY;
     this.lastY = y; this.lastT = now;
     if (Math.abs(dy) > 1) this.dir = dy > 0 ? 1 : -1;
-
-    // fling control: while very fast, don't mount; mount once calm
-    const fast = Math.abs(dy) / dt * 1000 > vh * CFG.fastVhPerSec;
-    iw.setGate(fast);
-    clearTimeout(this.settle);
-    this.settle = setTimeout(() => iw.setGate(false), CFG.settleMs);
 
     const pos = L.getPosition(y);                              // viewport TOP -> saved
     const mid = L.findVirtual(y + vh * 0.5);                   // viewport MIDDLE -> shown
@@ -126,26 +160,28 @@ class ViewportTracker {
 
     prefetcher.update(this.r.computeWindow(y, this.dir));
     saver.mark(pos, atEnd);
-    if (iw.near.size > iw.mounted.size) iw.flush();            // cheap top-up when budget freed
+    iw.flush();                                                // nearest pages, including while the strip is still moving
+    iw.warmAhead(this.dir);
   }
-  destroy() { this.r.strip.scroller.removeEventListener('scroll', this.onScroll); clearTimeout(this.settle); }
+  destroy() { this.r.strip.scroller.removeEventListener('scroll', this.onScroll); }
 }
 
 // ---------------------------------------------------------------- ImageWindow
 // Two IntersectionObservers over every page box = hysteresis:
-//   near (rootMargin 150% top/bottom): entering -> candidate for mounting
-//   far  (rootMargin 300% top/bottom): leaving  -> unmount
-// A page is mounted from 1.5 screens before it becomes visible until it is 3 screens past,
-// so scrolling back and forth around the edge never thrashes img elements.
+//   near (PERF.nearVh): candidate for mounting
+//   far  (PERF.farVh): leaving -> unmount
+// flush() also mounts from layout math on each scroll frame, so a fast fling does not
+// wait for the observer. Far stays larger than near, so those pages are not dropped
+// on the next observer callback.
 class ImageWindow {
   constructor(reader, perf) {
     this.r = reader; this.perf = perf;
     this.mounted = new Map();   // virtual idx -> { img, tries }
     this.near = new Set();      // virtual idx currently inside the near margin
-    this.gated = false;
+    this.warm = new Map();      // virtual idx -> Image not in the document yet
     const root = reader.strip.scroller;
-    this.nearIO = new IntersectionObserver(es => this.onNear(es), { root, rootMargin: perf.nearMargin, threshold: 0 });
-    this.farIO  = new IntersectionObserver(es => this.onFar(es),  { root, rootMargin: perf.farMargin,  threshold: 0 });
+    this.nearIO = new IntersectionObserver(es => this.onNear(es), { root, rootMargin: rootMargin(perf.nearVh), threshold: 0 });
+    this.farIO  = new IntersectionObserver(es => this.onFar(es),  { root, rootMargin: rootMargin(perf.farVh), threshold: 0 });
     for (const p of reader.strip.pages) { this.nearIO.observe(p); this.farIO.observe(p); }
   }
 
@@ -154,24 +190,67 @@ class ImageWindow {
       const i = +e.target.dataset.i;
       if (e.isIntersecting) this.near.add(i); else this.near.delete(i);
     }
-    if (!this.gated) this.flush();
+    this.flush();
   }
   onFar(entries) { for (const e of entries) if (!e.isIntersecting) this.release(+e.target.dataset.i); }
 
-  setGate(closed) {
-    if (this.gated === closed) return;
-    this.gated = closed;
-    if (!closed) this.flush();
-  }
-
   // Mount the nearest-to-viewport-centre pages first (and only up to the budget), so the
-  // page being read is always the first request Rust sees.
+  // page being read is always the first request Rust sees. Called on every scroll frame:
+  // a fast fling used to skip this until the wheel went quiet.
   flush() {
     const { strip } = this.r, L = strip.layout;
-    const c = strip.scroller.scrollTop + strip.viewH / 2;
+    if (!L.n) return;
+    const vh = strip.viewH;
+    const top = strip.scroller.scrollTop;
+    const c = top + vh / 2;
     const dist = (i) => Math.abs(L.vTop[i] + L.vH[i] / 2 - c);
-    const want = [...this.near].sort((a, b) => dist(a) - dist(b)).slice(0, this.perf.maxMounted);
-    for (const i of want) this.mount(i);
+    const candidates = new Set(this.near);
+    for (const i of virtualsNear(L, top, vh, this.perf.nearVh)) candidates.add(i);
+    const want = [...candidates].sort((a, b) => dist(a) - dist(b)).slice(0, this.perf.maxMounted);
+    let synced = false;
+    for (const i of want) {
+      if (this.mounted.has(i)) continue;
+      const sync = !synced && dist(i) <= vh;
+      this.mount(i, sync);
+      if (sync) synced = true;
+    }
+  }
+
+  // Start fetches for the next few pages before they enter the mount margin.
+  // The element is reused by mount(), so the bitmap is not decoded twice.
+  warmAhead(dir) {
+    const { strip } = this.r, L = strip.layout;
+    const nWarm = this.perf.warm || 0;
+    if (!nWarm || !L.n) return;
+    const y = strip.scroller.scrollTop, vh = strip.viewH;
+    const center = L.findVirtual(y + vh * 0.5);
+    const step = dir < 0 ? -1 : 1;
+    const want = [];
+    for (let k = 1; want.length < nWarm && k < L.n; k++) {
+      const i = center + step * k;
+      if (i < 0 || i >= L.n) break;
+      if (!this.mounted.has(i)) want.push(i);
+    }
+    const keep = new Set(want);
+    for (const [i, img] of this.warm) {
+      if (!keep.has(i)) { img.removeAttribute('src'); this.warm.delete(i); }
+    }
+    for (const i of want) {
+      if (this.warm.has(i)) continue;
+      const img = new Image();
+      img.className = 'pg'; img.decoding = 'async'; img.draggable = false; img.alt = '';
+      if ('fetchPriority' in img) img.fetchPriority = 'low';
+      img.src = this.url(i);
+      this.warm.set(i, img);
+    }
+  }
+
+  takeWarm(i) {
+    const img = this.warm.get(i);
+    if (!img) return null;
+    this.warm.delete(i);
+    if (img.complete && !img.naturalWidth) { img.removeAttribute('src'); return null; }
+    return img;
   }
 
   url(i, tries = 0) {
@@ -179,15 +258,20 @@ class ImageWindow {
     return `${PAGE_BASE}/${bookId}/${i}?v=${this.perf.variant}&s=${sig}` + (tries ? `&r=${tries}` : '');
   }
 
-  mount(i) {
+  mount(i, syncDecode = false) {
     if (this.mounted.has(i)) return;
     const box = this.r.strip.pages[i];
-    const img = new Image();
-    img.className = 'pg'; img.decoding = 'async'; img.draggable = false; img.alt = '';
+    let img = this.takeWarm(i);
+    if (!img) {
+      img = new Image();
+      img.className = 'pg'; img.draggable = false; img.alt = '';
+      img.decoding = syncDecode ? 'sync' : 'async';
+      if ('fetchPriority' in img) img.fetchPriority = syncDecode ? 'high' : 'auto';
+      img.src = this.url(i);
+    }
     const rec = { img, tries: 0 };
     this.mounted.set(i, rec);
-    img.src = this.url(i);
-    box.append(img);                       // opacity:0 until decoded -> no half-painted tiles
+    box.append(img);
     this.afterDecode(i, rec);
   }
 
@@ -236,6 +320,8 @@ class ImageWindow {
 
   destroy() {
     this.nearIO.disconnect(); this.farIO.disconnect();
+    for (const img of this.warm.values()) img.removeAttribute('src');
+    this.warm.clear();
     for (const i of [...this.mounted.keys()]) this.release(i);
   }
 }
@@ -330,7 +416,8 @@ export class Reader {
   constructor(host, { onPosition = () => {}, scrubber = null } = {}) {
     this.host = host; this.onPosition = onPosition; this.scrubberEls = scrubber;
     this.strip = new Strip(host);
-    this.params = { widthPct: 100, maxW: 1000, zoom: 1, gap: 0, endPad: CFG.endPad };
+    this.params = { widthPct: 100, maxW: Infinity, zoom: 1, gap: 0, endPad: CFG.endPad };
+    this.wheelGear = WHEEL_GEAR_DEFAULT;
     this.perfName = 'balanced'; this.perf = PERF.balanced;
     this.info = null; this.fixes = new Map(); this.fixRaf = 0;
   }
@@ -339,8 +426,9 @@ export class Reader {
 
   // opts: perf, widthPct, gap, startPos ({page,frac}: overrides the saved resume point),
   //       beforeMount(info) -> false (cancel) | {perf} | undefined   (used for the large-book warning)
-  async open(bookId, { perf = 'balanced', widthPct = 100, gap = 0, startPos = null, beforeMount = null } = {}) {
+  async open(bookId, { perf = 'balanced', widthPct = 100, gap = 0, startPos = null, beforeMount = null, wheelSpeed = WHEEL_GEAR_DEFAULT } = {}) {
     this.perfName = perf; this.perf = PERF[perf];
+    this.wheelGear = wheelGear(wheelSpeed);
     Object.assign(this.params, { widthPct, gap });
     this.info = await api.openBook(bookId);                 // { bookId, sig, dims, src, realPages, chapters, resume, ... }
     if (beforeMount) {
@@ -411,17 +499,24 @@ export class Reader {
     const center = L.findVirtual(y + sc.clientHeight * 0.5);
     this.prefetcher.jumpNow({ ...this.computeWindow(y, y >= sc.scrollTop ? 1 : -1), center });
     if (smooth) { sc.scrollTo({ top: y, behavior: 'smooth' }); return; }
-    this.tracker.expectJump(y);                              // not a fling: don't gate mounting
-    this.imageWindow.setGate(false);
+    this.tracker.expectJump(y);
     sc.scrollTop = y;                                        // observers fire next frame -> demand requests
   }
 
-  // Ctrl+wheel zoom anchored on the pointer; plain wheel is left to the browser.
+  // Ctrl+wheel zoom anchored on the pointer. Plain wheel uses the saved gear;
+  // gear 1 is the browser's own distance. Auto-scroll and the page keys do not come through here.
   onWheel(e) {
-    if (!e.ctrlKey) return;
+    if (e.ctrlKey) {
+      e.preventDefault();
+      this.setZoom(this.params.zoom * (e.deltaY < 0 ? 1.1 : 1 / 1.1), e.clientY - this.strip.scroller.getBoundingClientRect().top);
+      return;
+    }
+    const d = wheelScrollDelta(e, this.wheelGear, { w: this.strip.viewW, h: this.strip.viewH });
+    if (!d) return;
     e.preventDefault();
-    this.setZoom(this.params.zoom * (e.deltaY < 0 ? 1.1 : 1 / 1.1), e.clientY - this.strip.scroller.getBoundingClientRect().top);
+    this.strip.scroller.scrollBy({ left: d.dx, top: d.dy, behavior: 'auto' });
   }
+  setWheelSpeed(gear) { this.wheelGear = wheelGear(gear); }
   setZoom(z, anchorY = 0) {
     this.params.zoom = clamp(Math.round(z * 100) / 100, 0.5, 3);
     this.strip.relayout(this.layoutParams(), anchorY);

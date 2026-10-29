@@ -114,6 +114,16 @@ pub struct Extractor {
     pub cache: Arc<PageCache>,
 }
 
+/// Parallel extract/decode workers. v0.7.6 always started 2, so ZIP inflate and the
+/// variant/slice decode path queued behind one pair of threads. Follow the machine,
+/// but stay inside 2..=4: several full-size pages decoding at once is enough RAM.
+pub fn worker_count() -> usize {
+    std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(4)
+        .clamp(2, 4)
+}
+
 impl Extractor {
     pub fn start(cache: Arc<PageCache>, workers: usize) -> Arc<Self> {
         let ex = Arc::new(Self {
@@ -369,11 +379,14 @@ impl Extractor {
             return Err(ReaderError::Unsupported("image too large".into()));
         }
         let img = decode(&raw)?;
-        let (first, last) = if page.is_slice() {
-            book.groups[page.src_page as usize]
-        } else {
-            (idx, idx)
-        };
+        // A normal page has nothing to crop. Skip the full-buffer clone the old
+        // loop did before shrink_to.
+        if !page.is_slice() {
+            let part = shrink_to(img, variant);
+            let (bytes, ext) = encode(&part)?;
+            return self.store(key, ext, &bytes);
+        }
+        let (first, last) = book.groups[page.src_page as usize];
         let mut wanted = None;
         for vi in first..=last {
             let k = (book.id, vi, variant);
@@ -381,12 +394,7 @@ impl Extractor {
             if vi != idx && self.cache.contains(&k) {
                 continue;
             }
-            let part = if p.is_slice() {
-                img.crop_imm(0, p.y0, img.width(), p.h)
-            } else {
-                img.clone()
-            };
-            let part = shrink_to(part, variant);
+            let part = shrink_to(img.crop_imm(0, p.y0, img.width(), p.h), variant);
             let (bytes, ext) = encode(&part)?;
             let cp = self.store(k, ext, &bytes)?;
             if vi == idx {
@@ -469,11 +477,14 @@ fn shrink_to(img: image::DynamicImage, variant: u16) -> image::DynamicImage {
         return img;
     }
     let nh = ((img.height() as u64 * variant as u64) / img.width() as u64).max(1) as u32;
-    img.resize_exact(
-        variant as u32,
-        nh,
-        image::imageops::FilterType::Lanczos3,
-    )
+    // Lanczos3 dominated every saver page and thumbnail. CatmullRom is the
+    // reading-size resample; tiny thumbs (v=160) use the faster triangle filter.
+    let filter = if variant <= 320 {
+        image::imageops::FilterType::Triangle
+    } else {
+        image::imageops::FilterType::CatmullRom
+    };
+    img.resize_exact(variant as u32, nh, filter)
 }
 /// JPEG q92 normally; PNG if the source has alpha (keeps transparency, lossless).
 fn encode(img: &image::DynamicImage) -> Result<(Vec<u8>, &'static str), ReaderError> {

@@ -1,4 +1,4 @@
-# MH Comic Reader (Tauri Desktop) v0.7.6
+# MH Comic Reader (Tauri Desktop) v0.7.7
 
 > **Download for Windows**: grab `mh-reader.exe` from [Releases](https://github.com/jsksskskdnnsj-rgb/vertial-comic-reader/releases) — double-click to run, no build needed.
 > To build from source, see "Build & Run" below.

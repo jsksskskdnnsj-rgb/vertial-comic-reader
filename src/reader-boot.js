@@ -1,7 +1,7 @@
 // reader-boot.js - wires reader.html to the two views (vertical strip: reader.js, page flip: flip.js) and to every reader feature.
 // Chapters and bookmarks are a navigation/display layer: this file only reads positions from the active view and calls view.jumpTo().
 import { T, invoke, win, t, esc, ago, toast, bootPage, prefs, isModalOpen, confirmDialog, choiceDialog, promptDialog } from './shell.js';
-import { Reader, thumbUrl } from './reader.js';
+import { Reader, thumbUrl, wheelGear } from './reader.js';
 import { FlipView } from './flip.js';
 import { lib } from './legacy-api.js';
 import { resolve, episodeAt, prevTarget, nextTarget, tickFractions, episodeLabel, sanePages, DEFAULT_PAGES, fetchEpisodeInfo } from './chapters.js';
@@ -20,7 +20,7 @@ const coverUrl = (id, v = 0) => `${COVER_BASE}/${id}?v=${v ?? 0}`;
 const LARGE_BOOK_PAGES = 1200;                         // above this the large-book warning appears (once per book per session)
 
 // ---- state -----------------------------------------------------------------------------------------------
-const rp = { widthPct: prefs.get('reader.widthPct', 100), gap: prefs.get('reader.gap', 0), dim: prefs.get('reader.dim', 100) };
+const rp = { widthPct: prefs.get('reader.widthPct', 100), gap: prefs.get('reader.gap', 0), dim: prefs.get('reader.dim', 100), wheel: wheelGear(prefs.get('reader.wheelSpeed', 2)) };
 let modeNow = prefs.get('mode', 'scroll');             // default reading mode (Settings); the toolbar toggles it for this session only
 let saverNow = prefs.get('saver', false);
 let view = null, book = null, bms = [], chs = [], chMode = 'folder', chN = DEFAULT_PAGES, chDefaults = { mode: 'folder', pages: DEFAULT_PAGES };
@@ -92,6 +92,7 @@ function showOpening(on) {
 }
 async function startView({ startPos = null } = {}) {
   auto.stop(); $('endCard').hidden = true; $('err').hidden = true;
+  resetScrollChrome();
   showOpening(true);
   if (view) { await view.close(); view = null; }
   book = null;                                                  // drop stale info while the next open is in flight
@@ -102,7 +103,7 @@ async function startView({ startPos = null } = {}) {
     // Assign `book` in beforeMount (runs after openBook, before first onPosition from tick/render)
     // so pageText / ThumbStrip never see null during open.
     await view.open(bookId, {
-      perf: saverNow ? 'saver' : 'balanced', widthPct: rp.widthPct, gap: rp.gap, startPos,
+      perf: saverNow ? 'saver' : 'balanced', widthPct: rp.widthPct, gap: rp.gap, startPos, wheelSpeed: rp.wheel,
       beforeMount: async (info) => { book = info; return largeBookGuard(info); },
     });
   } catch (e) { book = null; view = null; showOpening(false); return openFailed(e); }
@@ -208,6 +209,7 @@ addEventListener('pointerdown', (e) => { if (!e.target.closest('.flyout, #tb')) 
 
 function syncControls() {
   $('w').value = rp.widthPct; $('dim').value = rp.dim; $('saver').checked = saverNow;
+  $('wheel').value = rp.wheel; $('wheelVal').textContent = rp.wheel;
   document.querySelectorAll('#gap button').forEach(b => b.setAttribute('aria-pressed', String(+b.dataset.gap === rp.gap)));
   document.querySelectorAll('#fMode button').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.mode === modeNow)));
   document.querySelectorAll('#flySettings [data-for="scroll"]').forEach(r => { r.hidden = modeNow !== 'scroll'; });
@@ -215,6 +217,7 @@ function syncControls() {
   $('autoSpeed').value = auto.speed; $('autoVal').textContent = auto.speed;
 }
 $('w').addEventListener('input', (e) => { rp.widthPct = +e.target.value; prefs.set('reader.widthPct', rp.widthPct); if (view?.mode === 'scroll') view.setWidthPct(rp.widthPct); });
+$('wheel').addEventListener('input', (e) => { rp.wheel = wheelGear(+e.target.value); prefs.set('reader.wheelSpeed', rp.wheel); $('wheelVal').textContent = rp.wheel; if (view?.mode === 'scroll') view.setWheelSpeed(rp.wheel); });
 $('dim').addEventListener('input', (e) => { rp.dim = +e.target.value; prefs.set('reader.dim', rp.dim); applyDim(); });
 $('gap').addEventListener('click', (e) => { const b = e.target.closest('button'); if (!b) return; rp.gap = +b.dataset.gap; prefs.set('reader.gap', rp.gap); if (view?.mode === 'scroll') view.setGap(rp.gap); syncControls(); });
 $('saver').addEventListener('change', async (e) => { saverNow = e.target.checked; prefs.set('saver', saverNow); await startView({ startPos: view?.topPos() }); });
@@ -232,7 +235,55 @@ function onAutoChange(running) {
 auto.setSpeed(prefs.get('autoSpeed', 4)); onAutoChange(false);
 $('autoSpeed').addEventListener('input', (e) => { auto.setSpeed(+e.target.value); prefs.set('autoSpeed', auto.speed); $('autoVal').textContent = auto.speed; $('autoText').textContent = t('reader.autoOn', { n: auto.speed }); });
 $('autoToggle').addEventListener('click', () => auto.toggle()); $('autoStop').addEventListener('click', () => auto.stop());
-$('host').addEventListener('wheel', () => auto.stop(), { passive: true });
+$('host').addEventListener('wheel', (e) => { if (!e.ctrlKey) armScrollChrome(); auto.stop(); }, { passive: true });
+
+// Scroll-mode chrome. Hide the history column, toolbar, bottom bar and the two
+// reading flyouts while the strip is actually moving; bring them back when it
+// rests or the pointer sits on a screen edge. .no-bp (the c key) is untouched.
+// The bookmark drawer and the page directory are not part of this.
+const CHROME_SETTLE_MS = 480;
+const CHROME_ARM_MS = 400;
+const CHROME_EDGE_PX = 36;
+const CHROME_MIN_DY = 6;
+let chromeScrolling = false, chromeEdge = false, chromeArmedUntil = 0, chromeTimer = 0, chromeLastY = 0, chromePointer = false;
+function resetScrollChrome() {
+  chromeScrolling = false; chromeEdge = false; chromePointer = false;
+  clearTimeout(chromeTimer);
+  $('rg')?.classList.remove('chrome-away');
+}
+function applyScrollChrome() {
+  const hide = view?.mode === 'scroll' && chromeScrolling && !chromeEdge;
+  $('rg')?.classList.toggle('chrome-away', hide);
+}
+function armScrollChrome() { chromeArmedUntil = performance.now() + CHROME_ARM_MS; }
+$('host').addEventListener('scroll', () => {
+  if (view?.mode !== 'scroll' || !view.strip) return;
+  const sc = view.strip.scroller;
+  const y = sc.scrollTop;
+  const dy = Math.abs(y - chromeLastY);
+  chromeLastY = y;
+  if (view.strip.ignoreChromeScroll) return;
+  const user = performance.now() < chromeArmedUntil || chromePointer || auto.running;
+  if (!user || (dy < CHROME_MIN_DY && !auto.running)) return;
+  chromeScrolling = true;
+  applyScrollChrome();
+  clearTimeout(chromeTimer);
+  chromeTimer = setTimeout(() => { chromeScrolling = false; applyScrollChrome(); }, CHROME_SETTLE_MS);
+}, true);
+$('host').addEventListener('pointerdown', (e) => { if (e.target.closest('.scroller')) chromePointer = true; }, true);
+addEventListener('pointerup', () => { chromePointer = false; });
+addEventListener('pointercancel', () => { chromePointer = false; });
+addEventListener('pointermove', (e) => {
+  const near = e.clientX <= CHROME_EDGE_PX || e.clientY <= CHROME_EDGE_PX || e.clientX >= innerWidth - CHROME_EDGE_PX || e.clientY >= innerHeight - CHROME_EDGE_PX;
+  if (near === chromeEdge) return;
+  chromeEdge = near;
+  applyScrollChrome();
+}, { passive: true });
+addEventListener('keydown', (e) => {
+  if (e.ctrlKey || e.metaKey || e.altKey) return;
+  if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
+  if ([' ', 'PageDown', 'PageUp', 'ArrowDown', 'ArrowUp', 'ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(e.key)) armScrollChrome();
+}, true);
 
 // ---- page directory, prev/next page, jump ----------------------------------------------------------------------
 $('tbDir').addEventListener('click', () => {

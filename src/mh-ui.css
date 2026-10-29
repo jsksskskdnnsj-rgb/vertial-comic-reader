@@ -610,3 +610,25 @@ button:focus-visible,a.btn:focus-visible{outline:2px solid var(--accent-ink);out
   .scan-float,.merge-row,.merge-banner{transition:none}
 }
 /* ==== end v0.7.4 ==== */
+
+/* ==== v0.7.7 scroll chrome ====
+   While the vertical strip is moving, tuck the history column, the toolbar and the
+   bottom bar so the page column can use that space. Flyouts (reading settings,
+   auto-scroll) hide with them and come back with them. The bookmark drawer, the
+   page directory and the help layer are not in this rule. .no-bp still owns the
+   manual history collapse (the list button and the c key). */
+.rg.chrome-away{
+  grid-template-columns:minmax(0,1fr);
+  grid-template-rows:minmax(0,1fr);
+  gap:0;
+}
+.rg.chrome-away .bp,
+.rg.chrome-away .tb,
+.rg.chrome-away .bb{display:none}
+.rg.chrome-away .mp{grid-column:1;grid-row:1}
+.rg.chrome-away .flyout{visibility:hidden;pointer-events:none}
+@media(max-width:760px){
+  .rg.chrome-away{grid-template-columns:minmax(0,1fr);grid-template-rows:minmax(0,1fr);gap:0}
+  .rg.chrome-away .bp{display:none}
+}
+/* ==== end v0.7.7 ==== */
