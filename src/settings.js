@@ -6,7 +6,7 @@
 //   reading    -> prefs keys reader-boot.js reads: 'mode', 'reader.widthPct', 'reader.gap',
 //                 'reader.dim', 'saver', 'autoSpeed'
 //   chapters   -> get/set_chapter_defaults
-//   cache      -> cache_stats / cache_set_limit / cache_clear (+ legacy clear_cache)
+//   cache      -> cache_stats / cache_set_limit / cache_clear
 //   data dir   -> get_data_dir / pick_data_dir / set_data_dir / open_data_dir (behaviour unchanged)
 // v0.6 fixes: esc() was used but never imported, so the stats grid silently stayed empty; the
 // "clear library" button was labelled "clear cache" with a "no books" confirmation; the data-folder
@@ -19,11 +19,11 @@ import { BORDER_PRESETS, BG_COLOR_PRESETS, BG_COLOR_DEFAULT, isHex } from './app
 import { DEFAULTS, PANEL_MIN, PANEL_MAX } from './appearance.js';
 import { sanePages, DEFAULT_PAGES } from './chapters.js';
 import { setBackground, resetBackground, setBanner, resetBanner } from './theme-api.js';
+import { imageFilters } from './image-exts.js';
 
 bootPage('settings');
 mountShell('settings');
 const $ = (id) => document.getElementById(id);
-const IMG_EXTS = ['jpg', 'jpeg', 'png', 'webp', 'gif', 'avif', 'bmp', 'jfif'];
 const errText = (e) => String(e?.detail ?? e?.message ?? e);
 
 // ---- language ----------------------------------------------------------------------
@@ -55,7 +55,7 @@ syncAccent();
 
 // ---- background and banner: two independent images (theme config `hero` and `banner`) -------------------
 async function pickImage() {
-  return T.dialog.open({ multiple: false, filters: [{ name: t('settings.imageFilter'), extensions: IMG_EXTS }] }).catch(() => null);
+  return T.dialog.open({ multiple: false, filters: imageFilters(t) }).catch(() => null);
 }
 async function imageAction(fn, okKey) {
   try { await fn(); toast(t(okKey)); applyBackground(); }
@@ -92,6 +92,10 @@ $('widthRange').addEventListener('input', (e) => { prefs.set('reader.widthPct', 
 $('gapSeg').addEventListener('click', (e) => { const b = e.target.closest('[data-gap]'); if (b) { prefs.set('reader.gap', +b.dataset.gap); syncReading(); } });
 $('dimRange').addEventListener('input', (e) => { prefs.set('reader.dim', +e.target.value); syncReading(); });
 $('saverChk').addEventListener('change', (e) => prefs.set('saver', e.target.checked));
+invoke('merge_auto_get').then((v) => { $('mergeAuto').checked = v !== false; }).catch(() => { $('mergeAuto').checked = true; });
+$('mergeAuto').addEventListener('change', (e) => {
+  invoke('merge_auto_set', { on: e.target.checked }).catch((err) => toast(errText(err)));
+});
 $('autoRange').addEventListener('input', (e) => { prefs.set('autoSpeed', +e.target.value); syncReading(); });
 syncReading();
 
@@ -199,7 +203,6 @@ $('cacheLimitBtn').addEventListener('click', async () => {
 $('cacheClearBtn').addEventListener('click', async () => {
   try {
     await invoke('cache_clear', { bookId: null });
-    await invoke('clear_cache').catch(() => {});
     toast(t('settings.cacheCleared'));
     refreshCache();
   } catch (e) { toast(errText(e)); }

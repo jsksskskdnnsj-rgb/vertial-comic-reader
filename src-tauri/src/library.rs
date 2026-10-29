@@ -47,7 +47,13 @@ fn current_pages(state: &ReaderState, book_id: i64) -> Result<Vec<RealPage>, Str
         crate::model::SourceKind::Zip => {
             scan::scan_zip(Path::new(&first)).map_err(|e| e.to_string())?
         }
-        crate::model::SourceKind::Folder => scan::scan_folder(Path::new(&first)),
+        crate::model::SourceKind::Folder => {
+            if row.paths.len() > 1 {
+                scan::scan_folder_parts(&row.paths)
+            } else {
+                scan::scan_folder(Path::new(&first))
+            }
+        }
         crate::model::SourceKind::Images => scan::scan_images(&row.paths),
     };
     if pages.is_empty() {

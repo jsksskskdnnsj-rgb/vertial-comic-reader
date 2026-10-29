@@ -48,8 +48,14 @@ pub(crate) fn open_blocking(
     // itself; `path` below is only an anchor (BookMeta.path is unused for Images —
     // the extractor reads PageMeta.name, the absolute per-page path).
     let first = row.paths.first().cloned().unwrap_or_default();
-    let path = PathBuf::from(&first);
-    if kind != SourceKind::Images && !path.exists() {
+    let anchor = row
+        .paths
+        .iter()
+        .find(|p| PathBuf::from(p).exists())
+        .cloned()
+        .unwrap_or_else(|| first.clone());
+    let path = PathBuf::from(&anchor);
+    if kind != SourceKind::Images && !row.paths.iter().any(|p| PathBuf::from(p).exists()) {
         return Err(ReaderError::SourceMissing(first));
     } // -> "Locate file..." dialog
     // Page-edit overlay: a user-edited page list wins over the scan. A forced
@@ -63,7 +69,16 @@ pub(crate) fn open_blocking(
     } else {
         db::load_edited_pages(&s.db.lock(), id)?
     };
-    let sig = if let Some(e) = &edited {
+    let sig = if kind == SourceKind::Folder && row.paths.len() > 1 && edited.is_none() {
+        let mut parts = Vec::new();
+        for p in &row.paths {
+            parts.push(
+                scan::quick_sig(SourceKind::Folder, std::path::Path::new(p))
+                    .unwrap_or_else(|_| "missing".into()),
+            );
+        }
+        parts.join("|")
+    } else if let Some(e) = &edited {
         // Content-derived: every page edit changes the sig, so JS image URLs
         // (which carry `s=<sig>`) never serve a stale page from the webview cache.
         let mut h: u64 = 0xcbf29ce484222325;
@@ -93,7 +108,13 @@ pub(crate) fn open_blocking(
         let fresh = match kind {
             // zip: central dir + header reads, folder: header reads, images: header reads per file
             SourceKind::Zip => scan::scan_zip(&path)?,
-            SourceKind::Folder => scan::scan_folder(&path),
+            SourceKind::Folder => {
+                if row.paths.len() > 1 {
+                    scan::scan_folder_parts(&row.paths)
+                } else {
+                    scan::scan_folder(&path)
+                }
+            }
             SourceKind::Images => scan::scan_images(&row.paths),
         };
         if fresh.is_empty() {
@@ -186,8 +207,8 @@ pub async fn set_reading_window(
         book: book_id,
         center,
         dir: direction.signum().max(-1).min(1),
-        ahead: ahead.min(16),
-        behind: behind.min(8),
+        ahead: ahead.min(12),
+        behind: behind.min(4),
         variant,
     })
 }
@@ -247,8 +268,18 @@ pub async fn cache_clear(
             Some(id) => s.cache.purge_book(id),
             None => {
                 let win = s.extractor.window();
-                s.cache
-                    .clear(&|k| win.map_or(false, |w| w.pins(k)))
+                let n = s
+                    .cache
+                    .clear(&|k| win.map_or(false, |w| w.pins(k)));
+                // v0.3 `zip_extract_page` wrote data/page_cache. The reader no longer
+                // uses that folder; a full clear removes it along with the page cache.
+                if let Ok(dir) = crate::data_dir() {
+                    let legacy = dir.join("page_cache");
+                    if legacy.is_dir() {
+                        let _ = std::fs::remove_dir_all(legacy);
+                    }
+                }
+                n
             }
         })
     })

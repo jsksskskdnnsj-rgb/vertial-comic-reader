@@ -62,7 +62,7 @@ pub fn scan_zip(path: &Path) -> Result<Vec<RealPage>, ReaderError> {
         .filter(|(_, n)| !n.ends_with('/') && is_image(n))
         .map(|(i, n)| (i as u32, n.replace('\\', "/")))
         .collect();
-    cands.sort_by(|a, b| natord::compare_ignore_case(&a.1, &b.1)); // 2.jpg before 10.jpg
+    cands.sort_by(|a, b| crate::shelf_scan::compare_comic_names(&a.1, &b.1)); // 2.jpg before 10.jpg, 第一话 before 第2话
 
     let mut out = Vec::with_capacity(cands.len());
     for (entry, name) in cands {
@@ -123,7 +123,7 @@ pub fn scan_folder(root: &Path) -> Vec<RealPage> {
             }
         })
         .collect();
-    files.sort_by(|a, b| natord::compare_ignore_case(&a.0, &b.0));
+    files.sort_by(|a, b| crate::shelf_scan::compare_comic_names(&a.0, &b.0));
     files
         .into_iter()
         .map(|(name, bytes)| {
@@ -140,6 +140,36 @@ pub fn scan_folder(root: &Path) -> Vec<RealPage> {
             }
         })
         .collect()
+}
+
+/// Several folder roots, in reading order, as one book.
+/// Each page name is prefixed with the folder name so folder-chapters stay distinct,
+/// and `src_path` is the absolute file so the extractor does not look under paths[0] only.
+pub fn scan_folder_parts(roots: &[String]) -> Vec<RealPage> {
+    let mut out = Vec::new();
+    for (i, root_s) in roots.iter().enumerate() {
+        let root = Path::new(root_s);
+        if !root.is_dir() {
+            continue;
+        }
+        let raw = root
+            .file_name()
+            .map(|s| s.to_string_lossy().replace(['/', '\\'], "／"))
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| format!("part{}", i + 1));
+        let part = if roots.len() > 1 {
+            format!("{:02}-{}", i + 1, raw)
+        } else {
+            raw
+        };
+        for mut page in scan_folder(root) {
+            let abs = root.join(&page.name);
+            page.name = format!("{part}/{}", page.name);
+            page.src_path = Some(abs.to_string_lossy().to_string());
+            out.push(page);
+        }
+    }
+    out
 }
 
 /// Loose images: `paths` come from the DB (user's drop order), name = absolute path.

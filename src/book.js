@@ -22,6 +22,7 @@ function parsePaths(b) { try { const p = JSON.parse(b.paths); return Array.isArr
 
 async function load() {
   book = id ? await lib.shelfGet(id).catch(() => null) : null;
+  $('bookLoading').hidden = true;
   if (!book) {
     $('hero').hidden = true; $('details').hidden = true; $('notFound').hidden = false;
     return;

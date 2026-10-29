@@ -12,7 +12,8 @@
   <div class="work">
     <nav id="shell-rail"></nav>
     <main class="page-main">
-      <div class="page-head"><a class="linklike" href="library.html" data-i="common.back"></a></div>
+      <div class="page-head"><a class="back-link" href="library.html"><svg class="i"><use href="icons.svg#back"/></svg><span data-i="common.back"></span></a></div>
+      <p class="loading-line" id="bookLoading"><span class="spin" aria-hidden="true"></span><span data-i="common.loading"></span></p>
       <section class="panel glass book-hero" id="hero" hidden>
         <img class="cover book-cover" id="cover" alt="">
         <div class="book-info">
@@ -44,7 +45,11 @@
           <button class="btn btn--ghost btn--sm" id="resetEditBtn"><span data-i="lib.resetEdits"></span></button>
         </div>
       </section>
-      <p class="empty" id="notFound" hidden data-i="book.notFound"></p>
+      <div class="empty-state" id="notFound" hidden>
+        <svg class="i"><use href="icons.svg#book-open"/></svg>
+        <p data-i="book.notFound"></p>
+        <a class="btn btn--ghost btn--sm" href="library.html"><span data-i="nav.library"></span></a>
+      </div>
     </main>
   </div>
 </div>

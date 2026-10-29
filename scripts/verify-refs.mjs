@@ -8,8 +8,8 @@ import { pathToFileURL } from 'node:url';
 const ROOT = process.cwd();
 const SRC = path.join(ROOT, 'src');
 const RS = path.join(ROOT, 'src-tauri', 'src');
-const COMMANDS = `pick_images pick_zips pick_folder_paths list_images zip_open zip_extract_page clear_cache open_data_dir
-shelf_add shelf_list shelf_get shelf_progress shelf_remove shelf_clear get_data_dir pick_data_dir set_data_dir
+const COMMANDS = `pick_folder_paths list_images open_data_dir
+shelf_list shelf_get shelf_remove shelf_clear get_data_dir pick_data_dir set_data_dir
 get_reader_config set_reader_config get_theme_config set_theme_config set_hero_image reset_hero_image win_minimize
 win_toggle_maximize win_close take_drop_queue folder_add folder_list folder_rename folder_remove shelf_move open_book
 rescan_book close_book set_reading_window save_progress load_progress fix_page_dims cache_stats cache_set_limit
@@ -17,7 +17,9 @@ cache_clear get_chapter_defaults set_chapter_defaults set_book_chapter_settings 
 episode_info add_bookmark list_bookmarks delete_bookmark update_bookmark_note reanchor_bookmark bookmark_counts
 ensure_cover list_recent_books list_recent_added import_paths reveal_book relink_book reorder_pages delete_pages
 append_pages reset_page_edits page_edit_info shelf_rename book_reset_progress check_books_missing import_merged
-library_stats set_banner_image reset_banner_image get_default_data_dir win_start_drag win_hide_if_tray app_exit`.split(/\s+/);
+library_stats set_banner_image reset_banner_image get_default_data_dir win_start_drag win_hide_if_tray app_exit
+scan_begin scan_status scan_cancel list_scan_issues folder_reorder import_scan_books
+merge_auto_get merge_auto_set list_merge_pending resolve_merge_pending merge_books unmerge_book`.split(/\s+/);
 
 const results = []; let failures = 0, warnings = 0;
 // Optional allow-list scripts/verify-refs.allow: lines "<text in message> :: <more text>" downgrade matching

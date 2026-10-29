@@ -1,8 +1,10 @@
 #!/usr/bin/env node
 // Restores the binary files that cannot be pushed as text.
 // The GitHub snapshot push used for this repo is UTF-8 text only, so the
-// 6 binary files (app icons + default wallpaper/banner) are stored base64
-// encoded in scripts/restore-binaries.json. Run from anywhere:
+// app icons and the default wallpaper/banner are stored base64-encoded in
+// scripts/restore-binaries.json. The icons match the output of
+// `python scripts/gen-icons.py` (that script overwrites icons/; run it again
+// after a restore if you want to redraw them). Run from anywhere:
 //   node scripts/restore-binaries.mjs
 // Files that already exist with a matching sha256 are left untouched.
 import fs from 'node:fs';

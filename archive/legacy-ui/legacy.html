@@ -632,7 +632,7 @@ main{flex:1;display:flex;flex-direction:column;min-width:0}
         folders.map(function (f) { return '<option value="' + f.id + '"' + (e.folder_id === f.id ? ' disabled' : '') + '>📁 ' + MH.esc(f.name) + '</option>'; }).join('') +
         '</select>' +
         '<button class="btn danger" id="dDel">删除</button></div></div>';
-      $('#dRead').addEventListener('click', function () { location.href = 'reader.html?id=' + id; });
+      $('#dRead').addEventListener('click', function () { location.href = 'legacy-reader.html?id=' + id; });
       $('#dMove').addEventListener('change', function () {
         if (!this.value) return;
         var fid = this.value === 'none' ? null : +this.value;
@@ -643,7 +643,7 @@ main{flex:1;display:flex;flex-direction:column;min-width:0}
       });
       var rs = $('#dRestart');
       if (rs) rs.addEventListener('click', function () {
-        MH.invoke('shelf_progress', { id: id, page: 0 }).then(function () { location.href = 'reader.html?id=' + id; });
+        MH.invoke('shelf_progress', { id: id, page: 0 }).then(function () { location.href = 'legacy-reader.html?id=' + id; });
       });
       $('#dDel').addEventListener('click', function () {
         if (!confirm('确定从书架删除「' + e.name + '」吗？（不删除源文件）')) return;

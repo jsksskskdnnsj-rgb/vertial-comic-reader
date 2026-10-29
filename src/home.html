@@ -26,7 +26,11 @@
         <aside class="panel glass history-panel">
           <h2><svg class="i"><use href="icons.svg#clock"/></svg><span data-i="home.recent"></span><span class="spacer"></span><a class="linklike" href="library.html?view=recent" data-i="home.more"></a></h2>
           <div class="hstack" id="recent"></div>
-          <p class="empty" id="noRecent" hidden data-i="home.noRecent"></p>
+          <div class="empty-state" id="noRecent" hidden>
+            <svg class="i"><use href="icons.svg#clock"/></svg>
+            <p data-i="home.noRecent"></p>
+            <a class="btn btn--ghost btn--sm" href="import.html"><span data-i="nav.import"></span></a>
+          </div>
         </aside>
 
         <div class="home-col">
@@ -38,6 +42,7 @@
               <div class="dz-btns">
                 <button class="btn btn--primary" id="pickFiles"><svg class="i"><use href="icons.svg#folder"/></svg><span data-i="imp.addZips"></span></button>
                 <button class="btn btn--ghost" id="pickFolders"><svg class="i"><use href="icons.svg#folder"/></svg><span data-i="imp.addFolders"></span></button>
+                <a class="btn btn--ghost" href="scan.html"><svg class="i"><use href="icons.svg#search"/></svg><span data-i="scan.open"></span></a>
               </div>
               <p class="dz-note" data-i="home.dropNote"></p>
             </div>
@@ -56,7 +61,10 @@
           <section class="panel glass">
             <h2><svg class="i"><use href="icons.svg#plus"/></svg><span data-i="home.added"></span><span class="spacer"></span><a class="linklike" href="library.html?sort=added" data-i="home.more"></a></h2>
             <div class="cards-row" id="added"></div>
-            <p class="empty" id="noAdded" hidden data-i="home.noAdded"></p>
+            <div class="empty-state" id="noAdded" hidden>
+              <svg class="i"><use href="icons.svg#plus"/></svg>
+              <p data-i="home.noAdded"></p>
+            </div>
           </section>
         </div>
       </div>

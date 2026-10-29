@@ -1987,7 +1987,7 @@
         applyMode();
         toast(state.mode === "scroll" ? "竖滑模式：一路滑到底" : "翻页模式：点左右两侧翻页");
       });
-      $("#backBtn").addEventListener("click", function () { location.href = "index.html"; });
+      $("#backBtn").addEventListener("click", function () { location.href = "legacy.html"; });
       $("#anotherBtn").addEventListener("click", function () { $("#backBtn").click(); });
       $("#toTopBtn").addEventListener("click", function () { goToPage(0); });
       $("#addMoreBtn").addEventListener("click", function () { openSheet(els.addSheet); });
@@ -2142,6 +2142,6 @@
       renderShelf(); // 打开页面先把文件栏里已有的条目列出来
     </script>
   <script src="./mh-common.js"></script>
-<script src="./reader-boot.js"></script>
+<script src="./legacy-reader-boot.js"></script>
 </body>
 </html>

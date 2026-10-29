@@ -9,21 +9,13 @@
 //!   reveal_book       { bookId }       relink_book       { bookId, path }
 
 use rusqlite::{params, Connection};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
-/// Image extensions for import filtering, mirroring the frontend MH.imgRe
-/// (mh-common.js): \.(jpe?g|jfif|png|apng|webp|gif|bmp|dib|avif|svg|ico|tif|tiff|heic|heif|jxl)$/i
-/// Broader than main.rs IMAGE_EXTS (adds jfif, apng, dib, heic, heif).
-const IMPORT_IMG_EXTS: &[&str] = &[
-    // Servable formats only (see main.rs IMAGE_EXTS note): admitting tif /
-    // heic / jxl / svg / ico here produced books whose every page failed
-    // with "not a recognised image" in the reader.
-    "jpg", "jpeg", "jfif", "jpe", "png", "apng", "webp", "gif", "bmp", "avif",
-];
-
+/// Same list as `crate::IMAGE_EXTS` (dialog filters and the reader sniff path).
 fn is_import_image(p: &Path) -> bool {
-    IMPORT_IMG_EXTS.contains(&crate::ext_of(p).as_str())
+    crate::IMAGE_EXTS.contains(&crate::ext_of(p).as_str())
 }
 
 fn file_name_of(p: &Path) -> String {
@@ -142,7 +134,7 @@ pub struct ImportResult {
     pub failed: Vec<ImportFailure>,
 }
 
-/// Insert one shelf row with shelf_add's shape (plus folder_id). Returns the new id.
+/// Insert one shelf row (name, kind, paths, cover, counts, folder). Returns the new id.
 fn shelf_insert(
     conn: &Connection,
     name: &str,
@@ -250,11 +242,11 @@ fn import_folder(
     path: &str,
     folder_id: Option<i64>,
     res: &mut ImportResult,
-) {
+) -> Option<i64> {
     let paths_json = serde_json::to_string(&[path]).unwrap_or_default();
     if shelf_exists(conn, "folder", &paths_json) {
         res.skipped += 1;
-        return;
+        return None;
     }
     // Reuse the verified walk (crate::list_images = walk_dir over the folder).
     let files = match crate::list_images(path.to_string()) {
@@ -264,7 +256,7 @@ fn import_folder(
                 path: path.to_string(),
                 reason: e,
             });
-            return;
+            return None;
         }
     };
     if files.is_empty() {
@@ -272,7 +264,7 @@ fn import_folder(
             path: path.to_string(),
             reason: "文件夹里没有图片".to_string(),
         });
-        return;
+        return None;
     }
     let total_size: i64 = files.iter().map(|f| f.size as i64).sum();
     let name = file_name_of(Path::new(path));
@@ -288,11 +280,15 @@ fn import_folder(
         Ok(id) => {
             res.added += 1;
             trigger_cover(id);
+            Some(id)
         }
-        Err(e) => res.failed.push(ImportFailure {
-            path: path.to_string(),
-            reason: e,
-        }),
+        Err(e) => {
+            res.failed.push(ImportFailure {
+                path: path.to_string(),
+                reason: e,
+            });
+            None
+        }
     }
 }
 
@@ -313,10 +309,13 @@ pub fn import_paths(
         failed: Vec::new(),
     };
     let mut loose: Vec<String> = Vec::new();
+    let mut fresh_folders: Vec<i64> = Vec::new();
     for raw in &paths {
         let p = PathBuf::from(raw);
         if p.is_dir() {
-            import_folder(&conn, raw, folder_id, &mut res);
+            if let Some(id) = import_folder(&conn, raw, folder_id, &mut res) {
+                fresh_folders.push(id);
+            }
         } else if crate::kind_of(&p) == Some("zip") {
             import_zip(&conn, raw, folder_id, &mut res);
         } else if is_import_image(&p) {
@@ -362,6 +361,63 @@ pub fn import_paths(
             }
         }
     }
+    let _ = crate::merge::absorb_new(&conn, &fresh_folders);
+    Ok(res)
+}
+
+#[derive(Deserialize)]
+pub struct ScanImportItem {
+    pub path: String,
+    pub title: String,
+    pub pages: u64,
+}
+
+/// Insert books the folder scan already counted. One transaction, no second walk,
+/// no cover generation (a missing cover is filled later by mhcover).
+#[tauri::command]
+pub fn import_scan_books(items: Vec<ScanImportItem>, folder_id: Option<i64>) -> Result<ImportResult, String> {
+    let conn = crate::db_conn()?;
+    let mut known: HashSet<String> = HashSet::new();
+    if let Ok(mut stmt) = conn.prepare("SELECT paths FROM shelf WHERE kind='folder'") {
+        if let Ok(rows) = stmt.query_map([], |r| r.get::<_, String>(0)) {
+            for row in rows.flatten() {
+                let Ok(paths) = serde_json::from_str::<Vec<String>>(&row) else { continue };
+                for p in paths {
+                    known.insert(crate::shelf_scan::path_key(&p));
+                }
+            }
+        }
+    }
+    let mut res = ImportResult { added: 0, skipped: 0, failed: Vec::new() };
+    let mut fresh_folders: Vec<i64> = Vec::new();
+    let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
+    for item in items {
+        let path = item.path.trim();
+        if path.is_empty() {
+            continue;
+        }
+        let key = crate::shelf_scan::path_key(path);
+        if known.contains(&key) {
+            res.skipped += 1;
+            continue;
+        }
+        if item.pages == 0 {
+            res.failed.push(ImportFailure { path: path.to_string(), reason: "文件夹里没有图片".into() });
+            continue;
+        }
+        let paths_json = serde_json::to_string(&vec![path]).unwrap_or_else(|_| "[]".into());
+        let title = if item.title.trim().is_empty() { file_name_of(Path::new(path)) } else { item.title.trim().to_string() };
+        match shelf_insert(&tx, &title, "folder", &paths_json, item.pages as i64, 0, folder_id) {
+            Ok(id) => {
+                res.added += 1;
+                known.insert(key);
+                fresh_folders.push(id);
+            }
+            Err(e) => res.failed.push(ImportFailure { path: path.to_string(), reason: e }),
+        }
+    }
+    tx.commit().map_err(|e| e.to_string())?;
+    let _ = crate::merge::absorb_new(&conn, &fresh_folders);
     Ok(res)
 }
 

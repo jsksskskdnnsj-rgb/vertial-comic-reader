@@ -10,6 +10,7 @@ export default {
   'nav.import': '\u5bfc\u5165', // Import
   'nav.settings': '\u8bbe\u7f6e', // Settings
   'search.placeholder': '\u641c\u7d22\u4e66\u67b6\u2026', // Search your library…
+  'search.shortcut': '按 / 或 Ctrl+K 聚焦搜索，Esc 清空',
   'win.min': '\u6700\u5c0f\u5316', // Minimize
   'win.max': '\u6700\u5927\u5316', // Maximize
   'win.close': '\u5173\u95ed', // Close
@@ -27,6 +28,7 @@ export default {
   'common.retry': '\u91cd\u8bd5', // Retry
   'common.save': '\u4fdd\u5b58', // Save
   'common.saved': '\u5df2\u4fdd\u5b58', // Saved
+  'common.loading': '\u6b63\u5728\u52a0\u8f7d\u2026', // Loading…
   'type.zip': 'ZIP', // ZIP
   'type.folder': '\u6587\u4ef6\u5939', // Folder
   'type.images': '\u56fe\u7247', // Images
@@ -58,8 +60,8 @@ export default {
   'home.noRecent': '\u8fd8\u6ca1\u6709\u9605\u8bfb\u8bb0\u5f55\u3002', // No reading history yet.
   'home.noAdded': '\u5bfc\u5165\u7684\u4e66\u4f1a\u663e\u793a\u5728\u8fd9\u91cc\u3002', // Imported books show up here.
   'lib.title': '\u4e66\u67b6', // Library
-  'lib.folders': '\u6587\u4ef6\u5939', // Folders
-  'lib.newFolder': '\u65b0\u5efa\u6587\u4ef6\u5939', // New folder
+  'lib.folders': '分类', // Categories
+  'lib.newFolder': '新建分类', // New category
   'lib.allBooks': '\u5168\u90e8\u4e66\u7c4d', // All books
   'lib.count': '{n} \u672c', // {n} books
   'lib.sort': '\u6392\u5e8f', // Sort
@@ -72,7 +74,9 @@ export default {
   'lib.menu': '\u66f4\u591a', // More
   'lib.open': '\u6253\u5f00', // Open
   'lib.details': '\u8be6\u60c5', // Details
-  'lib.moveTo': '\u79fb\u52a8\u5230\u6587\u4ef6\u5939\u2026', // Move to folder…
+  'lib.moveTo': '移动到分类…', // Move to category…
+  'lib.moveUp': '上移', // Move up
+  'lib.moveDown': '下移', // Move down
   'lib.startOver': '\u4ece\u5934\u5f00\u59cb', // Start over
   'lib.startOverMsg': '\u8981\u628a\u300a{title}\u300b\u7684\u9605\u8bfb\u8fdb\u5ea6\u91cd\u7f6e\u5230\u7b2c\u4e00\u9875\u5417\uff1f', // Reset your reading progress for “{title}” to the first page?
   'lib.reveal': '\u5728\u8d44\u6e90\u7ba1\u7406\u5668\u4e2d\u663e\u793a', // Show in Explorer
@@ -80,10 +84,13 @@ export default {
   'lib.removeMsg': '\u8981\u628a\u300a{title}\u300b\u4ece\u4e66\u67b6\u79fb\u9664\u5417\uff1f\u78c1\u76d8\u4e0a\u7684\u6587\u4ef6\u4e0d\u4f1a\u88ab\u5220\u9664\u3002', // Remove “{title}” from the library? The files on disk are not deleted.
   'lib.rename': '\u91cd\u547d\u540d', // Rename
   'lib.renameTitle': '\u91cd\u547d\u540d\u6587\u4ef6\u5939', // Rename folder
-  'lib.deleteFolder': '\u5220\u9664\u6587\u4ef6\u5939', // Delete folder
-  'lib.deleteFolderMsg': '\u8981\u5220\u9664\u6587\u4ef6\u5939\u201c{name}\u201d\u5417\uff1f\u91cc\u9762\u7684\u4e66\u4f1a\u4fdd\u7559\u5728\u4e66\u67b6\u4e2d\u3002', // Delete the folder “{name}”? Books inside stay in your library.
-  'lib.folderName': '\u6587\u4ef6\u5939\u540d\u79f0', // Folder name
-  'lib.noFolder': '\u4e0d\u653e\u5165\u6587\u4ef6\u5939', // No folder
+  'lib.deleteFolder': '删除分类', // Delete category
+  'lib.deleteFolderMsg': '要删除分类「{name}」吗？里面的书会留在书架上。', // Delete the category “{name}”? Books inside stay in your library.
+  'lib.folderName': '分类名称', // Category name
+  'lib.noFolder': '未分类', // Uncategorized
+  'lib.page': '{n} / {m}',
+  'lib.pagePrev': '上一页', // Previous
+  'lib.pageNext': '下一页', // Next
   'book.pages': '{n} \u9875', // {n} pages
   'book.size': '\u6587\u4ef6\u5927\u5c0f', // File size
   'book.progress': '\u9605\u8bfb\u8fdb\u5ea6', // Progress
@@ -317,5 +324,89 @@ export default {
   'settings.borderReset': '恢复默认',
   'settings.tray': '窗口与托盘',
   'settings.closeToTray': '关闭窗口时隐藏到托盘',
-  'settings.closeToTrayHelp': '关闭此项则关闭窗口即退出程序。点击托盘图标可恢复窗口，托盘菜单包含“显示”和“退出”。',
+  'settings.closeToTrayHelp': '关闭此项则关闭窗口即退出程序。点击托盘图标可恢复窗口，托盘菜单包含“显示”和“退出”。再次打开程序会回到这个窗口。',
+  'help.title': '键盘快捷键',
+  'help.hint': '按 ? 打开此列表，Esc 关闭。对话框或输入框聚焦时，快捷键会暂停。',
+  'help.space': '下一屏。Shift+空格回到上一屏',
+  'help.pageUp': '上一屏',
+  'help.nudge': '小幅上移或下移',
+  'help.page': '上一页或下一页。翻页模式下，左右方向键翻页',
+  'help.ends': '第一页或最后一页',
+  'help.zoom': '放大、缩小，或回到 100%（竖滑模式）',
+  'help.bookmark': '在此处添加或取消书签',
+  'help.mode': '切换竖滑和翻页',
+  'help.auto': '开始或停止自动滚动',
+  'help.dir': '打开页目录',
+  'help.history': '显示或隐藏阅读记录',
+  'help.jump': '跳到指定页',
+  'help.full': '全屏',
+  'help.episode': '上一话或下一话',
+  'help.leave': '关闭面板、退出全屏，或返回',
+  'help.toggle': '显示或隐藏此列表',
+  'lib.lastRead': '上次阅读 {when}',
+  'lib.notStarted': '尚未开始',
+  'lib.progressPct': '{n}%',
+  'scan.open': '扫描文件夹',
+  'scan.title': '扫描文件夹',
+  'scan.help': '选中放着各本漫画的文件夹。每一个里面有图片的直接子文件夹会成为一本漫画，书名就是这个子文件夹的名字。书里面的文件夹会按阅读顺序变成章节（2 在 10 前，第一话在第2话前）。',
+  'scan.pick': '选择文件夹',
+  'scan.scanning': '已查看 {folders} 个文件夹 · 找到 {books} 本',
+  'scan.current': '正在查看 {path}',
+  'scan.cancel': '取消',
+  'scan.done': '在 {folders} 个文件夹里找到 {books} 本。',
+  'scan.cancelled': '已取消。停下来之前找到 {books} 本。',
+  'scan.loose': '所选文件夹里直接放着 {n} 张图片，没有变成一本书。请先放进子文件夹再扫描。',
+  'scan.empty': '没有找到可以成书的子文件夹。子文件夹里要有图片才会成为一本漫画。',
+  'scan.pages': '{n} 页',
+  'scan.chapters': '{n} 个章节',
+  'scan.noChapters': '没有分话',
+  'scan.already': '已在书架',
+  'scan.selectAll': '选中新书',
+  'scan.add': '添加所选',
+  'scan.adding': '正在添加…',
+  'scan.added': '已添加 {n} 本，{skipped} 本本来就在书架里。',
+  'scan.noneSelected': '请至少选择一本还没在书架里的漫画。',
+  'scan.toLibrary': '打开书架',
+  'scan.driveRoot': '请选择放着漫画的文件夹。整盘扫描、以及跳过系统目录，这一版还没有做。',
+  'scan.missing': '找不到这个文件夹。',
+  'scan.notFolder': '请选择文件夹，而不是文件。',
+  'scan.later': '这次扫描不会收录 zip / rar 压缩包，也不会整盘跳过 Windows、Program Files 这类系统目录。压缩包请到导入页添加，或先解压成子文件夹再扫描。',
+  'scan.review': '先核对，再添加想要的书。',
+  'scan.category': '加入分类',
+  'scan.resumed': '接着上次没扫完的地方继续扫这个文件夹。',
+  'scan.issues': '问题（{n}）',
+  'scan.issueEmpty': '空文件',
+  'scan.issueSymlink': '跳过的链接',
+  'scan.issueNonUtf8': '文件名无法显示',
+  'scan.issueMissing': '找不到',
+  'scan.issueUnreadable': '无法读取',
+  'scan.float': '正在扫描 {folders} 个文件夹 · 已找到 {books} 本',
+  'scan.finishedNote': '扫描完成：新增 {added} 本，合并 {merged} 组，待确认 {pending} 组',
+  'scan.pendingChip': '待确认 {n}',
+  'settings.mergeAuto': '自动合并同一部漫画',
+  'settings.mergeAutoHelp': '扫描或导入时，名字相同且卷号不重叠的文件夹会合成一本。之后可以在书库里拆开。文件仍留在原处。',
+  'merge.title': '是同一部漫画吗',
+  'merge.help': '名字很像的文件夹会列在一起。拖动一行，或用上下按钮，排好阅读顺序。合并只改书架记录，不会移动或删除文件。',
+  'merge.merge': '合并',
+  'merge.separate': '保持分开',
+  'merge.rename': '书名',
+  'merge.category': '分类',
+  'merge.pages': '{n} 页',
+  'merge.chapters': '{n} 话',
+  'merge.up': '上移',
+  'merge.down': '下移',
+  'merge.drag': '拖动排序',
+  'merge.confident': '书名相同，卷号不重叠',
+  'merge.uncertain': '有点像，请确认',
+  'merge.none': '没有待确认的合并',
+  'merge.undo': '拆回原来的文件夹',
+  'merge.undone': '已拆成单独的书',
+  'merge.pick': '选择',
+  'merge.selected': '合并 {n} 本',
+  'merge.needTwo': '请至少选择两本文件夹漫画',
+  'merge.done': '书架已更新',
+  'merge.pendingBanner': '{n} 组可能是同一部漫画，等待确认',
+  'merge.foldersOnly': '这种方式只能合并文件夹漫画',
+  'lib.unmerge': '拆开合并',
+  'lib.mergeSelected': '合并所选',
 };

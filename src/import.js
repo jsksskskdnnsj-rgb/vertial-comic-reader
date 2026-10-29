@@ -6,18 +6,21 @@
 // Subfolders: a picked folder is imported with ALL its nested subfolders (the backend scan is recursive); before a folder
 // is listed it is inspected with list_images, the row shows how many images / subfolders it holds, and a folder with no
 // images at any depth is refused (reported under the list) instead of being added silently.
-import { T, t, esc, toast, bootPage } from './shell.js';
+import { T, invoke, t, esc, toast, bootPage } from './shell.js';
 import { lib } from './legacy-api.js';
 import { mountShell, watchDrops } from './shell-ui.js';
 import { sortSources } from './naming.js';
 import { orderByRange, suggestName, compareSources, baseName } from './merge-order.js';
 import { inspectFolder, looksLikeFile } from './folder-scan.js';
+import { IMAGE_EXTS, ZIP_EXTS, archiveAndImageFilters } from './image-exts.js';
 
 bootPage('import');
 mountShell('import');
 
 const $ = (id) => document.getElementById(id);
-const IMG_EXTS = ['jpg', 'jpeg', 'png', 'webp', 'gif', 'avif', 'bmp', 'jfif'];
+const extRe = (list) => new RegExp(`\\.(${list.join('|')})$`, 'i');
+const ZIP_RE = extRe(ZIP_EXTS);
+const IMG_RE = extRe(IMAGE_EXTS);
 let sources = [];        // absolute paths, in import order
 let merge = false;
 let manualOrder = false; // true once the user moved a row by hand: stop auto-sorting
@@ -30,9 +33,8 @@ const pkey = (p) => String(p).replace(/\//g, '\\').replace(/\\+$/, '').toLowerCa
 const plural = (n, one, many) => t(n === 1 ? one : many, { n });
 
 function kindOf(p) {
-  const low = p.toLowerCase();
-  if (/\.(zip|cbz)$/.test(low)) return t('type.zip');
-  if (/\.(jpe?g|jfif|jpe|png|webp|gif|bmp|avif)$/.test(low)) return t('type.images');
+  if (ZIP_RE.test(p)) return t('type.zip');
+  if (IMG_RE.test(p)) return t('type.images');
   return t('type.folder');
 }
 function autoOrder() {
@@ -127,10 +129,7 @@ $('mergeName').addEventListener('input', () => { nameEdited = $('mergeName').val
 $('addZips').addEventListener('click', async () => {
   const picked = await T.dialog.open({
     multiple: true,
-    filters: [
-      { name: t('imp.zipFilter'), extensions: ['zip', 'cbz'] },
-      { name: t('imp.imageFilter'), extensions: IMG_EXTS },
-    ],
+    filters: archiveAndImageFilters(t),
   }).catch(() => null);
   addSources([].concat(picked ?? []));
 });
@@ -160,6 +159,8 @@ $('goBtn').addEventListener('click', async () => {
   if (merge && sources.length < 2) { toast(t('imp.mergeNeedTwo')); return; }
   const folderId = $('folderSel').value ? +$('folderSel').value : null;
   $('goBtn').disabled = true;
+  $('goBtn').classList.add('is-busy');
+  $('goBtn').setAttribute('aria-busy', 'true');
   $('summary').textContent = t('imp.working');
   $('failList').innerHTML = '';
   $('openNew').hidden = true;
@@ -173,6 +174,8 @@ $('goBtn').addEventListener('click', async () => {
     } else {
       const r = await lib.importPaths([...sources], folderId);
       $('summary').textContent = t('imp.summary', { a: r.added, s: r.skipped, f: r.failed.length });
+      const pending = await invoke('list_merge_pending').catch(() => []);
+      if (pending?.length) toast(t('merge.pendingBanner', { n: pending.length }));
       if (r.added) toast(t('imp.importedToast', { n: r.added }));
       else if (!r.failed.length) toast(t('imp.nothingNew'));
       $('failList').innerHTML = (r.failed || []).map((f) =>
@@ -189,6 +192,8 @@ $('goBtn').addEventListener('click', async () => {
     toast(String(e?.detail ?? e?.message ?? e));
   } finally {
     $('goBtn').disabled = false;
+    $('goBtn').classList.remove('is-busy');
+    $('goBtn').removeAttribute('aria-busy');
   }
 });
 $('openNew').addEventListener('click', () => {

@@ -20,7 +20,7 @@
             <svg class="i"><use href="icons.svg#plus"/></svg><span data-i="lib.newFolder"></span>
           </button>
         </aside>
-        <section>
+        <section class="panel glass lib-main">
           <div class="page-head">
             <h1 id="title" data-i="lib.title"></h1>
             <span class="muted num" id="count"></span>
@@ -42,13 +42,26 @@
               <button data-status="finished"><span data-i="lib.statusFinished"></span> <span class="cnt num"></span></button>
             </span>
             <span class="spacer"></span>
+            <button class="btn btn--ghost btn--sm" id="pickMode" type="button" data-i="merge.pick"></button>
+            <button class="btn btn--primary btn--sm" id="mergeSel" type="button" hidden></button>
             <span class="seg" id="modeSeg" role="group" data-i-label="lib.viewMode">
               <button data-mode="grid" data-i-label="lib.viewGrid" data-i-title="lib.viewGrid"><svg class="i"><use href="icons.svg#grid"/></svg></button>
               <button data-mode="list" data-i-label="lib.viewList" data-i-title="lib.viewList"><svg class="i"><use href="icons.svg#list"/></svg></button>
             </span>
           </div>
+          <button class="merge-banner" id="mergeBanner" type="button" hidden></button>
+          <p class="loading-line" id="libLoading"><span class="spin" aria-hidden="true"></span><span data-i="common.loading"></span></p>
           <div class="cards-row lib-grid" id="grid"></div>
-          <p class="empty" id="empty" hidden></p>
+          <div class="lib-pager" id="pager" hidden>
+            <button class="btn btn--ghost btn--sm" id="pagePrev" type="button"><span data-i="lib.pagePrev"></span></button>
+            <span class="muted num" id="pageLabel"></span>
+            <button class="btn btn--ghost btn--sm" id="pageNext" type="button"><span data-i="lib.pageNext"></span></button>
+          </div>
+          <div class="empty-state" id="empty" hidden>
+            <svg class="i"><use href="icons.svg#shelf"/></svg>
+            <p id="emptyText"></p>
+            <a class="btn btn--primary btn--sm" id="emptyImport" href="import.html" hidden><span data-i="nav.import"></span></a>
+          </div>
         </section>
       </div>
     </main>

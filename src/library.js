@@ -11,13 +11,14 @@
 // v0.6.3: reading-status filter (All / Unread / In progress / Finished, with counts) and a grid/list view switch; the folder
 // filter, status filter and view mode are remembered next to the sort (prefs libFolder / libStatus / libMode / libSort); ?status=
 // overrides the saved status like ?sort= does. Filtering and status rules live in library-filters.js (pure, unit-tested).
-import { invoke, t, esc, toast, bootPage, prefs, confirmDialog, promptDialog } from './shell.js';
+import { invoke, t, esc, toast, bootPage, prefs, confirmDialog, promptDialog, ago } from './shell.js';
 import { lib } from './legacy-api.js';
 import { mountShell, coverUrl, wireCoverFallback } from './shell-ui.js';
 import { fetchEpisodeInfo } from './chapters.js';
 import { sortBy, compareTitles } from './naming.js';
 import { filterBooks, countStatuses, statusOf, readLibraryState, validFolder } from './library-filters.js';
 import * as act from './book-actions.js';
+import { openMergeDialog } from './merge-ui.js';
 
 const params = new URLSearchParams(location.search);
 const view = params.get('view') || '';
@@ -39,10 +40,22 @@ let viewMode = saved.mode;          // 'grid' | 'list' (remembered)
 let sortMode = saved.sort;          // 'recent' | 'added' | 'name' | 'title' (remembered; ?sort= overrides)
 let query = (params.get('q') || '').trim();
 let loadSeq = 0;
+let page = 0;
+let extraSeq = 0;
+let picking = false;
+const selected = new Set();
+const PAGE_SIZE = 48;
 
 mountShell(view === 'recent' ? 'recent' : view === 'marked' ? 'marked' : 'library', {
   searchValue: query,
-  onSearch: (v) => { query = v; renderGrid(); },
+  onSearch: (v) => {
+    query = v;
+    page = 0;
+    const u = new URL(location.href);
+    if (v) u.searchParams.set('q', v); else u.searchParams.delete('q');
+    if (u.href !== location.href) history.replaceState(null, '', u);
+    renderGrid();
+  },
 });
 wireCoverFallback();
 
@@ -67,19 +80,32 @@ function renderFolders() {
     fixed('none', t('lib.noFolder'), unfiled) +
     folders.map((f) => `<div class="folder-row" data-f="${f.id}" role="button" tabindex="0" aria-current="${cur(f.id)}">${icon}<span class="fname">${esc(f.name)}</span>
         <span class="f-act">
+          <button data-fup="${f.id}" title="${esc(t('lib.moveUp'))}" aria-label="${esc(t('lib.moveUp'))}"><svg class="i"><use href="icons.svg#chevron-up"/></svg></button>
+          <button data-fdown="${f.id}" title="${esc(t('lib.moveDown'))}" aria-label="${esc(t('lib.moveDown'))}"><svg class="i"><use href="icons.svg#chevron-down"/></svg></button>
           <button data-frename="${f.id}" title="${esc(t('lib.rename'))}" aria-label="${esc(t('lib.rename'))}"><svg class="i"><use href="icons.svg#pencil"/></svg></button>
           <button data-fdel="${f.id}" title="${esc(t('common.delete'))}" aria-label="${esc(t('common.delete'))}"><svg class="i"><use href="icons.svg#trash"/></svg></button>
         </span><span class="cnt num">${f.count ?? books.filter((b) => b.folder_id === f.id).length}</span></div>`).join('');
 }
 
 const STATUS_KEY = { unread: 'lib.statusUnread', progress: 'lib.statusProgress', finished: 'lib.statusFinished' };
-function rowHtml(b, { cnt, pct, meta, kind }) {
-  const st = statusOf(b);
-  return `<article class="lib-row" data-id="${b.id}" tabindex="0" role="link">
+function readMeta(b) {
+  if (statusOf(b) === 'unread' || !b.updated_at) return t('lib.notStarted');
+  const when = ago(b.updated_at);
+  return when ? t('lib.lastRead', { when }) : t('lib.notStarted');
+}
+function badgeText(st, pct) {
+  if (st === 'finished') return t('lib.statusFinished');
+  if (st === 'unread') return t('lib.statusUnread');
+  return t('lib.progressPct', { n: pct });
+}
+function rowHtml(b, { cnt, pct, meta, kind, st, read }) {
+  const on = picking && selected.has(b.id);
+  return `<article class="lib-row${on ? ' is-picked' : ''}" data-id="${b.id}" tabindex="0" role="link">
+    ${picking ? '<span class="pick-mark" aria-hidden="true"></span>' : ''}
     <img class="cover" alt="" loading="lazy" data-cover="${b.id}" src="${coverOf(b)}">
     <div class="lib-row__main">
       <b title="${esc(b.name)}">${esc(b.name)}</b>
-      <div class="meta num">${esc(meta)}${edited.has(b.id) ? ' · ✎' : ''}</div>
+      <div class="meta num">${esc(meta)}${edited.has(b.id) ? ' · ✎' : ''} · ${esc(read)}</div>
       <div class="bar"><i style="width:${pct}%"></i></div>
     </div>
     <span class="lib-row__chips">
@@ -100,36 +126,27 @@ function renderStatus() {
   document.querySelectorAll('#modeSeg button').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.mode === viewMode)));
 }
 
+function pageWindow(list) {
+  const pages = Math.max(1, Math.ceil(list.length / PAGE_SIZE));
+  if (page >= pages) page = pages - 1;
+  if (page < 0) page = 0;
+  return { slice: list.slice(page * PAGE_SIZE, page * PAGE_SIZE + PAGE_SIZE), pages, total: list.length };
+}
 function renderGrid() {
+  $('libLoading').hidden = true;
   const list = visibleBooks();
+  const win = pageWindow(list);
   renderStatus();
   $('count').textContent = t('lib.count', { n: list.length });
   $('grid').className = viewMode === 'list' ? 'lib-list' : 'cards-row lib-grid';
-  $('grid').innerHTML = list.map((b) => {
-    const ep = episodes.get(b.id);
-    const cnt = bmCounts.get(b.id) || 0;
-    const pct = statusOf(b) === 'finished' ? 100 : b.page_count ? Math.min(100, Math.round(((b.last_page || 0) / b.page_count) * 100)) : 0;
-    const meta = ep
-      ? `${t('common.episodeOf', { i: ep.index, n: ep.total })} · ${t('book.pages', { n: b.page_count })}`
-      : t('book.pages', { n: b.page_count });
-    const kind = KIND_KEY[b.kind];
-    if (viewMode === 'list') return rowHtml(b, { cnt, pct, meta, kind: kind || null });
-    return `<article class="book-card" data-id="${b.id}" tabindex="0" role="link">
-      <div class="cover-wrap">
-        <img class="cover" alt="" loading="lazy" data-cover="${b.id}" src="${coverOf(b)}">
-        ${cnt > 0 ? `<i class="ribbon" title="${esc(t('bookmarks.title'))}">${cnt}</i>` : ''}
-        ${kind ? `<span class="kind-badge">${esc(t(kind))}</span>` : ''}
-        ${missing.has(b.id) ? `<span class="missing-badge">${esc(t('lib.missing'))}</span>` : ''}
-        <button class="more-btn" data-more="${b.id}" aria-label="${esc(t('lib.menu'))}"><svg class="i"><use href="icons.svg#more"/></svg></button>
-        <div class="bar cover-bar"><i style="width:${pct}%"></i></div>
-      </div>
-      <b title="${esc(b.name)}">${esc(b.name)}</b>
-      <div class="meta num">${esc(meta)}${edited.has(b.id) ? ' · ✎' : ''}</div>
-    </article>`;
-  }).join('');
+  $('grid').innerHTML = win.slice.map((b) => cardHtml(b)).join('');
   const empty = $('empty');
   empty.hidden = list.length > 0;
-  empty.textContent = books.length ? t('lib.noBooks') : t('lib.emptyLibrary');
+  $('emptyText').textContent = books.length ? t('lib.noBooks') : t('lib.emptyLibrary');
+  $('emptyImport').hidden = books.length > 0;
+  $('pager').hidden = list.length <= PAGE_SIZE;
+  $('pageLabel').textContent = t('lib.page', { n: page + 1, m: win.pages });
+  loadExtras(win.slice);
 }
 function render() { renderFolders(); renderGrid(); }
 
@@ -177,6 +194,10 @@ function bookMenu(btn, b) {
   ];
   if (edited.has(b.id)) items.push({ a: 'resetedit', label: t('lib.resetEdits'), fn: async () => reload(await act.resetEdits(b), b.id, true) });
   if (missing.has(b.id)) items.push({ a: 'relink', label: t('reader.locate'), fn: async () => reload(await act.relinkBook(b), b.id, true) });
+  if (b.merged) items.push({ a: 'unmerge', label: t('lib.unmerge'), fn: async () => {
+    try { await invoke('unmerge_book', { bookId: b.id }); toast(t('merge.undone')); await load(); }
+    catch (e) { toast(errText(e)); }
+  } });
   items.push(
     { a: 'reveal', label: t('lib.reveal'), fn: () => act.revealBook(b) },
     '-',
@@ -213,6 +234,16 @@ async function deleteFolder(id) {
   if (!await confirmDialog({ title: t('lib.deleteFolder'), message: t('lib.deleteFolderMsg', { name: f?.name ?? '' }), ok: t('common.delete'), danger: true })) return;
   try { await lib.deleteFolder(id); if (filter === id) { filter = 'all'; prefs.set('libFolder', filter); } toast(t('common.saved')); load(); } catch (e) { toast(errText(e)); }
 }
+async function moveFolder(id, dir) {
+  const ids = folders.map((f) => f.id);
+  const i = ids.indexOf(id);
+  const j = i + dir;
+  if (i < 0 || j < 0 || j >= ids.length) return;
+  const swap = ids[i];
+  ids[i] = ids[j];
+  ids[j] = swap;
+  try { await invoke('folder_reorder', { ids }); load(); } catch (e) { toast(errText(e)); }
+}
 
 // ---- events ----------------------------------------------------------------------
 document.addEventListener('click', (e) => {
@@ -221,12 +252,25 @@ document.addEventListener('click', (e) => {
   if (more) { e.stopPropagation(); const b = books.find((x) => x.id === +more.dataset.more); if (b) bookMenu(more, b); return; }
   const fr = e.target.closest('[data-frename]');
   if (fr) { e.stopPropagation(); renameFolder(+fr.dataset.frename); return; }
+  const fu = e.target.closest('[data-fup]');
+  if (fu) { e.stopPropagation(); moveFolder(+fu.dataset.fup, -1); return; }
+  const fdn = e.target.closest('[data-fdown]');
+  if (fdn) { e.stopPropagation(); moveFolder(+fdn.dataset.fdown, 1); return; }
   const fd = e.target.closest('[data-fdel]');
   if (fd) { e.stopPropagation(); deleteFolder(+fd.dataset.fdel); return; }
   const frow = e.target.closest('[data-f]');
-  if (frow) { const v = frow.dataset.f; filter = v === 'all' || v === 'none' ? v : +v; prefs.set('libFolder', filter); render(); return; }
+  if (frow) { const v = frow.dataset.f; filter = v === 'all' || v === 'none' ? v : +v; page = 0; prefs.set('libFolder', filter); render(); return; }
   const card = e.target.closest('.book-card, .lib-row');
-  if (card && !closedMenu) location.href = `reader.html?book=${card.dataset.id}`;
+  if (card && !closedMenu) {
+    if (picking) {
+      const id = +card.dataset.id;
+      if (selected.has(id)) selected.delete(id); else selected.add(id);
+      updateMergeBtn();
+      renderGrid();
+      return;
+    }
+    location.href = `reader.html?book=${card.dataset.id}`;
+  }
 });
 document.addEventListener('keydown', (e) => {
   if (e.key !== 'Enter' && e.key !== ' ') return;
@@ -234,14 +278,18 @@ document.addEventListener('keydown', (e) => {
   const frow = e.target.closest('[data-f]');
   if (frow) { e.preventDefault(); frow.click(); return; }
   const card = e.target.closest('.book-card, .lib-row');
-  if (card) { e.preventDefault(); location.href = `reader.html?book=${card.dataset.id}`; }
+  if (card) {
+    e.preventDefault();
+    if (picking) { card.click(); return; }
+    location.href = `reader.html?book=${card.dataset.id}`;
+  }
 });
 $('sortSel').value = sortMode;
-$('sortSel').addEventListener('change', () => { sortMode = $('sortSel').value; prefs.set('libSort', sortMode); renderGrid(); });
+$('sortSel').addEventListener('change', () => { sortMode = $('sortSel').value; page = 0; prefs.set('libSort', sortMode); renderGrid(); });
 $('newFolder').addEventListener('click', newFolder);
 $('statusSeg').addEventListener('click', (e) => {
   const b = e.target.closest('[data-status]'); if (!b) return;
-  statusFilter = b.dataset.status; prefs.set('libStatus', statusFilter); renderGrid();
+  statusFilter = b.dataset.status; page = 0; prefs.set('libStatus', statusFilter); renderGrid();
 });
 $('modeSeg').addEventListener('click', (e) => {
   const b = e.target.closest('[data-mode]'); if (!b) return;
@@ -255,32 +303,127 @@ async function pool(items, n, fn) {
     while (i < items.length) await fn(items[i++]);
   }));
 }
+async function loadExtras(slice) {
+  const my = ++extraSeq;
+  const rows = slice || [];
+  if (!rows.length) return;
+  const ids = new Set(rows.map((b) => b.id));
+  const eps = await fetchEpisodeInfo(invoke, rows.map((b) => ({ id: b.id, page: b.last_page ?? 0 }))).catch(() => []);
+  if (my !== extraSeq) return;
+  rows.forEach((b, i) => episodes.set(b.id, eps?.[i] || null));
+  const found = new Set();
+  await pool(rows, 8, async (b) => {
+    const info = await lib.pageEditInfo(b.id).catch(() => null);
+    if (info?.edited) found.add(b.id);
+  });
+  if (my !== extraSeq) return;
+  for (const id of ids) edited.delete(id);
+  for (const id of found) edited.add(id);
+  renderFolders();
+  const list = visibleBooks();
+  const win = pageWindow(list);
+  $('grid').innerHTML = win.slice.map((b) => cardHtml(b)).join('');
+}
+function firstPath(b) {
+  try {
+    const p = JSON.parse(b.paths || '[]');
+    return Array.isArray(p) ? (p[0] || '') : '';
+  } catch { return ''; }
+}
+function updateMergeBtn() {
+  const n = selected.size;
+  const btn = $('mergeSel');
+  btn.hidden = !picking || n < 2;
+  btn.textContent = t('merge.selected', { n });
+  $('pickMode').setAttribute('aria-pressed', String(picking));
+}
+async function mergeSelected() {
+  const chosen = books.filter((b) => selected.has(b.id) && b.kind === 'folder');
+  if (chosen.length < 2) { toast(t(selected.size >= 2 ? 'merge.foldersOnly' : 'merge.needTwo')); return; }
+  const title = chosen.map((b) => b.name).sort((a, b) => a.length - b.length)[0] || '';
+  openMergeDialog({
+    folders,
+    groups: [{
+      suggested_title: title,
+      confident: false,
+      members: chosen.map((b) => ({
+        name: b.name,
+        path: firstPath(b),
+        pages: b.page_count || 0,
+        chapters: 0,
+        order_label: '',
+        shelf_id: b.id,
+        cover_ver: 0,
+      })),
+    }],
+    onDone: () => { picking = false; selected.clear(); updateMergeBtn(); load(); },
+  });
+}
+async function refreshMergeBanner() {
+  const rows = await invoke('list_merge_pending').catch(() => []);
+  const btn = $('mergeBanner');
+  const n = rows?.length || 0;
+  btn.hidden = n === 0;
+  btn.textContent = n ? t('merge.pendingBanner', { n }) : '';
+  btn.onclick = () => openMergeDialog({ groups: rows, folders, onDone: () => { refreshMergeBanner(); load(); } });
+}
+function cardHtml(b) {
+  const ep = episodes.get(b.id);
+  const cnt = bmCounts.get(b.id) || 0;
+  const st = statusOf(b);
+  const pct = st === 'finished' ? 100 : b.page_count ? Math.min(100, Math.round(((b.last_page || 0) / b.page_count) * 100)) : 0;
+  const meta = ep
+    ? `${t('common.episodeOf', { i: ep.index, n: ep.total })} · ${t('book.pages', { n: b.page_count })}`
+    : t('book.pages', { n: b.page_count });
+  const kind = KIND_KEY[b.kind];
+  const read = readMeta(b);
+  if (viewMode === 'list') return rowHtml(b, { cnt, pct, meta, kind: kind || null, st, read });
+  const on = picking && selected.has(b.id);
+  return `<article class="book-card${on ? ' is-picked' : ''}" data-id="${b.id}" tabindex="0" role="link">
+      <div class="cover-wrap">
+        ${picking ? '<span class="pick-mark" aria-hidden="true"></span>' : ''}
+        <img class="cover" alt="" loading="lazy" data-cover="${b.id}" src="${coverOf(b)}">
+        ${cnt > 0 ? `<i class="ribbon" title="${esc(t('bookmarks.title'))}">${cnt}</i>` : ''}
+        ${kind ? `<span class="kind-badge">${esc(t(kind))}</span>` : ''}
+        ${missing.has(b.id) ? `<span class="missing-badge">${esc(t('lib.missing'))}</span>` : `<span class="prog-badge prog-badge--${st}">${esc(badgeText(st, pct))}</span>`}
+        <button class="more-btn" data-more="${b.id}" aria-label="${esc(t('lib.menu'))}"><svg class="i"><use href="icons.svg#more"/></svg></button>
+        <div class="bar cover-bar"><i style="width:${pct}%"></i></div>
+      </div>
+      <b title="${esc(b.name)}">${esc(b.name)}</b>
+      <div class="meta num">${esc(meta)}${edited.has(b.id) ? ' · ✎' : ''}</div>
+      <div class="meta meta--read">${esc(read)}</div>
+    </article>`;
+}
 async function load() {
   const my = ++loadSeq;
+  page = 0;
   const [bk, fl] = await Promise.all([lib.allBooks().catch(() => []), lib.folders().catch(() => null)]);
   if (my !== loadSeq) return;
   books = bk; folders = fl ?? [];
   if (fl) { const f = validFolder(filter, folders); if (f !== filter) { filter = f; prefs.set('libFolder', f); } }   // a remembered folder that was deleted -> All (a failed folder_list must not wipe it)
-  render(); // first paint: covers, names, progress
+  updateMergeBtn();
+  refreshMergeBanner();
+  render(); // first paint: this page of covers, names, progress
 
-  const [eps, counts, miss] = await Promise.all([
-    fetchEpisodeInfo(invoke, books.map((b) => ({ id: b.id, page: b.last_page ?? 0 }))).catch(() => []),
+  const [counts, miss] = await Promise.all([
     books.length ? invoke('bookmark_counts', { bookIds: books.map((b) => b.id) }).catch(() => []) : [],
     lib.missing().catch(() => []),
   ]);
   if (my !== loadSeq) return;
-  episodes = new Map(books.map((b, i) => [b.id, eps?.[i] || null]));
   bmCounts = new Map((counts || []).map((r) => [r.bookId, r.count]));
   missing = new Set(miss || []);
-  render();
-
-  const next = new Set();
-  await pool(books, 8, async (b) => {
-    const info = await lib.pageEditInfo(b.id).catch(() => null);
-    if (info?.edited) next.add(b.id);
-  });
-  if (my !== loadSeq) return;
-  edited = next;
-  renderGrid();
+  renderFolders();
+  const list = visibleBooks();
+  const win = pageWindow(list);
+  $('grid').innerHTML = win.slice.map((b) => cardHtml(b)).join('');
 }
+$('pickMode').addEventListener('click', () => {
+  picking = !picking;
+  if (!picking) selected.clear();
+  updateMergeBtn();
+  renderGrid();
+});
+$('mergeSel').addEventListener('click', mergeSelected);
+$('pagePrev').addEventListener('click', () => { if (page > 0) { page -= 1; renderGrid(); } });
+$('pageNext').addEventListener('click', () => { page += 1; renderGrid(); });
 load();

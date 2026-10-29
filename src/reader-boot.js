@@ -15,7 +15,7 @@ bootPage('library');
 mountShell('library');
 
 const bookId = Number(new URLSearchParams(location.search).get('book'));
-const COVER_BASE = T.core.convertFileSrc('', 'mhcover').replace(/\/$/, '');
+const COVER_BASE = T.core?.convertFileSrc ? T.core.convertFileSrc('', 'mhcover').replace(/\/$/, '') : '';
 const coverUrl = (id, v = 0) => `${COVER_BASE}/${id}?v=${v ?? 0}`;
 const LARGE_BOOK_PAGES = 1200;                         // above this the large-book warning appears (once per book per session)
 
@@ -77,21 +77,26 @@ async function largeBookGuard(info) {
   return v === 'saver' ? { perf: 'saver' } : undefined;
 }
 
+function showOpening(on) {
+  const n = $('readerLoading');
+  if (n) n.hidden = !on;
+}
 async function startView({ startPos = null } = {}) {
   auto.stop(); $('endCard').hidden = true; $('err').hidden = true;
+  showOpening(true);
   if (view) { await view.close(); view = null; }
   resetTrack(); strip.reset(); applyDim();
   const Mode = modeNow === 'flip' ? FlipView : Reader;
   view = new Mode($('host'), { onPosition, scrubber: [$('track'), $('thumb'), $('tiplabel')] });
   try {
     await view.open(bookId, { perf: saverNow ? 'saver' : 'balanced', widthPct: rp.widthPct, gap: rp.gap, startPos, beforeMount: largeBookGuard });
-  } catch (e) { view = null; return openFailed(e); }
+  } catch (e) { view = null; showOpening(false); return openFailed(e); }
   book = view.info; endDismissed = false; endArmAt = performance.now() + 1500;
   chMode = book.chapterMode; chN = sanePages(book.chapterPages); $('chrem').checked = !!book.chapterOverridden;
   $('bpCover').src = coverUrl(bookId); $('bbThumb').src = coverUrl(bookId);
   $('bpTitle').textContent = book.title; $('bcBook').textContent = book.title; $('bbBook').textContent = book.title;
   $('bpChips').innerHTML = `<span class="chip">${esc(t('book.pages', { n: book.realPages }))}</span>`;
-  view.refresh(); recompute(); syncControls(); await Promise.all([loadBookmarks(), loadHistory()]);
+  view.refresh(); recompute(); syncControls(); showOpening(false); await Promise.all([loadBookmarks(), loadHistory()]);
 }
 function openFailed(e) {
   if (e?.code === 'cancelled') return leave('library.html');
@@ -243,13 +248,58 @@ $('errLocate').addEventListener('click', async () => {
 });
 const toggleFs = async () => win.setFullscreen(!(await win.isFullscreen()));
 $('fsBtn').addEventListener('click', toggleFs);
+const HELP_ROWS = [
+  ['Space  ·  PgDn', 'help.space'],
+  ['Shift+Space  ·  PgUp', 'help.pageUp'],
+  ['↑  ↓', 'help.nudge'],
+  ['←  →', 'help.page'],
+  ['Home  ·  End', 'help.ends'],
+  ['Ctrl  +  −  0', 'help.zoom'],
+  ['B', 'help.bookmark'],
+  ['M', 'help.mode'],
+  ['A', 'help.auto'],
+  ['D', 'help.dir'],
+  ['C', 'help.history'],
+  ['G', 'help.jump'],
+  ['F  ·  F11', 'help.full'],
+  ['[  ·  ]', 'help.episode'],
+  ['Esc', 'help.leave'],
+  ['?  ·  H', 'help.toggle'],
+];
+const helpOpen = () => !$('helpOverlay').hidden;
+function renderHelp() {
+  $('helpGrid').innerHTML = HELP_ROWS.map(([keys, key]) =>
+    `<div class="help-row"><kbd>${esc(keys)}</kbd><span>${esc(t(key))}</span></div>`).join('');
+}
+function setHelp(open) {
+  $('helpOverlay').hidden = !open;
+  $('helpBtn')?.classList.toggle('is-on', open);
+  if (open) {
+    renderHelp();
+    document.documentElement.dataset.modal = '1';
+    const card = $('helpOverlay')?.querySelector('.help-card');
+    if (card && !card.hasAttribute('tabindex')) card.tabIndex = -1;
+    card?.focus({ preventScroll: true });
+  } else if (!document.querySelector('.modal-backdrop')) {
+    delete document.documentElement.dataset.modal;
+  }
+}
+$('helpBtn').addEventListener('click', () => setHelp(!helpOpen()));
+$('helpClose').addEventListener('click', () => setHelp(false));
+$('helpOverlay').addEventListener('click', (e) => { if (e.target === $('helpOverlay')) setHelp(false); });
 addEventListener('keydown', (e) => {
-  if (isModalOpen() || e.target instanceof HTMLInputElement || e.ctrlKey || e.metaKey || e.altKey) return;
+  if (isModalOpen() || e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
   const k = e.key.toLowerCase();
   if (k === 'escape') {
+    if (helpOpen()) { setHelp(false); e.preventDefault(); return; }
     if (!$('flySettings').hidden || !$('flyAuto').hidden) closeFlies(null); else if (drawerOpen()) sideBm(false); else if (!$('endCard').hidden) $('endKeep').click();
     else win.isFullscreen().then(f => (f ? win.setFullscreen(false) : leave())); return;
   }
+  if (e.key === '?' || k === 'h') {
+    if (e.repeat || e.ctrlKey || e.metaKey || e.altKey) return;
+    setHelp(!helpOpen()); e.preventDefault(); return;
+  }
+  if (helpOpen() || e.ctrlKey || e.metaKey || e.altKey) return;
   if (!view) return;
   if (k === 'b') toggleBookmark(); else if (k === 'm') $('tbMode').click(); else if (k === 'a') auto.toggle(); else if (k === 'd') $('tbDir').click(); else if (k === 'c') $('bpToggle').click();
   else if (k === 'g') $('pgCount').click(); else if (k === 'f' || k === 'f11') toggleFs(); else if (k === '[') goEpisode(prevTarget(chs, view.topPos())); else if (k === ']') goEpisode(nextTarget(chs, view.topPos())); else return;
@@ -266,3 +316,4 @@ win.onCloseRequested(async (e) => {
 wireTrack(); trackObserver.observe($('track'));
 invoke('get_chapter_defaults').then(d => { chDefaults = d; }).catch(() => {});
 startView();
+if (new URLSearchParams(location.search).get('help') === '1') setHelp(true);
