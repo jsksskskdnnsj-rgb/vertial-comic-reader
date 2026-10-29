@@ -1,4 +1,4 @@
-# MH Comic Reader (Tauri Desktop) v0.7.4
+# MH Comic Reader (Tauri Desktop) v0.7.5
 
 > **Download for Windows**: grab `mh-reader.exe` from [Releases](https://github.com/jsksskskdnnsj-rgb/vertial-comic-reader/releases) — double-click to run, no build needed.
 > To build from source, see "Build & Run" below.
@@ -38,7 +38,7 @@ The webview can paint AVIF bytes directly. This build of the `image` crate has n
 1. Install Rust (`rustup-init.exe` from https://rustup.rs), Node.js LTS, and VS Build Tools (Desktop development with C++). Windows 10/11 ships WebView2.
 2. Clone the repo and, in the project root:
    ```
-   python scripts/gen-icons.py   # redraw every icon (png / ico / icns) in the soft-light theme; overwrites existing files
+   python scripts/gen-icons.py   # redraw every icon (default cartoon variant C; --variant a or b for the other two); overwrites existing files
    npm install                   # first time only
    npm run build
    ```
@@ -70,7 +70,7 @@ mh-reader/
     src/               # commands, extractor, SQLite, mhpage / mhcover / mhfile
   scripts/
     copy-exe.cjs
-    gen-icons.py       # redraws the app icons (32/128/256/512 png, ico, icns)
+    gen-icons.py       # redraws the app icons. Default is variant C (page tower); --variant a|b draws the other two
 ```
 
 ## Notes

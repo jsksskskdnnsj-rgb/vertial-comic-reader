@@ -1,4 +1,4 @@
-# MH漫画阅读器（Tauri 桌面版）v0.7.4
+# MH漫画阅读器（Tauri 桌面版）v0.7.5
 
 > **普通用户直接下载**：去 [Releases](https://github.com/jsksskskdnnsj-rgb/vertial-comic-reader/releases) 下载 `mh-reader.exe`，双击即用，无需编译。
 > 开发者从源码构建请看下面的「构建运行」。
@@ -38,7 +38,7 @@ avif 页面可以由 WebView 直接画出来。本程序的 `image` 库没有打
 1. 安装 Rust（https://rustup.rs 的 `rustup-init.exe`）、Node.js LTS、VS 生成工具（C++ 桌面开发）。Win10/11 自带 WebView2。
 2. 把本仓库克隆到任意目录，在根目录执行：
    ```
-   python scripts/gen-icons.py   # 按柔光主题重绘全部图标（png / ico / icns），会覆盖旧文件
+   python scripts/gen-icons.py   # 重绘全部图标（默认卡通变体 C；--variant a 或 b 换另外两版），会覆盖旧文件
    npm install                   # 只有第一次需要
    npm run build
    ```
@@ -70,7 +70,7 @@ mh-reader/
     src/               # 命令、extractor、SQLite、mhpage / mhcover / mhfile
   scripts/
     copy-exe.cjs       # 构建后把二进制拷到根目录
-    gen-icons.py       # 重绘应用图标（32/128/256/512 png、ico、icns）
+    gen-icons.py       # 重绘应用图标。默认变体 C（三页小塔）；--variant a|b 换另外两版
 ```
 
 ## 说明
