@@ -10,7 +10,7 @@
   var id = new URLSearchParams(location.search).get('id');
   var iv = document.getElementById('importView');
   if (iv) iv.style.display = 'none'; // v2 阅读页不再用旧导入页
-  if (!id) { location.href = 'index.html'; return; }
+  if (!id) { location.href = 'legacy.html'; return; }
   var sid = +id;
 
   function blobOf(url) {
@@ -72,7 +72,7 @@
   invoke('shelf_get', { id: sid }).then(function (entry) {
     if (!entry) {
       toast('找不到这本漫画');
-      setTimeout(function () { location.href = 'index.html'; }, 1200);
+      setTimeout(function () { location.href = 'legacy.html'; }, 1200);
       return;
     }
     toast('正在打开…');
