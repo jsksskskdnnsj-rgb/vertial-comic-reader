@@ -1,4 +1,4 @@
-# MH Comic Reader (Tauri Desktop) v0.7.3
+# MH Comic Reader (Tauri Desktop) v0.7.4
 
 > **Download for Windows**: grab `mh-reader.exe` from [Releases](https://github.com/jsksskskdnnsj-rgb/vertial-comic-reader/releases) — double-click to run, no build needed.
 > To build from source, see "Build & Run" below.
@@ -13,7 +13,8 @@ A local vertical-scroll comic reader for Windows (Tauri 2 + Rust + vanilla HTML/
 
 - **Pages**: Home, Library, Import, book details, Settings, and the reader. The entry point is `src/home.html` (the old single-page `index.html` is gone)
 - **Three import types**: ZIP / CBZ, folders (including nested folders), and loose images — or drag files into the window
-- **Scan a folder**: pick one directory. Each immediate subfolder that contains images becomes a book named after that folder, and folders inside it become chapters (2 before 10, including Chinese chapter numbers). Review the list, then add what you want. A folder already on the shelf is not added again. The scan runs in the background and can be cancelled; an unfinished scan of the same folder continues next time, and a finished one starts fresh. Unreadable images are skipped and listed on the page. Archives and whole-drive scans are not part of this yet — import a zip from the Import page
+- **Scan a folder**: pick one directory. Each immediate subfolder that contains images becomes a book named after that folder, and folders inside it become chapters (2 before 10, including Chinese chapter numbers). Review the list, then add what you want. A folder already on the shelf is not added again. The scan runs in the background and can be cancelled; you can keep reading and change pages while it runs. A small progress pill in the corner of every page opens the scan page. When it finishes, the app shows a toast and, if permitted, a system notification with how many books were added, merged, and still waiting to confirm. An unfinished scan of the same folder continues next time, and a finished one starts fresh. Unreadable images are skipped and listed on the page. Archives and whole-drive scans are not part of this yet — import a zip from the Import page
+- **Similar folders**: when folder names share a base after volume, chapter, bracket, and punctuation marks are removed, and each one has a distinct order (chapters 1–50 / 51–100, vol 1 / vol 2, 上 / 下, part 1 / part 2), they become one book automatically, in that order. Auto-merge is on by default and can be turned off in Settings. Uncertain groups wait in a list where you can rename, pick a category, drag or nudge the order, or keep them separate. In the library you can select several folders and merge them, and split a merged book back apart. Only the library records change — files are not moved or deleted
 - **On-demand reading**: opening a book scans the listing; pages are extracted as you reach them (extractor queue + virtual list). The whole archive is not loaded into memory
 - **SQLite library**: stores paths only, never copies your files. The cover is an early decodable page, scaled to 240px
 - **Resume**, bookmarks anchored to a specific image, and chapters (none / by folder / every N pages)

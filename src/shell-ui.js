@@ -4,7 +4,7 @@
 // slider works either way; a custom image also becomes --banner-image for the Home banner;
 // resetting to the default removes the layer; language button label is translated; the drop-queue
 // poll pauses while the window is hidden.
-import { T, invoke, t, esc, prefs, applyTheme, applyI18n, wireWindow, lang, setLang } from './shell.js';
+import { T, invoke, t, esc, toast, prefs, applyTheme, applyI18n, wireWindow, lang, setLang } from './shell.js';
 import { appearanceVars } from './appearance.js';
 import { extrasVars } from './appearance-extras.js';
 
@@ -127,6 +127,88 @@ export function mountShell(active = '', opts = {}) {
   }
   applyI18n();
   wireWindow();
+  mountScanFloat();
+}
+
+/** Corner pill while a folder scan is running, on every page. Click opens the scan page.
+ *  The Rust scan keeps its own state, so moving between pages does not restart it. */
+function mountScanFloat() {
+  if (document.getElementById('scanFloat')) return;
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.id = 'scanFloat';
+  btn.className = 'scan-float';
+  btn.hidden = true;
+  btn.innerHTML = `<span class="spin" aria-hidden="true"></span><span id="scanFloatText"></span>`;
+  btn.addEventListener('click', () => { location.href = 'scan.html'; });
+  document.body.append(btn);
+  const text = btn.querySelector('#scanFloatText');
+  const preview = new URLSearchParams(location.search).get('preview');
+  if (preview === 'float') {
+    btn.hidden = false;
+    text.textContent = t('scan.float', { folders: 128, books: 14 });
+    return;
+  }
+  const onScan = /(?:^|\/)scan\.html$/.test(location.pathname);
+  let noted = '';
+  let pendingCache = null;
+  let pendingAt = 0;
+  const showRunning = (s) => {
+    btn.hidden = false;
+    btn.classList.remove('is-idle');
+    text.textContent = t('scan.float', { folders: s.folders_scanned || 0, books: s.books_found || 0 });
+  };
+  const showChip = (n) => {
+    btn.hidden = false;
+    btn.classList.add('is-idle');
+    text.textContent = t('scan.pendingChip', { n });
+  };
+  const hide = () => { btn.hidden = true; };
+  async function pendingCount() {
+    const now = Date.now();
+    if (pendingCache != null && now - pendingAt < 4000) return pendingCache;
+    pendingAt = now;
+    try {
+      const rows = await invoke('list_merge_pending');
+      pendingCache = Array.isArray(rows) ? rows.length : 0;
+    } catch {
+      if (pendingCache == null) pendingCache = 0;
+    }
+    return pendingCache;
+  }
+  async function tick() {
+    let s = null;
+    try { s = await invoke('scan_status'); } catch { s = null; }
+    const running = s?.phase === 'running';
+    if (running) {
+      if (!onScan) showRunning(s);
+      else hide();
+      return;
+    }
+    if (s?.phase === 'done') {
+      const key = `${s.root}|${s.phase}|${s.folders_scanned}|${s.merged}|${s.pending}|${s.added}`;
+      if (sessionStorage.getItem('mh.scanNote') !== key) {
+        sessionStorage.setItem('mh.scanNote', key);
+        const msg = t('scan.finishedNote', { added: s.added || 0, merged: s.merged || 0, pending: s.pending || 0 });
+        toast(msg);
+        notifyDone(msg);
+      }
+    }
+    const n = await pendingCount();
+    if (!onScan && n > 0) showChip(n);
+    else hide();
+  }
+  async function notifyDone(body) {
+    if (typeof Notification === 'undefined') return;
+    let perm = Notification.permission;
+    if (perm === 'default') {
+      try { perm = await Notification.requestPermission(); } catch { return; }
+    }
+    if (perm !== 'granted') return;
+    try { new Notification(t('app.name'), { body }); } catch { /* the toast already showed */ }
+  }
+  tick();
+  setInterval(tick, 1000);
 }
 
 function applyAccent() {

@@ -42,11 +42,14 @@
               <button data-status="finished"><span data-i="lib.statusFinished"></span> <span class="cnt num"></span></button>
             </span>
             <span class="spacer"></span>
+            <button class="btn btn--ghost btn--sm" id="pickMode" type="button" data-i="merge.pick"></button>
+            <button class="btn btn--primary btn--sm" id="mergeSel" type="button" hidden></button>
             <span class="seg" id="modeSeg" role="group" data-i-label="lib.viewMode">
               <button data-mode="grid" data-i-label="lib.viewGrid" data-i-title="lib.viewGrid"><svg class="i"><use href="icons.svg#grid"/></svg></button>
               <button data-mode="list" data-i-label="lib.viewList" data-i-title="lib.viewList"><svg class="i"><use href="icons.svg#list"/></svg></button>
             </span>
           </div>
+          <button class="merge-banner" id="mergeBanner" type="button" hidden></button>
           <p class="loading-line" id="libLoading"><span class="spin" aria-hidden="true"></span><span data-i="common.loading"></span></p>
           <div class="cards-row lib-grid" id="grid"></div>
           <div class="lib-pager" id="pager" hidden>

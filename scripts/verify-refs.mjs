@@ -18,7 +18,8 @@ episode_info add_bookmark list_bookmarks delete_bookmark update_bookmark_note re
 ensure_cover list_recent_books list_recent_added import_paths reveal_book relink_book reorder_pages delete_pages
 append_pages reset_page_edits page_edit_info shelf_rename book_reset_progress check_books_missing import_merged
 library_stats set_banner_image reset_banner_image get_default_data_dir win_start_drag win_hide_if_tray app_exit
-scan_begin scan_status scan_cancel list_scan_issues folder_reorder import_scan_books`.split(/\s+/);
+scan_begin scan_status scan_cancel list_scan_issues folder_reorder import_scan_books
+merge_auto_get merge_auto_set list_merge_pending resolve_merge_pending merge_books unmerge_book`.split(/\s+/);
 
 const results = []; let failures = 0, warnings = 0;
 // Optional allow-list scripts/verify-refs.allow: lines "<text in message> :: <more text>" downgrade matching

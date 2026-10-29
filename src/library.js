@@ -18,6 +18,7 @@ import { fetchEpisodeInfo } from './chapters.js';
 import { sortBy, compareTitles } from './naming.js';
 import { filterBooks, countStatuses, statusOf, readLibraryState, validFolder } from './library-filters.js';
 import * as act from './book-actions.js';
+import { openMergeDialog } from './merge-ui.js';
 
 const params = new URLSearchParams(location.search);
 const view = params.get('view') || '';
@@ -41,6 +42,8 @@ let query = (params.get('q') || '').trim();
 let loadSeq = 0;
 let page = 0;
 let extraSeq = 0;
+let picking = false;
+const selected = new Set();
 const PAGE_SIZE = 48;
 
 mountShell(view === 'recent' ? 'recent' : view === 'marked' ? 'marked' : 'library', {
@@ -96,7 +99,9 @@ function badgeText(st, pct) {
   return t('lib.progressPct', { n: pct });
 }
 function rowHtml(b, { cnt, pct, meta, kind, st, read }) {
-  return `<article class="lib-row" data-id="${b.id}" tabindex="0" role="link">
+  const on = picking && selected.has(b.id);
+  return `<article class="lib-row${on ? ' is-picked' : ''}" data-id="${b.id}" tabindex="0" role="link">
+    ${picking ? '<span class="pick-mark" aria-hidden="true"></span>' : ''}
     <img class="cover" alt="" loading="lazy" data-cover="${b.id}" src="${coverOf(b)}">
     <div class="lib-row__main">
       <b title="${esc(b.name)}">${esc(b.name)}</b>
@@ -189,6 +194,10 @@ function bookMenu(btn, b) {
   ];
   if (edited.has(b.id)) items.push({ a: 'resetedit', label: t('lib.resetEdits'), fn: async () => reload(await act.resetEdits(b), b.id, true) });
   if (missing.has(b.id)) items.push({ a: 'relink', label: t('reader.locate'), fn: async () => reload(await act.relinkBook(b), b.id, true) });
+  if (b.merged) items.push({ a: 'unmerge', label: t('lib.unmerge'), fn: async () => {
+    try { await invoke('unmerge_book', { bookId: b.id }); toast(t('merge.undone')); await load(); }
+    catch (e) { toast(errText(e)); }
+  } });
   items.push(
     { a: 'reveal', label: t('lib.reveal'), fn: () => act.revealBook(b) },
     '-',
@@ -252,7 +261,16 @@ document.addEventListener('click', (e) => {
   const frow = e.target.closest('[data-f]');
   if (frow) { const v = frow.dataset.f; filter = v === 'all' || v === 'none' ? v : +v; page = 0; prefs.set('libFolder', filter); render(); return; }
   const card = e.target.closest('.book-card, .lib-row');
-  if (card && !closedMenu) location.href = `reader.html?book=${card.dataset.id}`;
+  if (card && !closedMenu) {
+    if (picking) {
+      const id = +card.dataset.id;
+      if (selected.has(id)) selected.delete(id); else selected.add(id);
+      updateMergeBtn();
+      renderGrid();
+      return;
+    }
+    location.href = `reader.html?book=${card.dataset.id}`;
+  }
 });
 document.addEventListener('keydown', (e) => {
   if (e.key !== 'Enter' && e.key !== ' ') return;
@@ -260,7 +278,11 @@ document.addEventListener('keydown', (e) => {
   const frow = e.target.closest('[data-f]');
   if (frow) { e.preventDefault(); frow.click(); return; }
   const card = e.target.closest('.book-card, .lib-row');
-  if (card) { e.preventDefault(); location.href = `reader.html?book=${card.dataset.id}`; }
+  if (card) {
+    e.preventDefault();
+    if (picking) { card.click(); return; }
+    location.href = `reader.html?book=${card.dataset.id}`;
+  }
 });
 $('sortSel').value = sortMode;
 $('sortSel').addEventListener('change', () => { sortMode = $('sortSel').value; page = 0; prefs.set('libSort', sortMode); renderGrid(); });
@@ -302,6 +324,49 @@ async function loadExtras(slice) {
   const win = pageWindow(list);
   $('grid').innerHTML = win.slice.map((b) => cardHtml(b)).join('');
 }
+function firstPath(b) {
+  try {
+    const p = JSON.parse(b.paths || '[]');
+    return Array.isArray(p) ? (p[0] || '') : '';
+  } catch { return ''; }
+}
+function updateMergeBtn() {
+  const n = selected.size;
+  const btn = $('mergeSel');
+  btn.hidden = !picking || n < 2;
+  btn.textContent = t('merge.selected', { n });
+  $('pickMode').setAttribute('aria-pressed', String(picking));
+}
+async function mergeSelected() {
+  const chosen = books.filter((b) => selected.has(b.id) && b.kind === 'folder');
+  if (chosen.length < 2) { toast(t(selected.size >= 2 ? 'merge.foldersOnly' : 'merge.needTwo')); return; }
+  const title = chosen.map((b) => b.name).sort((a, b) => a.length - b.length)[0] || '';
+  openMergeDialog({
+    folders,
+    groups: [{
+      suggested_title: title,
+      confident: false,
+      members: chosen.map((b) => ({
+        name: b.name,
+        path: firstPath(b),
+        pages: b.page_count || 0,
+        chapters: 0,
+        order_label: '',
+        shelf_id: b.id,
+        cover_ver: 0,
+      })),
+    }],
+    onDone: () => { picking = false; selected.clear(); updateMergeBtn(); load(); },
+  });
+}
+async function refreshMergeBanner() {
+  const rows = await invoke('list_merge_pending').catch(() => []);
+  const btn = $('mergeBanner');
+  const n = rows?.length || 0;
+  btn.hidden = n === 0;
+  btn.textContent = n ? t('merge.pendingBanner', { n }) : '';
+  btn.onclick = () => openMergeDialog({ groups: rows, folders, onDone: () => { refreshMergeBanner(); load(); } });
+}
 function cardHtml(b) {
   const ep = episodes.get(b.id);
   const cnt = bmCounts.get(b.id) || 0;
@@ -313,8 +378,10 @@ function cardHtml(b) {
   const kind = KIND_KEY[b.kind];
   const read = readMeta(b);
   if (viewMode === 'list') return rowHtml(b, { cnt, pct, meta, kind: kind || null, st, read });
-  return `<article class="book-card" data-id="${b.id}" tabindex="0" role="link">
+  const on = picking && selected.has(b.id);
+  return `<article class="book-card${on ? ' is-picked' : ''}" data-id="${b.id}" tabindex="0" role="link">
       <div class="cover-wrap">
+        ${picking ? '<span class="pick-mark" aria-hidden="true"></span>' : ''}
         <img class="cover" alt="" loading="lazy" data-cover="${b.id}" src="${coverOf(b)}">
         ${cnt > 0 ? `<i class="ribbon" title="${esc(t('bookmarks.title'))}">${cnt}</i>` : ''}
         ${kind ? `<span class="kind-badge">${esc(t(kind))}</span>` : ''}
@@ -334,6 +401,8 @@ async function load() {
   if (my !== loadSeq) return;
   books = bk; folders = fl ?? [];
   if (fl) { const f = validFolder(filter, folders); if (f !== filter) { filter = f; prefs.set('libFolder', f); } }   // a remembered folder that was deleted -> All (a failed folder_list must not wipe it)
+  updateMergeBtn();
+  refreshMergeBanner();
   render(); // first paint: this page of covers, names, progress
 
   const [counts, miss] = await Promise.all([
@@ -348,6 +417,13 @@ async function load() {
   const win = pageWindow(list);
   $('grid').innerHTML = win.slice.map((b) => cardHtml(b)).join('');
 }
+$('pickMode').addEventListener('click', () => {
+  picking = !picking;
+  if (!picking) selected.clear();
+  updateMergeBtn();
+  renderGrid();
+});
+$('mergeSel').addEventListener('click', mergeSelected);
 $('pagePrev').addEventListener('click', () => { if (page > 0) { page -= 1; renderGrid(); } });
 $('pageNext').addEventListener('click', () => { page += 1; renderGrid(); });
 load();

@@ -4,6 +4,7 @@
 import { T, invoke, t, esc, toast, bootPage } from './shell.js';
 import { lib } from './legacy-api.js';
 import { mountShell } from './shell-ui.js';
+import { openMergeDialog } from './merge-ui.js';
 
 bootPage('import');
 mountShell('import');
@@ -95,6 +96,8 @@ function render(s) {
   $('scanPager').hidden = books.length <= PAGE;
   $('scanPageLabel').textContent = t('lib.page', { n: listPage + 1, m: pages });
   if (s?.issues) paintIssues(s.issues);
+  if (s?.phase === 'done') maybePrompt(s);
+  if (s && s.phase !== 'running') refreshScanPending();
 }
 function schedule() {
   clearTimeout(timer);
@@ -120,7 +123,6 @@ async function loadCategories() {
   sel.innerHTML = `<option value="">${esc(t('lib.noFolder'))}</option>` +
     (folders || []).map((f) => `<option value="${f.id}">${esc(f.name)}</option>`).join('');
   if (cur) sel.value = cur;
-  categoriesReady = true;
 }
 $('scanPick').addEventListener('click', async () => {
   if (!T.dialog?.open) { toast(t('err.noDesktop')); return; }
@@ -175,7 +177,54 @@ $('scanAdd').addEventListener('click', async () => {
   $('scanAdd').disabled = false;
   $('scanAdd').textContent = t('scan.add');
 });
-addEventListener('pagehide', () => { if (snap?.phase === 'running') invoke('scan_cancel').catch(() => {}); });
+async function refreshScanPending() {
+  const rows = await invoke('list_merge_pending').catch(() => null);
+  const btn = $('scanPending');
+  if (!btn || !rows) return;
+  btn.hidden = rows.length === 0;
+  btn.textContent = rows.length ? t('merge.pendingBanner', { n: rows.length }) : '';
+  btn.onclick = async () => {
+    const folders = await lib.folders().catch(() => []);
+    openMergeDialog({ groups: rows, folders, onDone: refreshScanPending });
+  };
+}
+function maybePrompt(s) {
+  if (s?.phase !== 'done' || !(s.pending > 0)) return;
+  const key = `${s.root}|${s.folders_scanned}|${s.pending}|${s.merged}|${s.added}`;
+  if (sessionStorage.getItem('mh.mergeDialog') === key) return;
+  sessionStorage.setItem('mh.mergeDialog', key);
+  invoke('list_merge_pending').then(async (rows) => {
+    if (!rows?.length) return;
+    const folders = await lib.folders().catch(() => []);
+    openMergeDialog({ groups: rows, folders, onDone: refreshScanPending });
+  }).catch(() => {});
+}
 loadCategories();
 poll();
+if (new URLSearchParams(location.search).get('preview') === 'merge') {
+  openMergeDialog({
+    preview: true,
+    folders: [{ id: 1, name: '连载' }],
+    groups: [
+      {
+        id: 1,
+        suggested_title: '海贼王',
+        confident: true,
+        members: [
+          { name: '海贼王 第1-50话', path: 'D:/comics/海贼王 第1-50话', pages: 980, chapters: 50, order_label: '1–50', shelf_id: null },
+          { name: '海贼王 第51-100话', path: 'D:/comics/海贼王 第51-100话', pages: 1020, chapters: 50, order_label: '51–100', shelf_id: null },
+        ],
+      },
+      {
+        id: 2,
+        suggested_title: '海贼王',
+        confident: false,
+        members: [
+          { name: '海贼王', path: 'D:/comics/海贼王', pages: 2000, chapters: 100, order_label: '', shelf_id: null },
+          { name: '海贼王 彩色版', path: 'D:/comics/海贼王 彩色版', pages: 400, chapters: 12, order_label: '', shelf_id: null },
+        ],
+      },
+    ],
+  });
+}
 invoke('list_scan_issues', { root: null }).then((rows) => { if (!snap || snap.phase === 'idle' || !snap.phase) paintIssues(rows || []); }).catch(() => {});

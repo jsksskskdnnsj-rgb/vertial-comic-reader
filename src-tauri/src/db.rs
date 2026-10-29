@@ -29,6 +29,7 @@ pub const DDL: &str = "
   CREATE TABLE IF NOT EXISTS pages_meta(
     book_id INTEGER NOT NULL, page INTEGER NOT NULL, entry INTEGER NOT NULL,
     name TEXT NOT NULL, w INTEGER NOT NULL, h INTEGER NOT NULL, bytes INTEGER NOT NULL,
+    src_path TEXT,
     PRIMARY KEY(book_id, page)) WITHOUT ROWID;
   CREATE TABLE IF NOT EXISTS progress(
     book_id INTEGER PRIMARY KEY, page INTEGER NOT NULL, frac REAL NOT NULL, updated_at INTEGER NOT NULL);";
@@ -70,9 +71,33 @@ pub fn book_row(c: &Connection, id: i64) -> Result<BookRow, ReaderError> {
     })
 }
 
+fn ensure_page_src(c: &Connection) {
+    let table: i64 = c
+        .query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='pages_meta'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap_or(0);
+    if table == 0 {
+        return;
+    }
+    let has: i64 = c
+        .query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('pages_meta') WHERE name='src_path'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap_or(0);
+    if has == 0 {
+        let _ = c.execute("ALTER TABLE pages_meta ADD COLUMN src_path TEXT", []);
+    }
+}
+
 pub fn load_pages(c: &Connection, id: i64) -> Result<Vec<RealPage>, ReaderError> {
+    ensure_page_src(c);
     let mut s = c.prepare(
-        "SELECT entry,name,w,h,bytes FROM pages_meta WHERE book_id=?1 ORDER BY page",
+        "SELECT entry,name,w,h,bytes,src_path FROM pages_meta WHERE book_id=?1 ORDER BY page",
     )?;
     let rows = s.query_map([id], |r| {
         Ok(RealPage {
@@ -81,7 +106,7 @@ pub fn load_pages(c: &Connection, id: i64) -> Result<Vec<RealPage>, ReaderError>
             w: r.get(2)?,
             h: r.get(3)?,
             bytes: r.get(4)?,
-            src_path: None,
+            src_path: r.get(5)?,
         })
     })?;
     Ok(rows.collect::<Result<_, _>>()?)
@@ -93,10 +118,11 @@ pub fn store_pages(
     pages: &[RealPage],
     sig: &str,
 ) -> Result<(), ReaderError> {
+    ensure_page_src(c);
     let tx = c.transaction()?;
     tx.execute("DELETE FROM pages_meta WHERE book_id=?1", [id])?;
     {
-        let mut ins = tx.prepare("INSERT INTO pages_meta(book_id,page,entry,name,w,h,bytes) VALUES(?1,?2,?3,?4,?5,?6,?7)")?;
+        let mut ins = tx.prepare("INSERT INTO pages_meta(book_id,page,entry,name,w,h,bytes,src_path) VALUES(?1,?2,?3,?4,?5,?6,?7,?8)")?;
         for (i, p) in pages.iter().enumerate() {
             ins.execute(params![
                 id,
@@ -105,7 +131,8 @@ pub fn store_pages(
                 p.name,
                 p.w,
                 p.h,
-                p.bytes as i64
+                p.bytes as i64,
+                p.src_path
             ])?;
         }
     }
@@ -154,10 +181,11 @@ pub fn load_edited_pages(c: &Connection, id: i64) -> Result<Option<Vec<RealPage>
 /// Bookmarks and episode_info read page names from pages_meta, so the effective
 /// (possibly edited) list must be mirrored there.
 pub fn sync_pages_meta(c: &Connection, id: i64, pages: &[RealPage]) -> Result<(), ReaderError> {
+    ensure_page_src(c);
     c.execute("DELETE FROM pages_meta WHERE book_id=?1", [id])?;
-    let mut ins = c.prepare("INSERT INTO pages_meta(book_id,page,entry,name,w,h,bytes) VALUES(?1,?2,?3,?4,?5,?6,?7)")?;
+    let mut ins = c.prepare("INSERT INTO pages_meta(book_id,page,entry,name,w,h,bytes,src_path) VALUES(?1,?2,?3,?4,?5,?6,?7,?8)")?;
     for (i, p) in pages.iter().enumerate() {
-        ins.execute(params![id, i as u32, p.entry, p.name, p.w, p.h, p.bytes as i64])?;
+        ins.execute(params![id, i as u32, p.entry, p.name, p.w, p.h, p.bytes as i64, p.src_path])?;
     }
     Ok(())
 }

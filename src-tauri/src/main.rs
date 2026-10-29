@@ -12,6 +12,7 @@ mod db;
 mod error;
 mod extractor;
 mod library;
+mod merge;
 mod model;
 mod protocol;
 mod scan;
@@ -170,6 +171,8 @@ struct ShelfEntry {
     created_at: i64,
     updated_at: i64,
     folder_id: Option<i64>, // 所属目录，NULL=未分类
+    /// True when this row is a folder merge that can be split back apart.
+    merged: bool,
 }
 
 pub(crate) fn now_secs() -> i64 {
@@ -612,6 +615,7 @@ pub(crate) fn db_conn() -> Result<Connection, String> {
     )
     .map_err(|e| e.to_string())?;
     shelf_scan::ensure_scan_tables(&conn)?;
+    merge::ensure_tables(&conn)?;
     Ok(conn)
 }
 
@@ -628,16 +632,18 @@ fn row_to_entry(r: &rusqlite::Row) -> rusqlite::Result<ShelfEntry> {
         created_at: r.get(8)?,
         updated_at: r.get(9)?,
         folder_id: r.get(10)?,
+        merged: r.get::<_, i64>(11)? != 0,
     })
 }
 
 const SHELF_COLS: &str = "id,name,kind,paths,cover,page_count,total_size,last_page,created_at,updated_at,folder_id";
+const SHELF_MERGED: &str = "EXISTS(SELECT 1 FROM book_merges m WHERE m.book_id = shelf.id AND m.undone=0)";
 
 #[tauri::command]
 fn shelf_list(_app: AppHandle) -> Result<Vec<ShelfEntry>, String> {
     let conn = db_conn()?;
     let mut stmt = conn
-        .prepare(&format!("SELECT {} FROM shelf ORDER BY updated_at DESC", SHELF_COLS))
+        .prepare(&format!("SELECT {SHELF_COLS}, {SHELF_MERGED} FROM shelf ORDER BY updated_at DESC"))
         .map_err(|e| e.to_string())?;
     let rows = stmt
         .query_map([], row_to_entry)
@@ -650,7 +656,7 @@ fn shelf_list(_app: AppHandle) -> Result<Vec<ShelfEntry>, String> {
 fn shelf_get(_app: AppHandle, id: i64) -> Result<Option<ShelfEntry>, String> {
     let conn = db_conn()?;
     let mut stmt = conn
-        .prepare(&format!("SELECT {} FROM shelf WHERE id=?", SHELF_COLS))
+        .prepare(&format!("SELECT {SHELF_COLS}, {SHELF_MERGED} FROM shelf WHERE id=?"))
         .map_err(|e| e.to_string())?;
     let mut rows = stmt.query_map([id], row_to_entry).map_err(|e| e.to_string())?;
     match rows.next() {
@@ -996,6 +1002,12 @@ fn main() {
             adapters::list_recent_added,
             adapters::import_paths,
             adapters::import_scan_books,
+            merge::merge_auto_get,
+            merge::merge_auto_set,
+            merge::list_merge_pending,
+            merge::resolve_merge_pending,
+            merge::merge_books,
+            merge::unmerge_book,
             adapters::reveal_book,
             adapters::relink_book,
             // v0.5 library management + page edits (library.rs)

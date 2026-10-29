@@ -6,7 +6,7 @@
 // Subfolders: a picked folder is imported with ALL its nested subfolders (the backend scan is recursive); before a folder
 // is listed it is inspected with list_images, the row shows how many images / subfolders it holds, and a folder with no
 // images at any depth is refused (reported under the list) instead of being added silently.
-import { T, t, esc, toast, bootPage } from './shell.js';
+import { T, invoke, t, esc, toast, bootPage } from './shell.js';
 import { lib } from './legacy-api.js';
 import { mountShell, watchDrops } from './shell-ui.js';
 import { sortSources } from './naming.js';
@@ -174,6 +174,8 @@ $('goBtn').addEventListener('click', async () => {
     } else {
       const r = await lib.importPaths([...sources], folderId);
       $('summary').textContent = t('imp.summary', { a: r.added, s: r.skipped, f: r.failed.length });
+      const pending = await invoke('list_merge_pending').catch(() => []);
+      if (pending?.length) toast(t('merge.pendingBanner', { n: pending.length }));
       if (r.added) toast(t('imp.importedToast', { n: r.added }));
       else if (!r.failed.length) toast(t('imp.nothingNew'));
       $('failList').innerHTML = (r.failed || []).map((f) =>

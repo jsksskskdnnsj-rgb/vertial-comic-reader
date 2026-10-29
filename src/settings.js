@@ -92,6 +92,10 @@ $('widthRange').addEventListener('input', (e) => { prefs.set('reader.widthPct', 
 $('gapSeg').addEventListener('click', (e) => { const b = e.target.closest('[data-gap]'); if (b) { prefs.set('reader.gap', +b.dataset.gap); syncReading(); } });
 $('dimRange').addEventListener('input', (e) => { prefs.set('reader.dim', +e.target.value); syncReading(); });
 $('saverChk').addEventListener('change', (e) => prefs.set('saver', e.target.checked));
+invoke('merge_auto_get').then((v) => { $('mergeAuto').checked = v !== false; }).catch(() => { $('mergeAuto').checked = true; });
+$('mergeAuto').addEventListener('change', (e) => {
+  invoke('merge_auto_set', { on: e.target.checked }).catch((err) => toast(errText(err)));
+});
 $('autoRange').addEventListener('input', (e) => { prefs.set('autoSpeed', +e.target.value); syncReading(); });
 syncReading();
 

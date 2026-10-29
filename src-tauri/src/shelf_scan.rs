@@ -57,6 +57,12 @@ pub struct ScanSnapshot {
     pub issue_count: u64,
     /// The latest problems (capped). The full set is in `scan_issues`.
     pub issues: Vec<ScanIssue>,
+    /// New shelf rows written by auto-merge when the scan finished.
+    pub added: u64,
+    /// Confident groups combined into one book.
+    pub merged: u64,
+    /// Groups left for the user to confirm.
+    pub pending: u64,
 }
 
 impl ScanSnapshot {
@@ -74,6 +80,9 @@ impl ScanSnapshot {
             resumed: false,
             issue_count: 0,
             issues: Vec::new(),
+            added: 0,
+            merged: 0,
+            pending: 0,
         }
     }
 }
@@ -108,7 +117,7 @@ impl Default for ScanHost {
 
 // ---- natural order (same rules as src/naming.js compareNames) -----------------------
 
-fn nfkc_filename(s: &str) -> String {
+pub(crate) fn nfkc_filename(s: &str) -> String {
     s.chars()
         .map(|c| match c {
             '\u{3000}' => ' ',
@@ -120,7 +129,7 @@ fn nfkc_filename(s: &str) -> String {
         .collect()
 }
 
-fn is_cn_numeral(c: char) -> bool {
+pub(crate) fn is_cn_numeral(c: char) -> bool {
     matches!(
         c,
         '零' | '〇' | '一' | '二' | '两' | '三' | '四' | '五' | '六' | '七' | '八' | '九' | '十' | '百' | '千'
@@ -148,7 +157,7 @@ fn cn_digit(c: char) -> Option<u32> {
 }
 
 /// Value of a Chinese integer made of 零〇一二两三四五六七八九十百千. `None` if it isn't one.
-fn chinese_number(chars: &[char]) -> Option<u64> {
+pub(crate) fn chinese_number(chars: &[char]) -> Option<u64> {
     if chars.is_empty() {
         return None;
     }
@@ -828,6 +837,12 @@ fn scan_walk(
     }
     snap.phase = "done".into();
     snap.current_path.clear();
+    // Unit tests must not touch the app database. The scan thread in the app does.
+    if !cfg!(test) {
+        if let Ok(conn) = crate::db_conn() {
+            let _ = crate::merge::finish_scan(&conn, &mut snap);
+        }
+    }
     emit(&snap, &mut pending, on_flush, "done", children.len(), None, None);
     hook(&snap);
     snap
@@ -872,6 +887,9 @@ fn blank_snapshot() -> ScanSnapshot {
         resumed: false,
         issue_count: 0,
         issues: Vec::new(),
+        added: 0,
+        merged: 0,
+        pending: 0,
     }
 }
 
@@ -889,6 +907,9 @@ fn publish(slot: &Mutex<ScanSnapshot>, next: &ScanSnapshot) {
     slot.resumed = next.resumed;
     slot.issue_count = next.issue_count;
     slot.issues = next.issues.clone();
+    slot.added = next.added;
+    slot.merged = next.merged;
+    slot.pending = next.pending;
     if keep_books {
         slot.books = next.books.clone();
     }

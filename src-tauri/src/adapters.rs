@@ -242,11 +242,11 @@ fn import_folder(
     path: &str,
     folder_id: Option<i64>,
     res: &mut ImportResult,
-) {
+) -> Option<i64> {
     let paths_json = serde_json::to_string(&[path]).unwrap_or_default();
     if shelf_exists(conn, "folder", &paths_json) {
         res.skipped += 1;
-        return;
+        return None;
     }
     // Reuse the verified walk (crate::list_images = walk_dir over the folder).
     let files = match crate::list_images(path.to_string()) {
@@ -256,7 +256,7 @@ fn import_folder(
                 path: path.to_string(),
                 reason: e,
             });
-            return;
+            return None;
         }
     };
     if files.is_empty() {
@@ -264,7 +264,7 @@ fn import_folder(
             path: path.to_string(),
             reason: "文件夹里没有图片".to_string(),
         });
-        return;
+        return None;
     }
     let total_size: i64 = files.iter().map(|f| f.size as i64).sum();
     let name = file_name_of(Path::new(path));
@@ -280,11 +280,15 @@ fn import_folder(
         Ok(id) => {
             res.added += 1;
             trigger_cover(id);
+            Some(id)
         }
-        Err(e) => res.failed.push(ImportFailure {
-            path: path.to_string(),
-            reason: e,
-        }),
+        Err(e) => {
+            res.failed.push(ImportFailure {
+                path: path.to_string(),
+                reason: e,
+            });
+            None
+        }
     }
 }
 
@@ -305,10 +309,13 @@ pub fn import_paths(
         failed: Vec::new(),
     };
     let mut loose: Vec<String> = Vec::new();
+    let mut fresh_folders: Vec<i64> = Vec::new();
     for raw in &paths {
         let p = PathBuf::from(raw);
         if p.is_dir() {
-            import_folder(&conn, raw, folder_id, &mut res);
+            if let Some(id) = import_folder(&conn, raw, folder_id, &mut res) {
+                fresh_folders.push(id);
+            }
         } else if crate::kind_of(&p) == Some("zip") {
             import_zip(&conn, raw, folder_id, &mut res);
         } else if is_import_image(&p) {
@@ -354,6 +361,7 @@ pub fn import_paths(
             }
         }
     }
+    let _ = crate::merge::absorb_new(&conn, &fresh_folders);
     Ok(res)
 }
 
@@ -381,6 +389,7 @@ pub fn import_scan_books(items: Vec<ScanImportItem>, folder_id: Option<i64>) -> 
         }
     }
     let mut res = ImportResult { added: 0, skipped: 0, failed: Vec::new() };
+    let mut fresh_folders: Vec<i64> = Vec::new();
     let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
     for item in items {
         let path = item.path.trim();
@@ -399,14 +408,16 @@ pub fn import_scan_books(items: Vec<ScanImportItem>, folder_id: Option<i64>) -> 
         let paths_json = serde_json::to_string(&vec![path]).unwrap_or_else(|_| "[]".into());
         let title = if item.title.trim().is_empty() { file_name_of(Path::new(path)) } else { item.title.trim().to_string() };
         match shelf_insert(&tx, &title, "folder", &paths_json, item.pages as i64, 0, folder_id) {
-            Ok(_) => {
+            Ok(id) => {
                 res.added += 1;
                 known.insert(key);
+                fresh_folders.push(id);
             }
             Err(e) => res.failed.push(ImportFailure { path: path.to_string(), reason: e }),
         }
     }
     tx.commit().map_err(|e| e.to_string())?;
+    let _ = crate::merge::absorb_new(&conn, &fresh_folders);
     Ok(res)
 }
 

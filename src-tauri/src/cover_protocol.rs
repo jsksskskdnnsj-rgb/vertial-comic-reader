@@ -126,14 +126,24 @@ fn cover_candidates(book_id: i64) -> Result<Vec<Vec<u8>>, ReaderError> {
             Ok(out)
         }
         "folder" => {
-            let src = row
-                .paths
-                .first()
-                .cloned()
-                .ok_or_else(|| ReaderError::Corrupt("folder book without path".into()))?;
+            let roots: Vec<String> = if row.paths.is_empty() {
+                return Err(ReaderError::Corrupt("folder book without path".into()));
+            } else {
+                row.paths.clone()
+            };
             // crate::list_images returns walk_dir order (not naturally sorted), so
-            // sort by display name the same way scan_folder does.
-            let mut files = crate::list_images(src).map_err(ReaderError::Io)?;
+            // sort by display name the same way scan_folder does. A merged book
+            // tries each part in reading order until a cover decodes.
+            let mut files = Vec::new();
+            for src in roots {
+                match crate::list_images(src) {
+                    Ok(mut batch) => files.append(&mut batch),
+                    Err(_) => continue,
+                }
+                if files.iter().any(|f| is_cover_name(&f.name)) {
+                    break;
+                }
+            }
             files.retain(|f| is_cover_name(&f.name));
             files.sort_by(|a, b| natord::compare_ignore_case(&a.name, &b.name));
             let mut out = Vec::new();
