@@ -38,8 +38,12 @@ export class ThumbStrip {
   constructor(host, deps) { this.host = host; this.d = deps; this.cur = -1; host.addEventListener('click', (e) => { const b = e.target.closest('button'); if (b) this.d.onJump(Number(b.dataset.page)); }); }
   update(page, realPages) {
     if (page === this.cur) return; this.cur = page;
+    if (!(realPages > 0)) { this.host.innerHTML = ''; return; }   // not ready / empty book: skip thumbs, don't throw
     const from = Math.max(0, Math.min(page - 2, realPages - 7)), to = Math.min(realPages - 1, from + 6), out = [];
-    for (let p = from; p <= to; p++) out.push(`<button data-page="${p}" class="${p === page ? 'is-active' : ''}" aria-label="${p + 1}"><img alt="" loading="lazy" src="${this.d.thumb(p)}"></button>`);
+    for (let p = from; p <= to; p++) {
+      const src = this.d.thumb(p) || '';
+      out.push(`<button data-page="${p}" class="${p === page ? 'is-active' : ''}" aria-label="${p + 1}"><img alt="" loading="lazy" src="${src}"></button>`);
+    }
     this.host.innerHTML = out.join('');
   }
   reset() { this.cur = -1; this.host.innerHTML = ''; }
