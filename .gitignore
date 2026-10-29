@@ -23,7 +23,7 @@ reader-config.json
 theme-config.json
 hero-custom.*
 
-# ---------- 生成的二进制图标（由 scripts/gen-icons.py 生成，见 README） ----------
+# ---------- 生成的应用图标（python scripts/gen-icons.py 会覆盖重绘；文本快照见 scripts/restore-binaries.json） ----------
 src-tauri/icons/
 
 # ---------- 系统文件 ----------

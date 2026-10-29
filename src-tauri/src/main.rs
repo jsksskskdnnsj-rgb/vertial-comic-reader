@@ -15,6 +15,7 @@ mod library;
 mod model;
 mod protocol;
 mod scan;
+mod shelf_scan;
 
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
@@ -171,7 +172,7 @@ struct ShelfEntry {
     folder_id: Option<i64>, // 所属目录，NULL=未分类
 }
 
-fn now_secs() -> i64 {
+pub(crate) fn now_secs() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)
@@ -524,7 +525,7 @@ fn set_data_dir(path: String) -> Result<String, String> {
     Ok(new_dir.to_string_lossy().to_string())
 }
 
-fn db_conn() -> Result<Connection, String> {
+pub(crate) fn db_conn() -> Result<Connection, String> {
     let dir = data_dir()?;
     let conn = Connection::open(dir.join("mh-reader.db")).map_err(|e| e.to_string())?;
     // v0.4: the design backend holds one long-lived connection to this same file;
@@ -588,6 +589,29 @@ fn db_conn() -> Result<Connection, String> {
             conn.execute(ddl, []).map_err(|e| e.to_string())?;
         }
     }
+    let has_order: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('folders') WHERE name='sort_order'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap_or(0);
+    if has_order == 0 {
+        conn.execute("ALTER TABLE folders ADD COLUMN sort_order INTEGER", [])
+            .map_err(|e| e.to_string())?;
+        conn.execute("UPDATE folders SET sort_order = id WHERE sort_order IS NULL", [])
+            .map_err(|e| e.to_string())?;
+    }
+    // WAL keeps a large shelf responsive while a scan writes its checkpoint.
+    // A failure here (some network drives) leaves the default journal in place.
+    let _ = conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;");
+    conn.execute_batch(
+        "CREATE INDEX IF NOT EXISTS idx_shelf_folder ON shelf(folder_id);
+         CREATE INDEX IF NOT EXISTS idx_shelf_updated ON shelf(updated_at);
+         CREATE INDEX IF NOT EXISTS idx_shelf_name ON shelf(name);",
+    )
+    .map_err(|e| e.to_string())?;
+    shelf_scan::ensure_scan_tables(&conn)?;
     Ok(conn)
 }
 
@@ -665,11 +689,11 @@ struct FolderInfo {
 fn folder_add(name: String) -> Result<i64, String> {
     let name = name.trim();
     if name.is_empty() {
-        return Err("目录名不能为空".to_string());
+        return Err("分类名不能为空".to_string());
     }
     let conn = db_conn()?;
     conn.execute(
-        "INSERT INTO folders (name, created_at) VALUES (?, ?)",
+        "INSERT INTO folders (name, created_at, sort_order) VALUES (?1, ?2, COALESCE((SELECT MAX(sort_order) FROM folders), 0) + 1)",
         params![name, now_secs()],
     )
     .map_err(|e| e.to_string())?;
@@ -683,7 +707,7 @@ fn folder_list() -> Result<Vec<FolderInfo>, String> {
         .prepare(
             "SELECT f.id, f.name, f.created_at, COUNT(s.id)
              FROM folders f LEFT JOIN shelf s ON s.folder_id = f.id
-             GROUP BY f.id ORDER BY f.created_at",
+             GROUP BY f.id ORDER BY COALESCE(f.sort_order, f.id), f.id",
         )
         .map_err(|e| e.to_string())?;
     let rows = stmt
@@ -704,7 +728,7 @@ fn folder_list() -> Result<Vec<FolderInfo>, String> {
 fn folder_rename(id: i64, name: String) -> Result<(), String> {
     let name = name.trim();
     if name.is_empty() {
-        return Err("目录名不能为空".to_string());
+        return Err("分类名不能为空".to_string());
     }
     let conn = db_conn()?;
     conn.execute("UPDATE folders SET name=? WHERE id=?", params![name, id])
@@ -719,6 +743,19 @@ fn folder_remove(id: i64) -> Result<(), String> {
         .map_err(|e| e.to_string())?;
     conn.execute("DELETE FROM folders WHERE id=?", [id])
         .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// ids are the category ids in the order the shelf should show them.
+#[tauri::command]
+fn folder_reorder(ids: Vec<i64>) -> Result<(), String> {
+    let conn = db_conn()?;
+    let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
+    for (i, id) in ids.iter().enumerate() {
+        tx.execute("UPDATE folders SET sort_order=?1 WHERE id=?2", params![i as i64, id])
+            .map_err(|e| e.to_string())?;
+    }
+    tx.commit().map_err(|e| e.to_string())?;
     Ok(())
 }
 
@@ -802,13 +839,34 @@ fn app_exit(app: AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+fn install_panic_log() {
+    let dir = data_dir().ok();
+    let prev = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        if let Some(dir) = &dir {
+            if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(dir.join("panic.log")) {
+                use std::io::Write;
+                let _ = writeln!(f, "----\n{info}");
+            }
+        }
+        prev(info);
+    }));
+}
+
 fn main() {
+    install_panic_log();
     tauri::Builder::default()
+        // Must be the first plugin. A second launch is handed to this process,
+        // which unminimizes and focuses the window already on screen.
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            show_main_window(&app);
+        }))
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             use tauri::Manager;
             // v0.4 reader backend wiring (design reader_backend.rs wiring block,
             // adapted to this crate's data_dir()/db_conn()).
+            app.manage(shelf_scan::ScanHost::default());
             let dir = data_dir().map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
             // db_conn() runs the base DDL + shelf column migrations (incl. the new
             // scan_sig/finished/cover_ver columns the design DDL expects).
@@ -833,9 +891,9 @@ fn main() {
                 cache,
                 extractor,
             });
-            app.manage(cover_protocol::CoversDir(std::sync::Arc::new(
-                dir.join("covers"),
-            )));
+            let covers = dir.join("covers");
+            cover_protocol::trim_covers(&covers, 512 << 20);
+            app.manage(cover_protocol::CoversDir(std::sync::Arc::new(covers)));
             // v0.6.4 system tray; a failure here must not stop the app, it only keeps close-to-tray off
             if let Err(e) = init_tray(app) {
                 eprintln!("tray: {}", e);
@@ -873,6 +931,10 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             pick_folder_paths,
             list_images,
+            shelf_scan::scan_begin,
+            shelf_scan::scan_status,
+            shelf_scan::scan_cancel,
+            shelf_scan::list_scan_issues,
             open_data_dir,
             shelf_list,
             shelf_get,
@@ -901,6 +963,7 @@ fn main() {
             folder_list,
             folder_rename,
             folder_remove,
+            folder_reorder,
             shelf_move,
             // v0.4 reader core (design backend)
             commands::open_book,
@@ -932,6 +995,7 @@ fn main() {
             adapters::list_recent_books,
             adapters::list_recent_added,
             adapters::import_paths,
+            adapters::import_scan_books,
             adapters::reveal_book,
             adapters::relink_book,
             // v0.5 library management + page edits (library.rs)

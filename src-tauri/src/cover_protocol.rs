@@ -226,6 +226,41 @@ pub(crate) fn generate_cover(covers_dir: &Path, book_id: i64) -> Result<(), Read
     Ok(())
 }
 
+/// Drop the oldest cover files until the directory is under `limit_bytes` (and then
+/// under 90% of that, so one new cover does not immediately evict another).
+/// Missing directories and unreadable entries are skipped.
+pub(crate) fn trim_covers(dir: &std::path::Path, limit_bytes: u64) {
+    let rd = match std::fs::read_dir(dir) {
+        Ok(rd) => rd,
+        Err(_) => return,
+    };
+    let mut files = Vec::new();
+    let mut total = 0u64;
+    for ent in rd.flatten() {
+        let Ok(meta) = ent.metadata() else { continue };
+        if !meta.is_file() {
+            continue;
+        }
+        let len = meta.len();
+        total = total.saturating_add(len);
+        let modified = meta.modified().unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+        files.push((ent.path(), len, modified));
+    }
+    if total <= limit_bytes {
+        return;
+    }
+    files.sort_by_key(|f| f.2);
+    let target = limit_bytes.saturating_mul(9) / 10;
+    for (path, len, _) in files {
+        if total <= target {
+            break;
+        }
+        if std::fs::remove_file(&path).is_ok() {
+            total = total.saturating_sub(len);
+        }
+    }
+}
+
 /// Generate covers/{id}.jpg if missing. Called lazily from home.js on a cover 404,
 /// and (via generate_cover) from the import pipeline right after inserting a book.
 #[tauri::command]

@@ -1,4 +1,4 @@
-# MH Comic Reader (Tauri Desktop) v0.7.1
+# MH Comic Reader (Tauri Desktop) v0.7.3
 
 > **Download for Windows**: grab `mh-reader.exe` from [Releases](https://github.com/jsksskskdnnsj-rgb/vertial-comic-reader/releases) — double-click to run, no build needed.
 > To build from source, see "Build & Run" below.
@@ -13,12 +13,15 @@ A local vertical-scroll comic reader for Windows (Tauri 2 + Rust + vanilla HTML/
 
 - **Pages**: Home, Library, Import, book details, Settings, and the reader. The entry point is `src/home.html` (the old single-page `index.html` is gone)
 - **Three import types**: ZIP / CBZ, folders (including nested folders), and loose images — or drag files into the window
+- **Scan a folder**: pick one directory. Each immediate subfolder that contains images becomes a book named after that folder, and folders inside it become chapters (2 before 10, including Chinese chapter numbers). Review the list, then add what you want. A folder already on the shelf is not added again. The scan runs in the background and can be cancelled; an unfinished scan of the same folder continues next time, and a finished one starts fresh. Unreadable images are skipped and listed on the page. Archives and whole-drive scans are not part of this yet — import a zip from the Import page
 - **On-demand reading**: opening a book scans the listing; pages are extracted as you reach them (extractor queue + virtual list). The whole archive is not loaded into memory
 - **SQLite library**: stores paths only, never copies your files. The cover is an early decodable page, scaled to 240px
 - **Resume**, bookmarks anchored to a specific image, and chapters (none / by folder / every N pages)
-- **Reader**: vertical scroll and page-turn, auto-scroll, page directory, width and gap
+- **Reader**: vertical scroll and page-turn, auto-scroll, page directory, width and gap. Press `?` or the info button for the shortcut list
+- **Categories**: create, rename, delete, and reorder them in the library sidebar, then filter by one. Import and scan can file a book into a category, and the book page can move it later. All and Uncategorized stay available
+- **Library**: covers show reading progress, and each card shows when you last read it. Large shelves render one page at a time (48 books). Search filters as you type; `/` or Ctrl+K focuses the search box
 - **Appearance**: soft-light theme, accent color, separate window background and home banner, panel opacity, wallpaper fit, border color
-- **Window**: custom title bar (drag to move, double-click to maximize). Closing can hide to the tray
+- **Window**: custom title bar (drag to move, double-click to maximize). Closing can hide to the tray. Launching the app again focuses the window that is already open
 - Files stay on this machine — nothing is uploaded
 
 ### Image formats
@@ -34,7 +37,7 @@ The webview can paint AVIF bytes directly. This build of the `image` crate has n
 1. Install Rust (`rustup-init.exe` from https://rustup.rs), Node.js LTS, and VS Build Tools (Desktop development with C++). Windows 10/11 ships WebView2.
 2. Clone the repo and, in the project root:
    ```
-   python scripts/gen-icons.py   # fill in missing icons; does not overwrite existing ones
+   python scripts/gen-icons.py   # redraw every icon (png / ico / icns) in the soft-light theme; overwrites existing files
    npm install                   # first time only
    npm run build
    ```
@@ -55,6 +58,7 @@ mh-reader/
     home.html          # entry
     library.html
     import.html
+    scan.html          # folder scan
     book.html
     settings.html
     reader.html        # reader (virtual list in reader.js)
@@ -65,7 +69,7 @@ mh-reader/
     src/               # commands, extractor, SQLite, mhpage / mhcover / mhfile
   scripts/
     copy-exe.cjs
-    gen-icons.py
+    gen-icons.py       # redraws the app icons (32/128/256/512 png, ico, icns)
 ```
 
 ## Notes

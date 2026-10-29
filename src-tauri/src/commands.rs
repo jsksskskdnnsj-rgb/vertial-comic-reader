@@ -186,8 +186,8 @@ pub async fn set_reading_window(
         book: book_id,
         center,
         dir: direction.signum().max(-1).min(1),
-        ahead: ahead.min(16),
-        behind: behind.min(8),
+        ahead: ahead.min(12),
+        behind: behind.min(4),
         variant,
     })
 }

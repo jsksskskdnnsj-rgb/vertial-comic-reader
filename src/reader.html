@@ -31,6 +31,7 @@
           <nav class="crumb"><b id="bcBook"></b><span class="sep">/</span><span id="bcEp"></span></nav>
           <span class="spacer"></span>
           <button class="pgcount num" id="pgCount" data-i-label="reader.jump">- / -</button>
+          <button class="ibtn" id="helpBtn" type="button" data-i-label="help.title"><svg class="i"><use href="icons.svg#info"/></svg></button>
           <button class="ibtn" id="bpToggle" data-i-label="reader.toggleHistory"><svg class="i"><use href="icons.svg#list"/></svg></button>
         </header>
         <div class="viewport" id="vp">
@@ -122,6 +123,17 @@
         <button class="btn btn--primary" id="autoToggle"><svg class="i"><use href="icons.svg#play"/></svg><span id="autoToggleText"></span></button>
         <p class="hint" data-i="reader.autoHint"></p>
       </section>
+
+      <div class="help-overlay" id="helpOverlay" hidden>
+        <div class="glass-strong help-card" role="dialog" aria-modal="true" aria-labelledby="helpTitle">
+          <div class="help-card__head">
+            <h2 id="helpTitle" data-i="help.title"></h2>
+            <button class="ibtn" id="helpClose" type="button" data-i-label="common.close"><svg class="i"><use href="icons.svg#close"/></svg></button>
+          </div>
+          <div class="help-grid" id="helpGrid"></div>
+          <p class="hint" data-i="help.hint"></p>
+        </div>
+      </div>
     </div>
   </div>
 </div>

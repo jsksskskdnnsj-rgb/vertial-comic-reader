@@ -7,9 +7,9 @@
 import { Layout } from './layout.js';
 
 const T = window.__TAURI__;
-const invoke = T.core.invoke;
+const invoke = (cmd, args) => (T?.core?.invoke ? T.core.invoke(cmd, args) : Promise.reject(new Error('no backend')));
 // Windows/WebView2: "http://mhpage.localhost"   (macOS/Linux would be "mhpage://localhost")
-const PAGE_BASE = T.core.convertFileSrc('', 'mhpage').replace(/\/$/, '');
+const PAGE_BASE = T?.core?.convertFileSrc ? T.core.convertFileSrc('', 'mhpage').replace(/\/$/, '') : '';
 /** 160px-wide preview of virtual page `i` (a slice for tall images). Used by the bookmarks panel; same URL shape as the scrubber. */
 export const thumbUrl = (info, i) => `${PAGE_BASE}/${info.bookId}/${i}?v=160&s=${info.sig}`;
 /** URL of virtual page `i` at a given width variant (0 = full size). Shared with flip.js. */

@@ -9,7 +9,8 @@
 //!   reveal_book       { bookId }       relink_book       { bookId, path }
 
 use rusqlite::{params, Connection};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 /// Same list as `crate::IMAGE_EXTS` (dialog filters and the reader sniff path).
@@ -353,6 +354,59 @@ pub fn import_paths(
             }
         }
     }
+    Ok(res)
+}
+
+#[derive(Deserialize)]
+pub struct ScanImportItem {
+    pub path: String,
+    pub title: String,
+    pub pages: u64,
+}
+
+/// Insert books the folder scan already counted. One transaction, no second walk,
+/// no cover generation (a missing cover is filled later by mhcover).
+#[tauri::command]
+pub fn import_scan_books(items: Vec<ScanImportItem>, folder_id: Option<i64>) -> Result<ImportResult, String> {
+    let conn = crate::db_conn()?;
+    let mut known: HashSet<String> = HashSet::new();
+    if let Ok(mut stmt) = conn.prepare("SELECT paths FROM shelf WHERE kind='folder'") {
+        if let Ok(rows) = stmt.query_map([], |r| r.get::<_, String>(0)) {
+            for row in rows.flatten() {
+                let Ok(paths) = serde_json::from_str::<Vec<String>>(&row) else { continue };
+                for p in paths {
+                    known.insert(crate::shelf_scan::path_key(&p));
+                }
+            }
+        }
+    }
+    let mut res = ImportResult { added: 0, skipped: 0, failed: Vec::new() };
+    let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
+    for item in items {
+        let path = item.path.trim();
+        if path.is_empty() {
+            continue;
+        }
+        let key = crate::shelf_scan::path_key(path);
+        if known.contains(&key) {
+            res.skipped += 1;
+            continue;
+        }
+        if item.pages == 0 {
+            res.failed.push(ImportFailure { path: path.to_string(), reason: "文件夹里没有图片".into() });
+            continue;
+        }
+        let paths_json = serde_json::to_string(&vec![path]).unwrap_or_else(|_| "[]".into());
+        let title = if item.title.trim().is_empty() { file_name_of(Path::new(path)) } else { item.title.trim().to_string() };
+        match shelf_insert(&tx, &title, "folder", &paths_json, item.pages as i64, 0, folder_id) {
+            Ok(_) => {
+                res.added += 1;
+                known.insert(key);
+            }
+            Err(e) => res.failed.push(ImportFailure { path: path.to_string(), reason: e }),
+        }
+    }
+    tx.commit().map_err(|e| e.to_string())?;
     Ok(res)
 }
 

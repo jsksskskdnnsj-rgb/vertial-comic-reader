@@ -63,11 +63,42 @@ export function mountShell(active = '', opts = {}) {
       </div>`;
     const q = top.querySelector('#shellSearch');
     if (opts.searchValue) q.value = opts.searchValue;
-    q.addEventListener('keydown', (e) => {
-      if (e.key !== 'Enter') return;
+    q.title = t('search.shortcut');
+    let searchTimer = 0;
+    const runSearch = () => {
       const v = q.value.trim();
       if (opts.onSearch) opts.onSearch(v);
       else if (v) location.href = `library.html?q=${encodeURIComponent(v)}`;
+    };
+    q.addEventListener('input', () => {
+      if (!opts.onSearch) return;
+      clearTimeout(searchTimer);
+      searchTimer = setTimeout(runSearch, 80);
+    });
+    q.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        e.stopPropagation();
+        if (q.value) { q.value = ''; if (opts.onSearch) opts.onSearch(''); }
+        else q.blur();
+        return;
+      }
+      if (e.key !== 'Enter') return;
+      e.preventDefault();
+      clearTimeout(searchTimer);
+      runSearch();
+    });
+    document.addEventListener('keydown', (e) => {
+      if (e.isComposing) return;
+      const tag = e.target?.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || e.target?.isContentEditable) return;
+      if (document.documentElement.dataset.modal === '1' || document.querySelector('.modal-backdrop')) return;
+      const slash = e.key === '/' && !e.ctrlKey && !e.metaKey && !e.altKey;
+      const find = (e.key === 'k' || e.key === 'K') && (e.ctrlKey || e.metaKey) && !e.altKey;
+      if (!slash && !find) return;
+      e.preventDefault();
+      q.focus();
+      q.select();
     });
     // Window drag: the whole top bar except its controls drags the window; double-click toggles maximize. Done through our own
     // Rust commands (like the window buttons), so it does not depend on the webview's window-API permissions or on which

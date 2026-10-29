@@ -309,6 +309,20 @@ impl Extractor {
                 }
             };
             let res = self.process(job.key, &slot, &book, &mut zip);
+            if let Err(err) = &res {
+                if matches!(
+                    err,
+                    ReaderError::Corrupt(_) | ReaderError::Unsupported(_) | ReaderError::Io(_) | ReaderError::SourceMissing(_)
+                ) {
+                    let page = book.pages.get(job.key.1 as usize).map(|p| p.name.as_str()).unwrap_or("");
+                    let path = if page.is_empty() {
+                        book.path.display().to_string()
+                    } else {
+                        format!("{} / {page}", book.path.display())
+                    };
+                    crate::shelf_scan::note_reader_trouble(&path, &err.to_string());
+                }
+            }
             self.st.lock().slots.remove(&job.key);
             *slot.done.lock() = Some(res);
             slot.cv.notify_all();

@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title data-i="app.name"></title>
+<link rel="stylesheet" href="mh-ui.css">
+</head>
+<body>
+<div class="app">
+  <header id="shell-top"></header>
+  <div class="work">
+    <nav id="shell-rail"></nav>
+    <main class="page-main">
+      <div class="page-head">
+        <h1 data-i="scan.title"></h1>
+      </div>
+      <p class="lede" data-i="scan.help"></p>
+      <section class="panel glass">
+        <div class="scan-actions">
+          <button class="btn btn--primary" id="scanPick" type="button"><svg class="i"><use href="icons.svg#folder"/></svg><span data-i="scan.pick"></span></button>
+          <label class="scan-cat"><span data-i="scan.category"></span>
+            <select class="select" id="scanFolder"></select>
+          </label>
+          <button class="btn btn--ghost" id="scanCancel" type="button" hidden><span data-i="scan.cancel"></span></button>
+          <a class="btn btn--ghost" id="scanLib" href="library.html" hidden><span data-i="scan.toLibrary"></span></a>
+        </div>
+        <p class="loading-line" id="scanProgress" hidden><span class="spin" aria-hidden="true"></span><span id="scanStat"></span></p>
+        <p class="scan-path" id="scanPath" hidden></p>
+        <p class="hint" id="scanNote"></p>
+        <p class="hint" id="scanResume" hidden></p>
+        <p class="hint" id="scanLoose" hidden></p>
+        <div id="scanIssueBox" hidden>
+          <p class="hint" id="scanIssueTitle"></p>
+          <div class="scan-issues" id="scanIssues"></div>
+        </div>
+        <div class="scan-actions" id="scanTools" hidden>
+          <button class="btn btn--ghost btn--sm" id="scanAll" type="button"><span data-i="scan.selectAll"></span></button>
+          <button class="btn btn--primary btn--sm" id="scanAdd" type="button"><span data-i="scan.add"></span></button>
+          <span class="muted" data-i="scan.review"></span>
+        </div>
+        <div class="scan-list" id="scanList"></div>
+        <div class="lib-pager" id="scanPager" hidden>
+          <button class="btn btn--ghost btn--sm" id="scanPrev" type="button"><span data-i="lib.pagePrev"></span></button>
+          <span class="muted num" id="scanPageLabel"></span>
+          <button class="btn btn--ghost btn--sm" id="scanNext" type="button"><span data-i="lib.pageNext"></span></button>
+        </div>
+        <p class="hint scan-foot" data-i="scan.later"></p>
+      </section>
+    </main>
+  </div>
+</div>
+<script type="module" src="scan.js"></script>
+</body>
+</html>

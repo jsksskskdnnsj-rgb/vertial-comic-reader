@@ -20,7 +20,7 @@
             <svg class="i"><use href="icons.svg#plus"/></svg><span data-i="lib.newFolder"></span>
           </button>
         </aside>
-        <section>
+        <section class="panel glass lib-main">
           <div class="page-head">
             <h1 id="title" data-i="lib.title"></h1>
             <span class="muted num" id="count"></span>
@@ -49,6 +49,11 @@
           </div>
           <p class="loading-line" id="libLoading"><span class="spin" aria-hidden="true"></span><span data-i="common.loading"></span></p>
           <div class="cards-row lib-grid" id="grid"></div>
+          <div class="lib-pager" id="pager" hidden>
+            <button class="btn btn--ghost btn--sm" id="pagePrev" type="button"><span data-i="lib.pagePrev"></span></button>
+            <span class="muted num" id="pageLabel"></span>
+            <button class="btn btn--ghost btn--sm" id="pageNext" type="button"><span data-i="lib.pageNext"></span></button>
+          </div>
           <div class="empty-state" id="empty" hidden>
             <svg class="i"><use href="icons.svg#shelf"/></svg>
             <p id="emptyText"></p>
