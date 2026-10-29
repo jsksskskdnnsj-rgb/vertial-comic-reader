@@ -27,16 +27,23 @@ let view = null, book = null, bms = [], chs = [], chMode = 'folder', chN = DEFAU
 let shown = 0, lastPos = null, endDismissed = false, endArmAt = 0;
 
 // ---- small ui helpers ------------------------------------------------------------------------------------
-const pageText = (p) => t('common.pageOf', { p: p + 1, n: book.realPages });
-const epText = (p) => (chs.length ? episodeLabel(t, chs, p, chMode) : pageText(p));
+// Prefer an explicit page count (from onPosition) so open-time callbacks work before `book` is assigned.
+const pageText = (p, n = book?.realPages ?? 0) => t('common.pageOf', { p: p + 1, n });
+const epText = (p, n) => (chs.length ? episodeLabel(t, chs, p, chMode) : pageText(p, n));
 const applyDim = () => $('host').style.setProperty('--dim', rp.dim / 100);
+/** Thumb URL for real page `p`; empty string while book/layout are not ready yet. */
+const pageThumb = (p) => {
+  const i = book && view?.layout?.gFirst?.[p];
+  return i == null ? '' : thumbUrl(book, i);
+};
 
 // ---- panels ----------------------------------------------------------------------------------------------
 const history_ = new HistoryStack($('hist'), { t, esc, ago, coverUrl, onOpen: async (id) => { await leave(`reader.html?book=${id}`); } });
-const strip = new ThumbStrip($('tstrip'), { thumb: (p) => thumbUrl(book, view.layout.gFirst[p]), onJump: (p) => view.jumpTo({ page: p, frac: 0 }) });
+const strip = new ThumbStrip($('tstrip'), { thumb: pageThumb, onJump: (p) => view?.jumpTo({ page: p, frac: 0 }) });
 const auto = new AutoScroll({ getView: () => view, onChange: onAutoChange });
 
 async function loadHistory() {
+  if (!book) return;
   const recent = (await lib.recentBooks(12).catch(() => [])).filter(b => b.id !== bookId);
   const cur = { id: bookId, title: book.title, page: shown, frac: 0, pageCount: book.realPages, coverVer: 0 };
   const eps = await fetchEpisodeInfo(invoke, [{ id: bookId, page: shown }, ...recent]).catch(() => []);
@@ -46,10 +53,12 @@ async function loadHistory() {
 
 // ---- position -> every readout -------------------------------------------------------------------------
 function onPosition(p) {
+  // open() emits position before it returns; sync book from view.info if boot has not assigned it yet
+  if (!book && view?.info) book = view.info;
   shown = p.shownPage; lastPos = p;
   const txt = `${p.shownPage + 1} / ${p.realPages}`;
   $('pgCount').textContent = txt; $('vpText').textContent = txt; $('bbCount').textContent = txt;
-  const ep = epText(shown);
+  const ep = epText(shown, p.realPages);
   $('bcEp').textContent = ep; $('bbEp').textContent = ep;
   history_.updateCurrent({ page: shown, realPages: p.realPages, epText: ep });
   strip.update(shown, p.realPages);
@@ -85,12 +94,18 @@ async function startView({ startPos = null } = {}) {
   auto.stop(); $('endCard').hidden = true; $('err').hidden = true;
   showOpening(true);
   if (view) { await view.close(); view = null; }
+  book = null;                                                  // drop stale info while the next open is in flight
   resetTrack(); strip.reset(); applyDim();
   const Mode = modeNow === 'flip' ? FlipView : Reader;
   view = new Mode($('host'), { onPosition, scrubber: [$('track'), $('thumb'), $('tiplabel')] });
   try {
-    await view.open(bookId, { perf: saverNow ? 'saver' : 'balanced', widthPct: rp.widthPct, gap: rp.gap, startPos, beforeMount: largeBookGuard });
-  } catch (e) { view = null; showOpening(false); return openFailed(e); }
+    // Assign `book` in beforeMount (runs after openBook, before first onPosition from tick/render)
+    // so pageText / ThumbStrip never see null during open.
+    await view.open(bookId, {
+      perf: saverNow ? 'saver' : 'balanced', widthPct: rp.widthPct, gap: rp.gap, startPos,
+      beforeMount: async (info) => { book = info; return largeBookGuard(info); },
+    });
+  } catch (e) { book = null; view = null; showOpening(false); return openFailed(e); }
   book = view.info; endDismissed = false; endArmAt = performance.now() + 1500;
   chMode = book.chapterMode; chN = sanePages(book.chapterPages); $('chrem').checked = !!book.chapterOverridden;
   $('bpCover').src = coverUrl(bookId); $('bbThumb').src = coverUrl(bookId);
@@ -100,8 +115,10 @@ async function startView({ startPos = null } = {}) {
 }
 function openFailed(e) {
   if (e?.code === 'cancelled') return leave('library.html');
+  // Surface real open failures; avoid treating boot TypeErrors as "corrupt file" when possible
+  const msg = e?.detail ?? e?.message ?? String(e);
   $('errTitle').textContent = t(e?.code === 'source_missing' ? 'reader.errMissing' : 'reader.errCorrupt');
-  $('errDetail').textContent = e?.detail ?? String(e?.message ?? e); $('errLocate').hidden = e?.code !== 'source_missing'; $('err').hidden = false;
+  $('errDetail').textContent = msg; $('errLocate').hidden = e?.code !== 'source_missing'; $('err').hidden = false;
 }
 async function leave(url) {
   auto.stop(); await view?.close();
@@ -220,11 +237,13 @@ $('host').addEventListener('wheel', () => auto.stop(), { passive: true });
 // ---- page directory, prev/next page, jump ----------------------------------------------------------------------
 $('tbDir').addEventListener('click', () => {
   closeFlies(null);
-  openPageDirectory({ bookId, realPages: book.realPages, current: shown, title: book.title, thumb: (p) => thumbUrl(book, view.layout.gFirst[p]), lib,
+  if (!book || !view) return;
+  openPageDirectory({ bookId, realPages: book.realPages, current: shown, title: book.title, thumb: pageThumb, lib,
     onJump: (p) => view.jumpTo({ page: p, frac: 0 }), onChanged: () => startView({ startPos: view.topPos() }) });
 });
 $('pgPrev').addEventListener('click', () => view?.stepPage(-1)); $('pgNext').addEventListener('click', () => view?.stepPage(1));
 $('pgCount').addEventListener('click', async () => {
+  if (!book || !view) return;
   const v = await promptDialog({ title: t('reader.jump'), label: t('reader.jumpLabel', { n: book.realPages }), value: String(shown + 1), ok: t('common.go') });
   const n = Number(v); if (v && n >= 1) view.jumpTo({ page: Math.min(n, book.realPages) - 1, frac: 0 });
 });
