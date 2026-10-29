@@ -18,18 +18,22 @@ mod scan;
 
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
-use tauri::{AppHandle, State};
+use tauri::AppHandle;
 use tauri_plugin_dialog::{DialogExt, FilePath};
 
-const IMAGE_EXTS: &[&str] = &[
-    // Only formats the reader pipeline can actually serve (extractor::sniff):
-    // svg/tif/heic/jxl used to be admitted here and then failed page-by-page
-    // as "not a recognised image" - reject them at import instead.
+/// Extensions admitted at import and recognised by `extractor::sniff`.
+/// `avif` is passthrough: the webview displays the original bytes. The `image`
+/// crate is not built with an AVIF decoder, so covers, slices, and width
+/// variants use `DECODE_EXTS` only. svg/tif/heic/jxl are rejected at import —
+/// they used to succeed and then fail every page as "not a recognised image".
+pub(crate) const IMAGE_EXTS: &[&str] = &[
     "jpg", "jpeg", "jfif", "jpe", "png", "webp", "gif", "bmp", "avif",
+];
+/// Formats `image` 0.25 is compiled to decode (see Cargo.toml features).
+pub(crate) const DECODE_EXTS: &[&str] = &[
+    "jpg", "jpeg", "jfif", "jpe", "png", "webp", "gif", "bmp",
 ];
 const ZIP_EXTS: &[&str] = &["zip", "cbz"];
 
@@ -80,12 +84,6 @@ fn to_picked(path_str: String, rel: String) -> Option<PickedFile> {
     })
 }
 
-fn file_name_of(p: &Path) -> String {
-    p.file_name()
-        .map(|n| n.to_string_lossy().to_string())
-        .unwrap_or_else(|| "file".to_string())
-}
-
 fn walk_dir(dir: &Path, base: &Path, out: &mut Vec<PickedFile>) {
     let entries = match std::fs::read_dir(dir) {
         Ok(e) => e,
@@ -119,56 +117,6 @@ fn walk_dir(dir: &Path, base: &Path, out: &mut Vec<PickedFile>) {
 
 /* ================= 文件选择 ================= */
 
-#[tauri::command]
-fn pick_images(app: AppHandle) -> Vec<PickedFile> {
-    let files = app
-        .dialog()
-        .file()
-        .add_filter(
-            "图片",
-            &[
-                "png", "jpg", "jpeg", "webp", "gif", "bmp", "svg", "avif", "tif", "tiff",
-                "heic",
-            ],
-        )
-        .blocking_pick_files()
-        .unwrap_or_default();
-    files
-        .into_iter()
-        .filter_map(|fp| {
-            let s = fp_to_string(fp)?;
-            let p = PathBuf::from(&s);
-            if kind_of(&p) != Some("image") {
-                return None;
-            }
-            let name = file_name_of(&p);
-            to_picked(s, name)
-        })
-        .collect()
-}
-
-#[tauri::command]
-fn pick_zips(app: AppHandle) -> Vec<PickedFile> {
-    let files = app
-        .dialog()
-        .file()
-        .add_filter("漫画压缩包", &["zip", "cbz"])
-        .blocking_pick_files()
-        .unwrap_or_default();
-    files
-        .into_iter()
-        .filter_map(|fp| {
-            let s = fp_to_string(fp)?;
-            let p = PathBuf::from(&s);
-            if kind_of(&p) != Some("zip") {
-                return None;
-            }
-            let name = file_name_of(&p);
-            to_picked(s, name)
-        })
-        .collect()
-}
-
 /// 选择文件夹（可多选），只返回文件夹路径
 #[tauri::command]
 fn pick_folder_paths(app: AppHandle) -> Vec<String> {
@@ -193,110 +141,7 @@ fn list_images(path: String) -> Result<Vec<PickedFile>, String> {
     Ok(out)
 }
 
-/* ================= ZIP 流式读取 ================= */
-
-struct ZipState {
-    map: Mutex<HashMap<String, String>>, // zip_id -> 绝对路径
-}
-
-#[derive(Serialize)]
-struct ZipEntryInfo {
-    name: String,
-    size: u64,
-    index: usize, // 压缩包内的原始序号
-}
-
-#[derive(Serialize)]
-struct ZipInfo {
-    zip_id: String,
-    entries: Vec<ZipEntryInfo>,
-}
-
-// 稳定哈希：同一路径每次算出同一个 id（跨进程也一致，缓存目录可复用）
-fn stable_hash(s: &str) -> u64 {
-    let mut h: u64 = 0xcbf29ce484222325;
-    for b in s.bytes() {
-        h ^= b as u64;
-        h = h.wrapping_mul(0x100000001b3);
-    }
-    h
-}
-
-fn zip_id_for(path: &str) -> String {
-    format!("{:016x}", stable_hash(path))
-}
-
-/// 只读中央目录，不解压内容
-#[tauri::command]
-fn zip_open(state: State<ZipState>, path: String) -> Result<ZipInfo, String> {
-    let file = std::fs::File::open(&path).map_err(|e| e.to_string())?;
-    let mut archive = zip::ZipArchive::new(file).map_err(|e| e.to_string())?;
-    let mut entries = Vec::new();
-    for i in 0..archive.len() {
-        let f = archive.by_index(i).map_err(|e| e.to_string())?;
-        if f.is_dir() {
-            continue;
-        }
-        entries.push(ZipEntryInfo {
-            name: f.name().to_string(),
-            size: f.size(),
-            index: i,
-        });
-    }
-    let zip_id = zip_id_for(&path);
-    state
-        .map
-        .lock()
-        .unwrap()
-        .insert(zip_id.clone(), path);
-    Ok(ZipInfo { zip_id, entries })
-}
-
-/// 按需解压单个条目到缓存目录，返回本地绝对路径（已解过则直接复用）
-/// 注意：Tauri 默认要求前端用 camelCase 传参，此命令显式声明 snake_case
-#[tauri::command(rename_all = "snake_case")]
-fn zip_extract_page(
-    _app: AppHandle,
-    state: State<ZipState>,
-    zip_id: String,
-    index: usize,
-) -> Result<String, String> {
-    let path = state
-        .map
-        .lock()
-        .unwrap()
-        .get(&zip_id)
-        .cloned()
-        .ok_or("压缩包未打开")?;
-    let cache_dir = data_dir()?.join("page_cache").join(&zip_id);
-    std::fs::create_dir_all(&cache_dir).map_err(|e| e.to_string())?;
-    let file = std::fs::File::open(&path).map_err(|e| e.to_string())?;
-    let mut archive = zip::ZipArchive::new(file).map_err(|e| e.to_string())?;
-    // 缓存文件名保留原扩展名：asset 协议按扩展名给 MIME，无扩展名时 <img> 直接加载会失败
-    let ext = archive
-        .name_for_index(index)
-        .and_then(|n| n.rfind('.').map(|i| n[i + 1..].to_lowercase()))
-        .filter(|e| !e.is_empty() && e.len() <= 5 && e.chars().all(|c| c.is_ascii_alphanumeric()))
-        .unwrap_or_else(|| "page".to_string());
-    let dest = cache_dir.join(format!("{}.{}", index, ext));
-    if !dest.exists() {
-        let mut f = archive.by_index(index).map_err(|e| e.to_string())?;
-        let mut out = std::fs::File::create(&dest).map_err(|e| e.to_string())?;
-        std::io::copy(&mut f, &mut out).map_err(|e| e.to_string())?;
-    }
-    Ok(dest.to_string_lossy().to_string())
-}
-
-#[tauri::command]
-fn clear_cache(_app: AppHandle) -> Result<(), String> {
-    let dir = data_dir()?.join("page_cache");
-    if dir.exists() {
-        std::fs::remove_dir_all(&dir).map_err(|e| e.to_string())?;
-    }
-    Ok(())
-}
-
-/// 在文件资源管理器中打开本机数据目录（含 mh-reader.db 与 page_cache）
+/// 在文件资源管理器中打开本机数据目录（mh-reader.db、cache、covers）
 #[tauri::command]
 fn open_data_dir(_app: AppHandle) -> Result<(), String> {
     let dir = data_dir()?;
@@ -324,16 +169,6 @@ struct ShelfEntry {
     created_at: i64,
     updated_at: i64,
     folder_id: Option<i64>, // 所属目录，NULL=未分类
-}
-
-#[derive(Deserialize)]
-struct ShelfNew {
-    name: String,
-    kind: String,
-    paths: String,
-    cover: String,
-    page_count: i64,
-    total_size: i64,
 }
 
 fn now_secs() -> i64 {
@@ -775,22 +610,6 @@ fn row_to_entry(r: &rusqlite::Row) -> rusqlite::Result<ShelfEntry> {
 const SHELF_COLS: &str = "id,name,kind,paths,cover,page_count,total_size,last_page,created_at,updated_at,folder_id";
 
 #[tauri::command]
-fn shelf_add(_app: AppHandle, item: ShelfNew) -> Result<i64, String> {
-    let conn = db_conn()?;
-    let now = now_secs();
-    conn.execute(
-        "INSERT INTO shelf (name,kind,paths,cover,page_count,total_size,last_page,created_at,updated_at)
-         VALUES (?,?,?,?,?,?,0,?,?)",
-        params![
-            item.name, item.kind, item.paths, item.cover,
-            item.page_count, item.total_size, now, now
-        ],
-    )
-    .map_err(|e| e.to_string())?;
-    Ok(conn.last_insert_rowid())
-}
-
-#[tauri::command]
 fn shelf_list(_app: AppHandle) -> Result<Vec<ShelfEntry>, String> {
     let conn = db_conn()?;
     let mut stmt = conn
@@ -814,17 +633,6 @@ fn shelf_get(_app: AppHandle, id: i64) -> Result<Option<ShelfEntry>, String> {
         Some(r) => Ok(Some(r.map_err(|e| e.to_string())?)),
         None => Ok(None),
     }
-}
-
-#[tauri::command]
-fn shelf_progress(_app: AppHandle, id: i64, page: i64) -> Result<(), String> {
-    let conn = db_conn()?;
-    conn.execute(
-        "UPDATE shelf SET last_page=?, updated_at=? WHERE id=?",
-        params![page, now_secs(), id],
-    )
-    .map_err(|e| e.to_string())?;
-    Ok(())
 }
 
 #[tauri::command]
@@ -997,9 +805,6 @@ fn app_exit(app: AppHandle) -> Result<(), String> {
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
-        .manage(ZipState {
-            map: Mutex::new(HashMap::new()),
-        })
         .setup(|app| {
             use tauri::Manager;
             // v0.4 reader backend wiring (design reader_backend.rs wiring block,
@@ -1055,19 +860,22 @@ fn main() {
                 .clone();
             cover_protocol::cover_handle(dir, req, responder);
         })
+        .register_asynchronous_uri_scheme_protocol("mhfile", |_ctx, req, responder| {
+            tauri::async_runtime::spawn(async move {
+                let resp = tauri::async_runtime::spawn_blocking(move || protocol::serve_theme_file(&req))
+                    .await
+                    .unwrap_or_else(|_| {
+                        http::Response::builder().status(500).body(Vec::new()).unwrap()
+                    });
+                responder.respond(resp);
+            });
+        })
         .invoke_handler(tauri::generate_handler![
-            pick_images,
-            pick_zips,
             pick_folder_paths,
             list_images,
-            zip_open,
-            zip_extract_page,
-            clear_cache,
             open_data_dir,
-            shelf_add,
             shelf_list,
             shelf_get,
-            shelf_progress,
             shelf_remove,
             shelf_clear,
             get_data_dir,
@@ -1152,4 +960,26 @@ fn main() {
         })
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+#[cfg(test)]
+mod image_ext_contract {
+    #[test]
+    fn dialog_and_decoder_lists_stay_aligned() {
+        for ext in crate::DECODE_EXTS {
+            assert!(
+                crate::IMAGE_EXTS.contains(ext),
+                "{ext} is decodable but not importable"
+            );
+        }
+        assert!(crate::IMAGE_EXTS.contains(&"avif"));
+        assert!(
+            !crate::DECODE_EXTS.contains(&"avif"),
+            "avif is passthrough-only until the image crate avif feature is enabled"
+        );
+        for banned in ["svg", "tif", "tiff", "heic", "heif", "jxl", "ico", "apng", "dib"] {
+            assert!(!crate::IMAGE_EXTS.contains(&banned), "{banned} must not be imported");
+            assert!(!crate::DECODE_EXTS.contains(&banned), "{banned} must not be a cover candidate");
+        }
+    }
 }

@@ -137,10 +137,16 @@ export async function applyBackground() {
   root.style.setProperty('--bg-dim', String(dim)); // runs before the first await: no flash
   let cfg = {};
   try { cfg = (await invoke('get_theme_config')) || {}; } catch {}
-  const conv = T.core?.convertFileSrc;
+  // Custom pictures are copied into the data dir and served by the mhfile protocol
+  // (hero-custom.* / banner-custom.* only). The asset protocol is disabled.
+  const fileUrl = (abs) => {
+    if (!abs || abs === 'default' || !T.core?.convertFileSrc) return '';
+    return T.core.convertFileSrc(abs, 'mhfile').replace(/["\\\n\r]/g, '');
+  };
   const hero = cfg.hero || 'default', banner = cfg.banner || 'default'; // `banner` is absent on a backend without v0.6
+  const heroUrl = colorMode ? '' : fileUrl(hero);
   let layer = document.querySelector('.bg-layer');
-  if (hero === 'default' || !conv || colorMode) {
+  if (!heroUrl) {
     layer?.remove();
     document.body.classList.remove('has-bg');
   } else {
@@ -150,11 +156,12 @@ export async function applyBackground() {
       document.body.prepend(layer);
     }
     layer.style.backgroundImage =
-      `linear-gradient(rgba(250,253,252,calc(var(--bg-dim) * .45)), rgba(250,253,252,calc(var(--bg-dim) * .55))), url("${conv(hero)}")`;   // soft white veil (v0.7); the slider value still scales it
+      `linear-gradient(rgba(250,253,252,calc(var(--bg-dim) * .45)), rgba(250,253,252,calc(var(--bg-dim) * .55))), url("${heroUrl}")`;   // soft white veil (v0.7); the slider value still scales it
     document.body.classList.add('has-bg');
   }
-  if (banner === 'default' || !conv) root.style.removeProperty('--banner-image');
-  else root.style.setProperty('--banner-image', `url("${conv(banner)}")`);
+  const bannerUrl = fileUrl(banner);
+  if (!bannerUrl) root.style.removeProperty('--banner-image');
+  else root.style.setProperty('--banner-image', `url("${bannerUrl}")`);
 }
 
 /** Poll the Rust drop queue (native drag-drop writes paths there). */

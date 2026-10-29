@@ -47,8 +47,13 @@
               <button data-mode="list" data-i-label="lib.viewList" data-i-title="lib.viewList"><svg class="i"><use href="icons.svg#list"/></svg></button>
             </span>
           </div>
+          <p class="loading-line" id="libLoading"><span class="spin" aria-hidden="true"></span><span data-i="common.loading"></span></p>
           <div class="cards-row lib-grid" id="grid"></div>
-          <p class="empty" id="empty" hidden></p>
+          <div class="empty-state" id="empty" hidden>
+            <svg class="i"><use href="icons.svg#shelf"/></svg>
+            <p id="emptyText"></p>
+            <a class="btn btn--primary btn--sm" id="emptyImport" href="import.html" hidden><span data-i="nav.import"></span></a>
+          </div>
         </section>
       </div>
     </main>

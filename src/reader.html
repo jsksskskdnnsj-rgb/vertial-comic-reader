@@ -35,6 +35,10 @@
         </header>
         <div class="viewport" id="vp">
           <div id="host"></div>
+          <div class="reader-loading" id="readerLoading">
+            <span class="spin" aria-hidden="true"></span>
+            <span data-i="common.loading"></span>
+          </div>
           <div class="vp__pill num" id="vpPill"><svg class="i"><use href="icons.svg#book-open"/></svg><span id="vpText"></span></div>
           <div class="vp__auto" id="autoBadge" hidden><svg class="i" style="color:var(--accent)"><use href="icons.svg#play"/></svg><span id="autoText"></span><button class="ibtn" id="autoStop" data-i-label="reader.autoStop" style="width:26px;height:26px"><svg class="i" style="width:15px;height:15px"><use href="icons.svg#pause"/></svg></button></div>
 
@@ -57,7 +61,7 @@
 
           <div class="reader-err" id="err" hidden>
             <div class="glass-strong"><h2 id="errTitle"></h2><p id="errDetail"></p>
-              <div style="display:flex;gap:10px;flex-wrap:wrap;justify-content:center">
+              <div class="endcard__btns">
                 <button class="btn btn--ghost" id="errBack"><span data-i="common.back"></span></button>
                 <button class="btn btn--ghost" id="errLocate" hidden><span data-i="reader.locate"></span></button>
                 <button class="btn btn--primary" id="errRetry"><span data-i="common.retry"></span></button></div></div>

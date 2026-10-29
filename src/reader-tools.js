@@ -4,6 +4,7 @@
 // Backend calls arrive through `ctx.lib` (legacy-api.js), so the real command names live in ONE file.
 import { openModal, confirmDialog, choiceDialog, toast, T, esc, t } from './shell.js';
 import { orderByRange } from './merge-order.js';
+import { archiveAndImageFilters } from './image-exts.js';
 
 // ---------------------------------------------------------------------------------------------------- AutoScroll
 const PX_PER_SEC = [20, 35, 55, 80, 115, 160, 220, 300, 400, 520];          // strip mode, speed 1..10
@@ -57,7 +58,7 @@ export function openPageDirectory(ctx) {
   bAdd.addEventListener('click', async () => {                                       // append-merge: more pages, ordered by the numeric range in their names
     const kind = await choiceDialog({ title: t('dir.append'), message: t('dir.appendMsg'), choices: [{ label: t('common.cancel'), value: null }, { label: t('imp.addFolders'), value: 'folder' }, { label: t('imp.addZips'), value: 'files', kind: 'primary' }] });
     if (!kind) return;
-    const picked = [].concat(await T.dialog.open(kind === 'folder' ? { directory: true, multiple: true } : { multiple: true, filters: [{ name: t('imp.zipFilter'), extensions: ['zip', 'cbz'] }, { name: t('imp.imageFilter'), extensions: ['jpg', 'jpeg', 'png', 'webp', 'gif', 'avif', 'bmp'] }] }) ?? []);
+    const picked = [].concat(await T.dialog.open(kind === 'folder' ? { directory: true, multiple: true } : { multiple: true, filters: archiveAndImageFilters(t) }) ?? []);
     if (picked.length) run(() => ctx.lib.appendPages(ctx.bookId, orderByRange(picked)), 'dir.appended');
   });
   return m;

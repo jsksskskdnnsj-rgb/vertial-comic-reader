@@ -27,6 +27,7 @@ export default {
   'common.retry': '\u91cd\u8bd5', // Retry
   'common.save': '\u4fdd\u5b58', // Save
   'common.saved': '\u5df2\u4fdd\u5b58', // Saved
+  'common.loading': '\u6b63\u5728\u52a0\u8f7d\u2026', // Loading…
   'type.zip': 'ZIP', // ZIP
   'type.folder': '\u6587\u4ef6\u5939', // Folder
   'type.images': '\u56fe\u7247', // Images

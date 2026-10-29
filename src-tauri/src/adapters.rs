@@ -12,18 +12,9 @@ use rusqlite::{params, Connection};
 use serde::Serialize;
 use std::path::{Path, PathBuf};
 
-/// Image extensions for import filtering, mirroring the frontend MH.imgRe
-/// (mh-common.js): \.(jpe?g|jfif|png|apng|webp|gif|bmp|dib|avif|svg|ico|tif|tiff|heic|heif|jxl)$/i
-/// Broader than main.rs IMAGE_EXTS (adds jfif, apng, dib, heic, heif).
-const IMPORT_IMG_EXTS: &[&str] = &[
-    // Servable formats only (see main.rs IMAGE_EXTS note): admitting tif /
-    // heic / jxl / svg / ico here produced books whose every page failed
-    // with "not a recognised image" in the reader.
-    "jpg", "jpeg", "jfif", "jpe", "png", "apng", "webp", "gif", "bmp", "avif",
-];
-
+/// Same list as `crate::IMAGE_EXTS` (dialog filters and the reader sniff path).
 fn is_import_image(p: &Path) -> bool {
-    IMPORT_IMG_EXTS.contains(&crate::ext_of(p).as_str())
+    crate::IMAGE_EXTS.contains(&crate::ext_of(p).as_str())
 }
 
 fn file_name_of(p: &Path) -> String {
@@ -142,7 +133,7 @@ pub struct ImportResult {
     pub failed: Vec<ImportFailure>,
 }
 
-/// Insert one shelf row with shelf_add's shape (plus folder_id). Returns the new id.
+/// Insert one shelf row (name, kind, paths, cover, counts, folder). Returns the new id.
 fn shelf_insert(
     conn: &Connection,
     name: &str,

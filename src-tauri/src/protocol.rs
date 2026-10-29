@@ -98,3 +98,110 @@ pub fn handle(
         responder.respond(resp);
     });
 }
+
+const THEME_FILE_MAX: u64 = 32 * 1024 * 1024;
+
+fn pct_decode(s: &str) -> String {
+    let bytes = s.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' && i + 2 < bytes.len() {
+            if let Ok(v) = u8::from_str_radix(
+                std::str::from_utf8(&bytes[i + 1..i + 3]).unwrap_or(""),
+                16,
+            ) {
+                out.push(v);
+                i += 3;
+                continue;
+            }
+        }
+        out.push(bytes[i]);
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+/// `convertFileSrc(path, "mhfile")` puts the absolute path in the URL.
+/// Windows is `/C:/...` (backslashes may arrive percent-encoded). Unix keeps the leading slash.
+fn local_path_from_uri(uri: &http::Uri) -> Option<std::path::PathBuf> {
+    let decoded = pct_decode(uri.path()).replace('\\', "/");
+    let b = decoded.as_bytes();
+    if b.len() >= 4 && b[0] == b'/' && b[2] == b':' && b[1].is_ascii_alphabetic() {
+        return Some(std::path::PathBuf::from(&decoded[1..]));
+    }
+    if decoded.is_empty() || decoded == "/" {
+        return None;
+    }
+    Some(std::path::PathBuf::from(decoded))
+}
+
+#[cfg(test)]
+mod theme_path_tests {
+    use super::local_path_from_uri;
+
+    #[test]
+    fn decodes_windows_and_unix_paths() {
+        let win = http::Uri::from_static(
+            "http://mhfile.localhost/C%3A%5CData%5Chero-custom.jpg",
+        );
+        assert_eq!(
+            local_path_from_uri(&win).unwrap(),
+            std::path::PathBuf::from("C:/Data/hero-custom.jpg")
+        );
+        let unix = http::Uri::from_static("mhfile://localhost/home/me/banner-custom.png");
+        assert_eq!(
+            local_path_from_uri(&unix).unwrap(),
+            std::path::PathBuf::from("/home/me/banner-custom.png")
+        );
+    }
+}
+
+fn theme_status(code: u16) -> http::Response<Vec<u8>> {
+    http::Response::builder()
+        .status(code)
+        .header("X-Content-Type-Options", "nosniff")
+        .header("Cache-Control", "no-store")
+        .body(Vec::new())
+        .unwrap()
+}
+
+/// Serves only `hero-custom.*` / `banner-custom.*` from the data directory.
+/// Replaces the asset protocol (which was scoped to `**`) for wallpapers and banners.
+pub fn serve_theme_file(req: &http::Request<Vec<u8>>) -> http::Response<Vec<u8>> {
+    let Ok(root) = crate::data_dir() else {
+        return theme_status(500);
+    };
+    let Some(asked) = local_path_from_uri(req.uri()) else {
+        return theme_status(400);
+    };
+    let (Ok(file), Ok(root)) = (asked.canonicalize(), root.canonicalize()) else {
+        return theme_status(404);
+    };
+    if !file.starts_with(&root) || !file.is_file() {
+        return theme_status(403);
+    }
+    let name = file.file_name().and_then(|n| n.to_str()).unwrap_or("");
+    if !(name.starts_with("hero-custom.") || name.starts_with("banner-custom.")) {
+        return theme_status(403);
+    }
+    let Ok(meta) = std::fs::metadata(&file) else {
+        return theme_status(404);
+    };
+    if meta.len() > THEME_FILE_MAX {
+        return theme_status(413);
+    }
+    let Ok(bytes) = std::fs::read(&file) else {
+        return theme_status(500);
+    };
+    let mime = crate::extractor::sniff(&bytes)
+        .map(|m| m.0)
+        .unwrap_or("application/octet-stream");
+    http::Response::builder()
+        .status(200)
+        .header("Content-Type", mime)
+        .header("X-Content-Type-Options", "nosniff")
+        .header("Cache-Control", "private, max-age=86400")
+        .body(bytes)
+        .unwrap()
+}

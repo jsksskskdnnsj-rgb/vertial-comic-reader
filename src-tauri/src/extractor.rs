@@ -432,6 +432,8 @@ pub fn sniff(b: &[u8]) -> Option<(&'static str, &'static str)> {
         Some(("image/gif", "gif"))
     } else if b.len() > 12 && &b[0..4] == b"RIFF" && &b[8..12] == b"WEBP" {
         Some(("image/webp", "webp"))
+    // AVIF is served as-is (variant 0). Slices and width variants call `decode`,
+    // which uses the `image` crate — built without the avif feature — so those paths fail.
     } else if b.len() > 12 && &b[4..8] == b"ftyp" && (&b[8..12] == b"avif" || &b[8..12] == b"avis") {
         Some(("image/avif", "avif"))
     } else if b.starts_with(b"BM") {

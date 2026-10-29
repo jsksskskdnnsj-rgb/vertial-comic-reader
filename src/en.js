@@ -26,6 +26,7 @@ export default {
   'common.retry': 'Retry',
   'common.save': 'Save',
   'common.saved': 'Saved',
+  'common.loading': 'Loading…',
   'type.zip': 'ZIP',
   'type.folder': 'Folder',
   'type.images': 'Images',

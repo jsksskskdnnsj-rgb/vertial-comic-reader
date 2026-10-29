@@ -24,12 +24,10 @@ use tauri::State;
 
 pub struct CoversDir(pub Arc<PathBuf>);
 
-/// Extensions accepted as cover candidates, mirroring the frontend MH.imgRe
-/// (mh-common.js): \.(jpe?g|jfif|png|apng|webp|gif|bmp|dib|avif|svg|ico|tif|tiff|heic|heif|jxl)$/i
-const COVER_EXTS: &[&str] = &[
-    "jpg", "jpeg", "jfif", "png", "apng", "webp", "gif", "bmp", "dib", "avif", "svg", "ico",
-    "tif", "tiff", "heic", "heif", "jxl",
-];
+/// Cover candidates must be formats the `image` crate can decode (`DECODE_EXTS`).
+/// AVIF pages still import (the webview displays them as-is) but cannot become a JPEG cover.
+const COVER_EXTS: &[&str] = crate::DECODE_EXTS;
+const MAX_COVER_TRIES: usize = 4;
 
 /// Cap on a single cover source read (a first page larger than this is not a cover candidate).
 const MAX_COVER_SRC: u64 = 128 * 1024 * 1024; // 128 MiB
@@ -86,9 +84,9 @@ pub fn cover_handle(
     });
 }
 
-/// Bytes of the book's first page, from the verified machinery (NOT the extractor).
-/// Ok(None) = the book has no usable first page (caller treats it as "no cover").
-fn first_page_bytes(book_id: i64) -> Result<Option<Vec<u8>>, ReaderError> {
+/// Up to `MAX_COVER_TRIES` early pages, from the verified machinery (NOT the extractor).
+/// The first one `image` can decode becomes the cover; AVIF-only books yield an empty list.
+fn cover_candidates(book_id: i64) -> Result<Vec<Vec<u8>>, ReaderError> {
     let conn = crate::db_conn().map_err(ReaderError::Io)?;
     let row = crate::db::book_row(&conn, book_id)?;
     match row.kind.as_str() {
@@ -110,16 +108,22 @@ fn first_page_bytes(book_id: i64) -> Result<Option<Vec<u8>>, ReaderError> {
                 .map(|(i, n)| (i, n.replace('\\', "/")))
                 .collect();
             cands.sort_by(|a, b| natord::compare_ignore_case(&a.1, &b.1));
-            let Some((index, _)) = cands.into_iter().next() else {
-                return Ok(None);
-            };
-            let mut e = ar.by_index(index)?;
-            if e.size() > MAX_COVER_SRC {
-                return Ok(None);
+            let mut out = Vec::new();
+            for (index, _) in cands {
+                if out.len() >= MAX_COVER_TRIES {
+                    break;
+                }
+                let mut e = ar.by_index(index)?;
+                if e.size() > MAX_COVER_SRC {
+                    continue;
+                }
+                let mut buf = Vec::with_capacity(e.size() as usize);
+                e.read_to_end(&mut buf)?;
+                if !buf.is_empty() {
+                    out.push(buf);
+                }
             }
-            let mut buf = Vec::with_capacity(e.size() as usize);
-            e.read_to_end(&mut buf)?;
-            Ok(Some(buf))
+            Ok(out)
         }
         "folder" => {
             let src = row
@@ -130,49 +134,66 @@ fn first_page_bytes(book_id: i64) -> Result<Option<Vec<u8>>, ReaderError> {
             // crate::list_images returns walk_dir order (not naturally sorted), so
             // sort by display name the same way scan_folder does.
             let mut files = crate::list_images(src).map_err(ReaderError::Io)?;
+            files.retain(|f| is_cover_name(&f.name));
             files.sort_by(|a, b| natord::compare_ignore_case(&a.name, &b.name));
-            let Some(first) = files.into_iter().next() else {
-                return Ok(None);
-            };
-            if std::fs::metadata(&first.path).map(|m| m.len()).unwrap_or(0) > MAX_COVER_SRC {
-                return Ok(None);
+            let mut out = Vec::new();
+            for f in files {
+                if out.len() >= MAX_COVER_TRIES {
+                    break;
+                }
+                if std::fs::metadata(&f.path).map(|m| m.len()).unwrap_or(0) > MAX_COVER_SRC {
+                    continue;
+                }
+                if let Ok(buf) = std::fs::read(&f.path) {
+                    if !buf.is_empty() {
+                        out.push(buf);
+                    }
+                }
             }
-            Ok(Some(std::fs::read(&first.path)?))
+            Ok(out)
         }
         "images" => {
-            let Some(first) = row.paths.first() else {
-                return Ok(None);
-            };
-            if std::fs::metadata(first).map(|m| m.len()).unwrap_or(0) > MAX_COVER_SRC {
-                return Ok(None);
+            let mut out = Vec::new();
+            for path in &row.paths {
+                if out.len() >= MAX_COVER_TRIES {
+                    break;
+                }
+                if !is_cover_name(path) {
+                    continue;
+                }
+                if std::fs::metadata(path).map(|m| m.len()).unwrap_or(0) > MAX_COVER_SRC {
+                    continue;
+                }
+                if let Ok(buf) = std::fs::read(path) {
+                    if !buf.is_empty() {
+                        out.push(buf);
+                    }
+                }
             }
-            Ok(Some(std::fs::read(first)?))
+            Ok(out)
         }
         other => Err(ReaderError::Unsupported(other.to_string())),
     }
 }
 
-/// Generate covers/{book_id}.jpg if missing: decode the first page, downscale to
+/// Generate covers/{book_id}.jpg if missing: decode an early page, downscale to
 /// COVER_WIDTH px wide, encode JPEG, write atomically (.part + rename), then bump
-/// shelf.cover_ver. No-op Ok when the jpg already exists or the book has no
-/// decodable first page (svg/ico/heic/heif/jxl etc. that the `image` crate is not
-/// built to decode are treated as "no cover", not an error).
+/// shelf.cover_ver. No-op Ok when the jpg already exists or no candidate decodes
+/// (AVIF-only books: the pages still display, but this crate has no AVIF decoder).
 /// Shared by the `ensure_cover` command and the import pipeline (adapters).
 pub(crate) fn generate_cover(covers_dir: &Path, book_id: i64) -> Result<(), ReaderError> {
     let out = covers_dir.join(format!("{book_id}.jpg"));
     if out.exists() {
         return Ok(());
     }
-    let Some(bytes) = first_page_bytes(book_id)? else {
+    let img = cover_candidates(book_id)?.into_iter().find_map(|bytes| {
+        image::ImageReader::new(std::io::Cursor::new(bytes))
+            .with_guessed_format()
+            .ok()
+            .and_then(|r| r.decode().ok())
+    });
+    let Some(img) = img else {
         return Ok(());
-    };
-    let img = match image::ImageReader::new(std::io::Cursor::new(bytes))
-        .with_guessed_format()
-        .map_err(ReaderError::from)
-        .and_then(|r| r.decode().map_err(ReaderError::from))
-    {
-        Ok(img) => img,
-        Err(_) => return Ok(()), // undecodable format: graceful no-cover
     };
     let img = if img.width() > COVER_WIDTH {
         let nh = ((img.height() as u64 * COVER_WIDTH as u64) / img.width() as u64).max(1) as u32;

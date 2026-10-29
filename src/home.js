@@ -8,14 +8,15 @@ import { mountShell, coverUrl, wireCoverFallback, watchDrops, applyBackground } 
 import { fetchEpisodeInfo } from './chapters.js';
 import { setBanner, resetBanner } from './theme-api.js';
 import { inspectFolder, looksLikeFile } from './folder-scan.js';
+import { archiveAndImageFilters, imageFilters } from './image-exts.js';
 
 bootPage('home');
 mountShell('home');
 wireCoverFallback();
 
 const $ = (id) => document.getElementById(id);
-const IMG_EXTS = ['jpg', 'jpeg', 'png', 'webp', 'gif', 'avif', 'bmp', 'jfif'];
 const errText = (e) => String(e?.detail ?? e?.message ?? e);
+const skeletons = (n, kind) => Array.from({ length: n }, () => `<div class="skel skel--${kind}" aria-hidden="true"></div>`).join('');
 
 async function doImport(paths) {
   if (!paths?.length) return;
@@ -39,10 +40,7 @@ async function doImport(paths) {
 async function pickFiles() {
   const picked = await T.dialog.open({
     multiple: true,
-    filters: [
-      { name: t('imp.zipFilter'), extensions: ['zip', 'cbz'] },
-      { name: t('imp.imageFilter'), extensions: IMG_EXTS },
-    ],
+    filters: archiveAndImageFilters(t),
   }).catch(() => null);
   doImport([].concat(picked ?? []));
 }
@@ -65,7 +63,7 @@ watchDrops(doImport);
 
 // ---- custom home banner (independent of the window background, which lives in Settings) -----------------
 $('heroBg').addEventListener('click', async () => {
-  const picked = await T.dialog.open({ multiple: false, filters: [{ name: t('settings.imageFilter'), extensions: IMG_EXTS }] }).catch(() => null);
+  const picked = await T.dialog.open({ multiple: false, filters: imageFilters(t) }).catch(() => null);
   if (!picked) return;
   try { await setBanner(picked); toast(t('settings.imageSaved')); applyBackground(); }
   catch (e) { toast(t('settings.imageFailed', { e: errText(e) })); }
@@ -96,6 +94,12 @@ function card(b, sub) {
 }
 
 async function loadLists() {
+  $('noRecent').hidden = true;
+  $('noAdded').hidden = true;
+  $('recent').setAttribute('aria-busy', 'true');
+  $('added').setAttribute('aria-busy', 'true');
+  $('recent').innerHTML = skeletons(3, 'row');
+  $('added').innerHTML = skeletons(4, 'card');
   const recent = await lib.recentBooks(8).catch(() => []);
   const eps = await fetchEpisodeInfo(invoke, recent).catch(() => []);
   $('recent').innerHTML = recent.map((b, i) => {
@@ -106,11 +110,13 @@ async function loadLists() {
       : t('common.pageOf', { p: (b.page ?? 0) + 1, n: b.pageCount ?? 0 });
     return hcard(b, sub, pct);
   }).join('');
+  $('recent').removeAttribute('aria-busy');
   $('noRecent').hidden = recent.length > 0;
 
   const added = await lib.recentAdded(12).catch(() => []);
   $('added').innerHTML = added.map((b) =>
     card(b, `${t('book.pages', { n: b.pageCount ?? 0 })} · ${ago(b.addedAt)}`)).join('');
+  $('added').removeAttribute('aria-busy');
   $('noAdded').hidden = added.length > 0;
 }
 const open = (el) => { const c = el?.closest('[data-open]'); if (c) location.href = `reader.html?book=${c.dataset.open}`; };

@@ -247,8 +247,18 @@ pub async fn cache_clear(
             Some(id) => s.cache.purge_book(id),
             None => {
                 let win = s.extractor.window();
-                s.cache
-                    .clear(&|k| win.map_or(false, |w| w.pins(k)))
+                let n = s
+                    .cache
+                    .clear(&|k| win.map_or(false, |w| w.pins(k)));
+                // v0.3 `zip_extract_page` wrote data/page_cache. The reader no longer
+                // uses that folder; a full clear removes it along with the page cache.
+                if let Ok(dir) = crate::data_dir() {
+                    let legacy = dir.join("page_cache");
+                    if legacy.is_dir() {
+                        let _ = std::fs::remove_dir_all(legacy);
+                    }
+                }
+                n
             }
         })
     })

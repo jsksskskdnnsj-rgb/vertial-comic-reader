@@ -1,12 +1,16 @@
-MH漫画阅读器 v0.3.1（Windows 便携版）
+MH漫画阅读器 v0.7.1（Windows）
 
 
 1. 解压到任意文件夹
 2. 双击 mh-reader.exe 即可使用
 
 
-- 需要 Windows 10/11（系统自带 WebView2）
-- 书架数据默认保存在 exe 旁边的 mh-reader.db，可在设置-数据文件夹里更改
-- 绿色便携：不写注册表，删除文件夹即卸载
-- RAR / 7z 暂不支持，请先解压为文件夹后导入
+- 已在 Windows 10/11 上使用（系统自带 WebView2）。其他系统没有测过
+- 首页可以拖进 ZIP、文件夹或图片。书库里继续阅读、分组、搜索
+- 竖滑阅读，也能改成翻页。进度会记住，书签钉在某一张图上
+- 能看的图片：jpg / jpeg / jfif / png / webp / gif / bmp。avif 能显示页面，但可能没有封面。svg、tif、heic 不能导入
+- RAR / 7z 暂不支持，请先解压成文件夹再导入
+- 书架数据默认在 exe 旁边的 mh-reader.db，可在设置 → 数据文件夹里更改
+- 绿色便携：不写注册表。关窗口默认缩到托盘，设置里可以改成直接退出
+- 界面可切换中文和 English，主题是柔光
 - 源码见 https://github.com/jsksskskdnnsj-rgb/vertial-comic-reader

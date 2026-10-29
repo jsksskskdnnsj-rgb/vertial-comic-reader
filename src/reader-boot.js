@@ -77,21 +77,26 @@ async function largeBookGuard(info) {
   return v === 'saver' ? { perf: 'saver' } : undefined;
 }
 
+function showOpening(on) {
+  const n = $('readerLoading');
+  if (n) n.hidden = !on;
+}
 async function startView({ startPos = null } = {}) {
   auto.stop(); $('endCard').hidden = true; $('err').hidden = true;
+  showOpening(true);
   if (view) { await view.close(); view = null; }
   resetTrack(); strip.reset(); applyDim();
   const Mode = modeNow === 'flip' ? FlipView : Reader;
   view = new Mode($('host'), { onPosition, scrubber: [$('track'), $('thumb'), $('tiplabel')] });
   try {
     await view.open(bookId, { perf: saverNow ? 'saver' : 'balanced', widthPct: rp.widthPct, gap: rp.gap, startPos, beforeMount: largeBookGuard });
-  } catch (e) { view = null; return openFailed(e); }
+  } catch (e) { view = null; showOpening(false); return openFailed(e); }
   book = view.info; endDismissed = false; endArmAt = performance.now() + 1500;
   chMode = book.chapterMode; chN = sanePages(book.chapterPages); $('chrem').checked = !!book.chapterOverridden;
   $('bpCover').src = coverUrl(bookId); $('bbThumb').src = coverUrl(bookId);
   $('bpTitle').textContent = book.title; $('bcBook').textContent = book.title; $('bbBook').textContent = book.title;
   $('bpChips').innerHTML = `<span class="chip">${esc(t('book.pages', { n: book.realPages }))}</span>`;
-  view.refresh(); recompute(); syncControls(); await Promise.all([loadBookmarks(), loadHistory()]);
+  view.refresh(); recompute(); syncControls(); showOpening(false); await Promise.all([loadBookmarks(), loadHistory()]);
 }
 function openFailed(e) {
   if (e?.code === 'cancelled') return leave('library.html');

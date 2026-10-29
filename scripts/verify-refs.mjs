@@ -8,8 +8,8 @@ import { pathToFileURL } from 'node:url';
 const ROOT = process.cwd();
 const SRC = path.join(ROOT, 'src');
 const RS = path.join(ROOT, 'src-tauri', 'src');
-const COMMANDS = `pick_images pick_zips pick_folder_paths list_images zip_open zip_extract_page clear_cache open_data_dir
-shelf_add shelf_list shelf_get shelf_progress shelf_remove shelf_clear get_data_dir pick_data_dir set_data_dir
+const COMMANDS = `pick_folder_paths list_images open_data_dir
+shelf_list shelf_get shelf_remove shelf_clear get_data_dir pick_data_dir set_data_dir
 get_reader_config set_reader_config get_theme_config set_theme_config set_hero_image reset_hero_image win_minimize
 win_toggle_maximize win_close take_drop_queue folder_add folder_list folder_rename folder_remove shelf_move open_book
 rescan_book close_book set_reading_window save_progress load_progress fix_page_dims cache_stats cache_set_limit

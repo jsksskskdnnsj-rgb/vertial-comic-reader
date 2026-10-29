@@ -391,3 +391,38 @@ button:focus-visible{outline:2px solid var(--accent-ink)}
 /* ---- scrollbars (standard properties; the thumb is a soft teal-grey) -------------------------------------------------------------------- */
 .bp__list,.scroller,.page-main{scrollbar-color:rgba(60,110,120,.38) transparent}
 /* ==== end v0.7 soft light ==== */
+
+/* ==== v0.7.1 polish: spacing, empty states, loading. Sits after the soft-light block so re-running apply-v07.mjs does not remove it. ==== */
+.page-head{align-items:center}
+.page-head h1{letter-spacing:-.02em;line-height:1.25}
+.page-head .muted{flex:1 1 220px;line-height:1.5}
+.hero{padding:28px 26px 24px}
+.hero h1{letter-spacing:-.03em;line-height:1.2}
+.hero p{line-height:1.55;max-width:46em}
+.home-col .quick-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
+.panel h2{letter-spacing:-.01em}
+.shell-search:focus-within{border-color:var(--accent);box-shadow:var(--hl),0 0 0 3px var(--accent-tint)}
+.set-row{flex-wrap:wrap;row-gap:10px}
+.set-row .grow{flex:1 1 220px}
+.swatches{flex-wrap:wrap}
+.folder-list{max-height:min(62vh,640px);overflow:auto;scrollbar-width:thin;scrollbar-color:rgba(60,110,120,.38) transparent}
+.book-actions .btn{min-height:38px}
+.empty-state{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;text-align:center;padding:26px 14px;color:var(--muted)}
+.empty-state .i{width:28px;height:28px;color:var(--accent-ink)}
+.empty-state p{margin:0;max-width:36em;line-height:1.55;font-size:13px}
+.back-link{display:inline-flex;align-items:center;gap:6px;color:var(--accent-ink);text-decoration:none;font-size:13px;font-weight:650;padding:6px 12px 6px 8px;border-radius:12px;background:var(--ctl);border:1px solid var(--line);box-shadow:var(--hl),0 1px 3px rgba(70,110,125,.1)}
+.back-link:hover{border-color:var(--accent);background:var(--ctl-hover)}
+.back-link .i{width:16px;height:16px}
+.loading-line,.reader-loading{display:flex;align-items:center;justify-content:center;gap:10px;color:var(--muted);font-size:13px}
+.loading-line{padding:28px 8px}
+.reader-loading{position:absolute;inset:0;z-index:3;flex-direction:column;background:rgba(236,245,244,.42)}
+.spin{width:22px;height:22px;border-radius:50%;border:2.5px solid rgba(60,110,120,.2);border-top-color:var(--accent-ink);display:inline-block;animation:mh-spin .75s linear infinite}
+.btn.is-busy{cursor:progress}
+.btn.is-busy .i{animation:mh-spin .8s linear infinite}
+.skel{border-radius:14px;background:linear-gradient(90deg,rgba(255,255,255,.38) 0,rgba(255,255,255,.78) 45%,rgba(255,255,255,.38) 90%);background-size:220% 100%;animation:mh-shimmer 1.25s ease-in-out infinite}
+.skel--row{height:74px;margin-bottom:8px}
+.skel--card{aspect-ratio:3/4;border-radius:12px}
+@keyframes mh-spin{to{transform:rotate(360deg)}}
+@keyframes mh-shimmer{0%{background-position:100% 0}100%{background-position:0 0}}
+@media(prefers-reduced-motion:reduce){.spin,.skel,.btn.is-busy .i{animation:none}}
+/* ==== end v0.7.1 polish ==== */

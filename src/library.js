@@ -101,6 +101,7 @@ function renderStatus() {
 }
 
 function renderGrid() {
+  $('libLoading').hidden = true;
   const list = visibleBooks();
   renderStatus();
   $('count').textContent = t('lib.count', { n: list.length });
@@ -129,7 +130,8 @@ function renderGrid() {
   }).join('');
   const empty = $('empty');
   empty.hidden = list.length > 0;
-  empty.textContent = books.length ? t('lib.noBooks') : t('lib.emptyLibrary');
+  $('emptyText').textContent = books.length ? t('lib.noBooks') : t('lib.emptyLibrary');
+  $('emptyImport').hidden = books.length > 0;
 }
 function render() { renderFolders(); renderGrid(); }
 

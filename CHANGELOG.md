@@ -1,5 +1,15 @@
 # 更新日志
 
+## v0.7.1（2026-10-29）
+
+- 界面：首页 / 书库 / 导入 / 书籍页 / 阅读页补齐空状态、加载反馈和更一致的间距与标题；首页快捷入口改为两列，避免三加一的换行；设置页控件换行不再挤出窗口；搜索框有焦点环；书籍页返回是可点的返回条
+- 补上缺失的默认壁纸和首页横幅（`src/assets/bg-default.jpg`、`banner-default.jpg`，样式表一直在引用但仓库里没有这两个文件）。`scripts/gen-default-art.py` 可重新生成这两张柔光渐变图
+- 不再把 v0.3 单页（`legacy.html` / `legacy-reader.html`，约 1.8MB）打进前端包，改存 `archive/legacy-ui/`（不随应用分发，内部链接不再指向已删除的 `index.html`）
+- 删掉只给旧页面用的命令：`pick_images`、`pick_zips`、`zip_open`、`zip_extract_page`、`clear_cache`、`shelf_add`、`shelf_progress`。阅读仍走 `open_book` + extractor；书架管理仍走 `shelf_list` / `shelf_get` / `shelf_remove` 等。设置里「清理缓存」顺带删掉旧的 `page_cache` 目录
+- 文件类型对齐：对话框、导入和 `IMAGE_EXTS` 都是 jpg/jpeg/jfif/jpe/png/webp/gif/bmp/avif，不再列出 svg/tif/heic。avif 只原样显示；`image` crate 未开 avif 解码，封面与缩放切片用 `DECODE_EXTS`（不含 avif）
+- 安全：关闭 asset 协议（原先 scope 为 `**`）。自定义壁纸和横幅改走 `mhfile`，只读数据目录里的 `hero-custom.*` / `banner-custom.*`。补上 CSP（脚本仅 `'self'`，图片允许 mhpage / mhcover / mhfile）
+- 文档改为 v0.7.1，并写明 Windows 是已测试平台
+
 ## v0.7.0（2026-10-28）
 
 - 透明＋柔光主题：mh-ui.css 末尾追加 v0.7 柔光块（删除该块可回深色）；面板与浮层改为半透明白＋微光渐变＋白顶高光＋青灰细边＋柔和阴影，未新增 blur（v0.5.1 旧小面积 blur 原样保留）

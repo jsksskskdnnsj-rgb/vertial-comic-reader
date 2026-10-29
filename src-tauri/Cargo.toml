@@ -1,6 +1,6 @@
 [package]
 name = "mh-reader"
-version = "0.7.0"
+version = "0.7.1"
 description = "MH漫画阅读器 - 本地漫画竖滑阅读"
 authors = ["mh"]
 edition = "2021"
@@ -9,7 +9,7 @@ edition = "2021"
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = ["protocol-asset", "tray-icon"] }
+tauri = { version = "2", features = ["tray-icon"] }
 tauri-plugin-dialog = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -21,6 +21,9 @@ imagesize = "0.13"
 natord = "1"
 walkdir = "2"
 http = "1"
+# No `avif` feature: decoding AVIF needs dav1d. Pages with an AVIF payload are
+# displayed as-is by the webview (see extractor::sniff). Covers and resized
+# slices cannot decode them — do not add avif to DECODE_EXTS until this line grows `avif`.
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp", "gif", "bmp"] }
 
 [features]
