@@ -1,5 +1,9 @@
 # 更新日志
 
+## v0.7.6（2026-10-29）
+
+- 修复打开书籍时误报「无法读取这本书」。阅读页 `open()` 第一次回调 `onPosition` 时，`book` 还没赋上，读 `book.realPages` 会空指针，这个异常被当成文件损坏。现在在 `beforeMount` 里先把 `book` 赋好；`pageText` 和缩略图条在书或版面还没准备好时不再抛这个错
+
 ## v0.7.5（2026-10-29）
 
 - 应用图标换成卡通标，默认是变体 C：三张漫画页叠成小塔，最上面一张是圆眼睛和笑脸，旁边四颗黄星。底色仍是柔光薄荷（#80e5b6 / #25695a）。16 和 24 只留塔的轮廓、两只眼睛和星星；64 以上，下面两页才画漫画内框。`python scripts/gen-icons.py` 默认画这一版，`--variant a` 是单页圆脸，`--variant b` 是卷轴。png / ico / icns 与 `scripts/restore-binaries.json` 一起更新
