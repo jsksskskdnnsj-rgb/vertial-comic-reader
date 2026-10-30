@@ -89,9 +89,9 @@ assert.deepEqual(
 const src = fs.readFileSync(path.join(root, 'src/reader.js'), 'utf8');
 assert.match(src, /maxW: Infinity/);
 assert.equal(src.includes('setGate'), false);
-assert.match(src, /vh \* 0\.9/);
-assert.match(src, /scrollBy\(\{ top: 80 \}\)/);
-assert.match(src, /scrollBy\(\{ top: -80 \}\)/);
+// Page / nudge keys share one rAF velocity (v0.7.8); left/right still jump.
+assert.match(src, /KEY_PAGE_TRAVEL_VH|keyScrollPlan/);
+assert.match(src, /beginKeyScroll/);
 
 function chromeSnap(windowSize) {
   const [w, h] = windowSize.split(',').map(Number);

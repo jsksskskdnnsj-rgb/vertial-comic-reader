@@ -235,54 +235,84 @@ function onAutoChange(running) {
 auto.setSpeed(prefs.get('autoSpeed', 4)); onAutoChange(false);
 $('autoSpeed').addEventListener('input', (e) => { auto.setSpeed(+e.target.value); prefs.set('autoSpeed', auto.speed); $('autoVal').textContent = auto.speed; $('autoText').textContent = t('reader.autoOn', { n: auto.speed }); });
 $('autoToggle').addEventListener('click', () => auto.toggle()); $('autoStop').addEventListener('click', () => auto.stop());
-$('host').addEventListener('wheel', (e) => { if (!e.ctrlKey) armScrollChrome(); auto.stop(); }, { passive: true });
+$('host').addEventListener('wheel', (e) => { if (!e.ctrlKey) noteChromeScroll(); auto.stop(); }, { passive: true });
 
-// Scroll-mode chrome. Hide the history column, toolbar, bottom bar and the two
-// reading flyouts while the strip is actually moving; bring them back when it
-// rests or the pointer sits on a screen edge. .no-bp (the c key) is untouched.
-// The bookmark drawer and the page directory are not part of this.
-const CHROME_SETTLE_MS = 480;
-const CHROME_ARM_MS = 400;
-const CHROME_EDGE_PX = 36;
-const CHROME_MIN_DY = 6;
-let chromeScrolling = false, chromeEdge = false, chromeArmedUntil = 0, chromeTimer = 0, chromeLastY = 0, chromePointer = false;
+// Scroll-mode chrome (v0.7.8). v0.7.7 hid on the first few pixels and came back
+// ~480ms after the last scroll, so a wheel notch or a Space tap made the bars
+// flash. Now: only hide after continuous reading motion (~700ms), show again
+// after a longer idle (~1100ms), and restore immediately at the screen edge.
+// .no-bp (c / list) stays independent. Bookmark drawer and page directory are
+// not part of this.
+const CHROME_HIDE_AFTER_MS = 700;
+const CHROME_SHOW_AFTER_MS = 1100;
+const CHROME_EDGE_PX = 40;
+const CHROME_MIN_DY = 8;
+let chromeHidden = false, chromeEdge = false, chromeActiveSince = 0, chromeLastY = 0;
+let chromeHideTimer = 0, chromeShowTimer = 0, chromePointer = false, chromeArmedUntil = 0;
 function resetScrollChrome() {
-  chromeScrolling = false; chromeEdge = false; chromePointer = false;
-  clearTimeout(chromeTimer);
-  $('rg')?.classList.remove('chrome-away');
+  chromeHidden = false; chromeEdge = false; chromePointer = false; chromeActiveSince = 0; chromeArmedUntil = 0;
+  clearTimeout(chromeHideTimer); clearTimeout(chromeShowTimer);
+  const rg = $('rg');
+  if (!rg) return;
+  rg.classList.remove('chrome-away', 'chrome-fade');
 }
-function applyScrollChrome() {
-  const hide = view?.mode === 'scroll' && chromeScrolling && !chromeEdge;
-  $('rg')?.classList.toggle('chrome-away', hide);
+function setChromeHidden(on) {
+  if (view?.mode !== 'scroll') on = false;
+  if (on && chromeEdge) on = false;
+  const rg = $('rg'); if (!rg) return;
+  if (chromeHidden === on) return;
+  chromeHidden = on;
+  clearTimeout(rg._chromeCollapse);
+  if (on) {
+    rg.classList.add('chrome-fade');
+    rg._chromeCollapse = setTimeout(() => {
+      if (!chromeHidden) return;
+      rg.classList.add('chrome-away');
+      rg.classList.remove('chrome-fade');
+    }, 180);
+  } else {
+    rg.classList.remove('chrome-away', 'chrome-fade');
+  }
 }
-function armScrollChrome() { chromeArmedUntil = performance.now() + CHROME_ARM_MS; }
-$('host').addEventListener('scroll', () => {
+function noteChromeScroll() { chromeArmedUntil = performance.now() + 500; }
+function onChromeScrollActivity() {
   if (view?.mode !== 'scroll' || !view.strip) return;
+  if (view.strip.ignoreChromeScroll) return;
   const sc = view.strip.scroller;
   const y = sc.scrollTop;
   const dy = Math.abs(y - chromeLastY);
   chromeLastY = y;
-  if (view.strip.ignoreChromeScroll) return;
-  const user = performance.now() < chromeArmedUntil || chromePointer || auto.running;
-  if (!user || (dy < CHROME_MIN_DY && !auto.running)) return;
-  chromeScrolling = true;
-  applyScrollChrome();
-  clearTimeout(chromeTimer);
-  chromeTimer = setTimeout(() => { chromeScrolling = false; applyScrollChrome(); }, CHROME_SETTLE_MS);
-}, true);
+  const user = performance.now() < chromeArmedUntil || chromePointer || auto.running || !!view._keyScroll;
+  if (!user || (dy < CHROME_MIN_DY && !auto.running && !view._keyScroll)) return;
+  const now = performance.now();
+  if (!chromeActiveSince) chromeActiveSince = now;
+  clearTimeout(chromeShowTimer);
+  clearTimeout(chromeHideTimer);
+  const waitHide = Math.max(0, CHROME_HIDE_AFTER_MS - (now - chromeActiveSince));
+  chromeHideTimer = setTimeout(() => { if (chromeActiveSince && !chromeEdge) setChromeHidden(true); }, waitHide);
+  chromeShowTimer = setTimeout(() => {
+    chromeActiveSince = 0;
+    setChromeHidden(false);
+  }, CHROME_SHOW_AFTER_MS);
+}
+$('host').addEventListener('scroll', onChromeScrollActivity, true);
 $('host').addEventListener('pointerdown', (e) => { if (e.target.closest('.scroller')) chromePointer = true; }, true);
 addEventListener('pointerup', () => { chromePointer = false; });
 addEventListener('pointercancel', () => { chromePointer = false; });
 addEventListener('pointermove', (e) => {
-  const near = e.clientX <= CHROME_EDGE_PX || e.clientY <= CHROME_EDGE_PX || e.clientX >= innerWidth - CHROME_EDGE_PX || e.clientY >= innerHeight - CHROME_EDGE_PX;
+  const near = e.clientX <= CHROME_EDGE_PX || e.clientY <= CHROME_EDGE_PX
+    || e.clientX >= innerWidth - CHROME_EDGE_PX || e.clientY >= innerHeight - CHROME_EDGE_PX;
   if (near === chromeEdge) return;
   chromeEdge = near;
-  applyScrollChrome();
+  if (near) {
+    clearTimeout(chromeHideTimer);
+    setChromeHidden(false);
+  }
 }, { passive: true });
 addEventListener('keydown', (e) => {
   if (e.ctrlKey || e.metaKey || e.altKey) return;
   if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
-  if ([' ', 'PageDown', 'PageUp', 'ArrowDown', 'ArrowUp', 'ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(e.key)) armScrollChrome();
+  if ([' ', 'PageDown', 'PageUp', 'ArrowDown', 'ArrowUp', 'ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(e.key)) noteChromeScroll();
 }, true);
 
 // ---- page directory, prev/next page, jump ----------------------------------------------------------------------

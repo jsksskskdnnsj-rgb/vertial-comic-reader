@@ -77,6 +77,23 @@ export function wheelScrollDelta(e, gear, page) {
   if (!dx && !dy) return null;
   return { dx: dx * mul, dy: dy * mul };
 }
+// Space / PageDown used to call scrollBy({ behavior:'smooth' }) on every keydown,
+// including OS key-repeat. A tap was one CSS smooth jump; a hold stacked many more
+// at a different cadence. One rAF velocity covers both: tap travels minTravel at
+// that speed, hold keeps the same px/s until keyup.
+export const KEY_PAGE_PX_PER_SEC = 1800;
+export const KEY_NUDGE_PX_PER_SEC = 560;
+export const KEY_PAGE_TRAVEL_VH = 0.9;
+export const KEY_NUDGE_MIN_PX = 72;
+export function keyScrollPlan(key, { shift = false, viewH = 800 } = {}) {
+  const pageTravel = Math.max(1, viewH * KEY_PAGE_TRAVEL_VH);
+  if (key === 'ArrowDown') return { dir: 1, pxPerSec: KEY_NUDGE_PX_PER_SEC, minTravel: KEY_NUDGE_MIN_PX, key };
+  if (key === 'ArrowUp') return { dir: -1, pxPerSec: KEY_NUDGE_PX_PER_SEC, minTravel: KEY_NUDGE_MIN_PX, key };
+  if (key === 'PageUp') return { dir: -1, pxPerSec: KEY_PAGE_PX_PER_SEC, minTravel: pageTravel, key };
+  if (key === 'PageDown') return { dir: 1, pxPerSec: KEY_PAGE_PX_PER_SEC, minTravel: pageTravel, key };
+  if (key === ' ') return { dir: shift ? -1 : 1, pxPerSec: KEY_PAGE_PX_PER_SEC, minTravel: pageTravel, key };
+  return null;
+}
 const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
 const el = (tag, cls) => { const e = document.createElement(tag); if (cls) e.className = cls; return e; };
 
@@ -420,6 +437,7 @@ export class Reader {
     this.wheelGear = WHEEL_GEAR_DEFAULT;
     this.perfName = 'balanced'; this.perf = PERF.balanced;
     this.info = null; this.fixes = new Map(); this.fixRaf = 0;
+    this._keyScroll = null;
   }
 
   layoutParams() { return { viewW: this.strip.viewW, ...this.params }; }
@@ -511,12 +529,60 @@ export class Reader {
       this.setZoom(this.params.zoom * (e.deltaY < 0 ? 1.1 : 1 / 1.1), e.clientY - this.strip.scroller.getBoundingClientRect().top);
       return;
     }
+    this.stopKeyScroll();
     const d = wheelScrollDelta(e, this.wheelGear, { w: this.strip.viewW, h: this.strip.viewH });
     if (!d) return;
     e.preventDefault();
     this.strip.scroller.scrollBy({ left: d.dx, top: d.dy, behavior: 'auto' });
   }
   setWheelSpeed(gear) { this.wheelGear = wheelGear(gear); }
+
+  beginKeyScroll(key, shift = false) {
+    const plan = keyScrollPlan(key, { shift, viewH: this.strip.viewH });
+    if (!plan) return;
+    this.stopKeyScroll();
+    const hold = {
+      ...plan,
+      traveled: 0,
+      holding: true,
+      raf: 0,
+      lastT: performance.now(),
+      onUp: null,
+    };
+    this._keyScroll = hold;
+    hold.onUp = (ev) => {
+      if (ev.key !== hold.key) return;
+      hold.holding = false;
+      window.removeEventListener('keyup', hold.onUp);
+      hold.onUp = null;
+    };
+    window.addEventListener('keyup', hold.onUp);
+    const tick = (now) => {
+      if (this._keyScroll !== hold) return;
+      const dt = Math.min(0.05, Math.max(0, (now - hold.lastT) / 1000));
+      hold.lastT = now;
+      const sc = this.strip.scroller;
+      const before = sc.scrollTop;
+      sc.scrollTop = before + hold.dir * hold.pxPerSec * dt;
+      hold.traveled += Math.abs(sc.scrollTop - before);
+      const atEnd = (hold.dir > 0 && sc.scrollTop + sc.clientHeight >= sc.scrollHeight - 1)
+        || (hold.dir < 0 && sc.scrollTop <= 0);
+      if (atEnd || (!hold.holding && hold.traveled >= hold.minTravel)) {
+        this.stopKeyScroll();
+        return;
+      }
+      hold.raf = requestAnimationFrame(tick);
+    };
+    hold.raf = requestAnimationFrame(tick);
+  }
+
+  stopKeyScroll() {
+    const hold = this._keyScroll;
+    if (!hold) return;
+    this._keyScroll = null;
+    cancelAnimationFrame(hold.raf);
+    if (hold.onUp) window.removeEventListener('keyup', hold.onUp);
+  }
   setZoom(z, anchorY = 0) {
     this.params.zoom = clamp(Math.round(z * 100) / 100, 0.5, 3);
     this.strip.relayout(this.layoutParams(), anchorY);
@@ -541,14 +607,19 @@ export class Reader {
 
   onKey(e) {
     if (!this.keysEnabled || document.documentElement.dataset.modal === '1') return;     // dialogs own the keyboard
-    const sc = this.strip.scroller, vh = sc.clientHeight;
-    if (e.target instanceof HTMLInputElement) return;
-    const page = this.strip.layout.getPosition(sc.scrollTop).page;
+    if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
+
+    // Space / Page / arrows: one constant velocity for tap and hold. Ignore OS repeat.
+    if (keyScrollPlan(e.key, { shift: e.shiftKey })) {
+      e.preventDefault();
+      if (e.repeat) return;
+      this.beginKeyScroll(e.key, e.shiftKey);
+      return;
+    }
+
+    if (e.repeat) return;                                      // don't stack Home/End/side jumps
+    const page = this.strip.layout.getPosition(this.strip.scroller.scrollTop).page;
     switch (e.key) {
-      case ' ': case 'PageDown': sc.scrollBy({ top: (e.shiftKey ? -1 : 1) * vh * 0.9, behavior: 'smooth' }); break;
-      case 'PageUp':  sc.scrollBy({ top: -vh * 0.9, behavior: 'smooth' }); break;
-      case 'ArrowDown': sc.scrollBy({ top: 80 }); break;
-      case 'ArrowUp':   sc.scrollBy({ top: -80 }); break;
       case 'ArrowRight': this.jumpTo({ page: page + 1, frac: 0 }, { smooth: true }); break;
       case 'ArrowLeft':  this.jumpTo({ page: Math.max(0, page - 1), frac: 0 }, { smooth: true }); break;
       case 'Home': this.jumpTo({ page: 0, frac: 0 }); break;
@@ -563,6 +634,7 @@ export class Reader {
   }
 
   async close() {
+    this.stopKeyScroll();
     await this.saver?.flush();
     window.removeEventListener('keydown', this.keyHandler);
     document.removeEventListener('visibilitychange', this.visHandler);
