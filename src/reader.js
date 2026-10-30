@@ -95,6 +95,57 @@ export function keyScrollPlan(key, { shift = false, viewH = 800 } = {}) {
   return null;
 }
 const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
+
+// --p on the scrub track is a 0–1 fraction. CSS turns it into a length with
+// calc(var(--p) * 100%). A bare number is not a valid width/left, which left
+// the thumb pinned to the start while the labels kept moving.
+export function scrubProgress(page, realPages, frac = 0) {
+  const n = Math.max(0, Math.floor(Number(realPages) || 0));
+  if (n <= 1) return 0;
+  const p = Math.min(n - 1, Math.max(0, Math.floor(Number(page) || 0)));
+  const f = Math.min(1, Math.max(0, Number(frac) || 0));
+  return Math.min(1, (p + f) / (n - 1));
+}
+
+/** Inverse of scrubProgress(..., 0): the real page under a 0–1 track fraction. */
+export function pageFromScrub(t, realPages) {
+  const n = Math.max(0, Math.floor(Number(realPages) || 0));
+  if (n <= 1) return 0;
+  const u = Math.min(1, Math.max(0, Number(t) || 0));
+  return Math.min(n - 1, Math.round(u * (n - 1)));
+}
+
+/** 1-based page pair shared by the top counter and the bottom bar. */
+export function pageReadout(page, realPages) {
+  const n = Math.max(0, Math.floor(Number(realPages) || 0));
+  if (!n) return { page: 0, total: 0, text: '- / -' };
+  const p = Math.min(n - 1, Math.max(0, Math.floor(Number(page) || 0)));
+  return { page: p + 1, total: n, text: `${p + 1} / ${n}` };
+}
+
+const READER_BLANK_BLOCK = [
+  'button', 'a', 'input', 'textarea', 'select', 'label',
+  '.scrub', '.drawer', '.flyout', '.endcard', '.reader-err', '.help-overlay',
+  '.thumbstrip', '.page', '.flip-arrow', '.flip-image', '.chrome-toggle',
+  '.modal', '.modal-backdrop', '.mp__head', '.tb', '.bb', '.bp',
+  '.shell-top', '.shell-rail', '.vp__auto', '.reader-loading', '.hcard',
+].join(', ');
+
+/** True for empty reading surface (margins, gaps). Comic pages and controls are not blank. */
+export function isReaderBlankTarget(target) {
+  if (!target || typeof target.closest !== 'function') return false;
+  if (target.closest(READER_BLANK_BLOCK)) return false;
+  return !!target.closest('.viewport, .scroller, .sizer, #host, #vp');
+}
+
+/** Sticky show/hide for the reader shell. Scroll position does not call this. */
+export function applyReaderChromeClasses(doc, hidden) {
+  const on = !!hidden;
+  doc.body?.classList.toggle('reader-chrome-away', on);
+  const rg = doc.querySelector?.('#rg') || doc.querySelector?.('.rg');
+  rg?.classList.toggle('chrome-away', on);
+  return on;
+}
 const el = (tag, cls) => { const e = document.createElement(tag); if (cls) e.className = cls; return e; };
 
 // ---------------------------------------------------------------- Strip
@@ -171,9 +222,9 @@ class ViewportTracker {
     if (Math.abs(dy) > 1) this.dir = dy > 0 ? 1 : -1;
 
     const pos = L.getPosition(y);                              // viewport TOP -> saved
-    const mid = L.findVirtual(y + vh * 0.5);                   // viewport MIDDLE -> shown
+    const midPos = L.getPosition(y + vh * 0.5);                // viewport MIDDLE -> shown
     const atEnd = y + vh >= sc.scrollHeight - 4;
-    this.r.emitPosition({ ...pos, shownPage: L.src[mid], realPages: L.realPages, atEnd });
+    this.r.emitPosition({ ...pos, shownPage: midPos.page, shownFrac: midPos.frac, realPages: L.realPages, atEnd });
 
     prefetcher.update(this.r.computeWindow(y, this.dir));
     saver.mark(pos, atEnd);
@@ -408,23 +459,29 @@ export class Scrubber {
     track.addEventListener('pointerup',   (e) => { if (!this.dragging) return; this.dragging = false; this.r.jumpTo({ page: this.pageAt(e), frac: 0 }); });
   }
   pageAt(e) {
+    const n = this.r.strip?.layout?.realPages || 0;
     const rc = this.track.getBoundingClientRect();
-    const t = clamp((e.clientX - rc.left) / rc.width, 0, 1);
-    return Math.min(this.r.strip.layout.realPages - 1, Math.floor(t * this.r.strip.layout.realPages));
+    const t = clamp((e.clientX - rc.left) / Math.max(1, rc.width), 0, 1);
+    this.track.style.setProperty('--p', String(Math.min(1, Math.max(0, t))));
+    return pageFromScrub(t, n);
   }
   move(e) {
-    const page = this.pageAt(e), L = this.r.strip.layout;
-    this.label.textContent = `${page + 1} / ${L.realPages}`;
+    const page = this.pageAt(e), L = this.r.strip.layout, n = L.realPages;
+    const txt = pageReadout(page, n).text;
+    this.label.textContent = txt;
+    this.r.onScrubPreview?.(page, n);
     clearTimeout(this.thumbTimer);                          // debounce: one thumb request per pause
     this.thumbTimer = setTimeout(() => {
       const { bookId, sig } = this.r.info;
-      this.thumb.src = `${PAGE_BASE}/${bookId}/${L.gFirst[page]}?v=160&s=${sig}`;
+      const vi = L.gFirst[page];
+      if (vi == null) return;
+      this.thumb.src = `${PAGE_BASE}/${bookId}/${vi}?v=160&s=${sig}`;
     }, 60);
   }
-  setValue(page, realPages) {                               // from tracker, when not dragging
+  setValue(page, realPages, frac = 0) {                     // from tracker, when not dragging
     if (this.dragging) return;
-    this.track.style.setProperty('--p', realPages > 1 ? page / (realPages - 1) : 0);
-    this.label.textContent = `${page + 1} / ${realPages}`;
+    this.track.style.setProperty('--p', String(scrubProgress(page, realPages, frac)));
+    this.label.textContent = pageReadout(page, realPages).text;
   }
 }
 
@@ -508,7 +565,7 @@ export class Reader {
 
   emitPosition(p) {
     this.onPosition(p);
-    this.scrubber?.setValue(p.shownPage, p.realPages);
+    this.scrubber?.setValue(p.shownPage, p.realPages, p.shownFrac || 0);
   }
 
   jumpTo(pos, { smooth = false, atCenter = false } = {}) {   // atCenter: put the position at the viewport CENTER (bookmarks)

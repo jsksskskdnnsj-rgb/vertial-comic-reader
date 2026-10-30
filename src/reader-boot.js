@@ -1,7 +1,7 @@
 // reader-boot.js - wires reader.html to the two views (vertical strip: reader.js, page flip: flip.js) and to every reader feature.
 // Chapters and bookmarks are a navigation/display layer: this file only reads positions from the active view and calls view.jumpTo().
 import { T, invoke, win, t, esc, ago, toast, bootPage, prefs, isModalOpen, confirmDialog, choiceDialog, promptDialog } from './shell.js';
-import { Reader, thumbUrl, wheelGear } from './reader.js';
+import { Reader, thumbUrl, wheelGear, scrubProgress, pageReadout, isReaderBlankTarget, applyReaderChromeClasses } from './reader.js';
 import { FlipView } from './flip.js';
 import { lib } from './legacy-api.js';
 import { resolve, episodeAt, prevTarget, nextTarget, tickFractions, episodeLabel, sanePages, DEFAULT_PAGES, fetchEpisodeInfo } from './chapters.js';
@@ -52,16 +52,45 @@ async function loadHistory() {
 }
 
 // ---- position -> every readout -------------------------------------------------------------------------
+// Left (bbEp) and right (bbCount) share one page index. The short "8 / 2634" form
+// is what both numeric spots show; the long "第 8 页 / 共 2634 页" form is the
+// bottom-left title so a narrow column cannot look like a different page.
+function positionLabels(page, realPages) {
+  const info = pageReadout(page, realPages);
+  const long = info.total ? t('common.pageOf', { p: info.page, n: info.total }) : info.text;
+  const ep = info.total && chs.length ? episodeLabel(t, chs, info.page - 1, chMode) : '';
+  // Bottom-left uses the same "248 / 2634" text as the right counter, then the
+  // episode name. A long "第 248 页 / 共 …" string was clipping into a different page.
+  return { ...info, long, crumb: ep || long, side: ep ? `${info.text} · ${ep}` : info.text };
+}
+function paintScrub(page, realPages, frac = 0) {
+  const track = $('track');
+  if (!track || track.classList.contains('is-drag')) return;
+  track.style.setProperty('--p', String(scrubProgress(page, realPages, frac)));
+  const tip = $('tiplabel');
+  if (tip) tip.textContent = pageReadout(page, realPages).text;
+}
+function paintPageReadout(page, realPages, { commit = true } = {}) {
+  const lab = positionLabels(page, realPages);
+  $('pgCount').textContent = lab.text; $('pgCount').title = lab.long;
+  $('vpText').textContent = lab.text;
+  $('bbCount').textContent = lab.text; $('bbCount').title = lab.long;
+  $('bbCount').dataset.page = String(lab.page); $('bbCount').dataset.total = String(lab.total);
+  $('bcEp').textContent = lab.crumb;
+  $('bbEp').textContent = lab.side; $('bbEp').title = lab.long;
+  $('bbEp').dataset.page = String(lab.page); $('bbEp').dataset.total = String(lab.total);
+  if (!commit) return lab;
+  shown = lab.total ? lab.page - 1 : 0;
+  history_.updateCurrent({ page: shown, realPages: lab.total, epText: lab.crumb });
+  strip.update(shown, lab.total);
+  return lab;
+}
 function onPosition(p) {
   // open() emits position before it returns; sync book from view.info if boot has not assigned it yet
   if (!book && view?.info) book = view.info;
-  shown = p.shownPage; lastPos = p;
-  const txt = `${p.shownPage + 1} / ${p.realPages}`;
-  $('pgCount').textContent = txt; $('vpText').textContent = txt; $('bbCount').textContent = txt;
-  const ep = epText(shown, p.realPages);
-  $('bcEp').textContent = ep; $('bbEp').textContent = ep;
-  history_.updateCurrent({ page: shown, realPages: p.realPages, epText: ep });
-  strip.update(shown, p.realPages);
+  lastPos = p;
+  paintPageReadout(p.shownPage, p.realPages);
+  paintScrub(p.shownPage, p.realPages, p.shownFrac || 0);
   updateBmButton();
   if (p.atEnd && !endDismissed && performance.now() > endArmAt && $('endCard').hidden) showEnd();
 }
@@ -92,13 +121,13 @@ function showOpening(on) {
 }
 async function startView({ startPos = null } = {}) {
   auto.stop(); $('endCard').hidden = true; $('err').hidden = true;
-  resetScrollChrome();
   showOpening(true);
   if (view) { await view.close(); view = null; }
   book = null;                                                  // drop stale info while the next open is in flight
   resetTrack(); strip.reset(); applyDim();
   const Mode = modeNow === 'flip' ? FlipView : Reader;
   view = new Mode($('host'), { onPosition, scrubber: [$('track'), $('thumb'), $('tiplabel')] });
+  view.onScrubPreview = (page, n) => paintPageReadout(page, n, { commit: false });
   try {
     // Assign `book` in beforeMount (runs after openBook, before first onPosition from tick/render)
     // so pageText / ThumbStrip never see null during open.
@@ -139,7 +168,7 @@ function renderChapterUi() {
   const none = chMode === 'folder' && (book?.folderChapters?.length ?? 0) === 0;
   $('chhint').hidden = !none; $('chhint').textContent = none ? t('chapters.noFolders') : '';
   $('chreset').hidden = !($('chrem').checked || book?.chapterOverridden);
-  if (book) { const ep = epText(shown); $('bcEp').textContent = ep; $('bbEp').textContent = ep; }
+  if (book) { const lab = positionLabels(shown, book.realPages); $('bcEp').textContent = lab.crumb; $('bbEp').textContent = lab.side; $('bbEp').title = lab.long; }
 }
 function recompute() { chs = resolve(chMode, chN, book); renderChapterUi(); }
 let persistTimer = 0;
@@ -205,7 +234,13 @@ function toggleFly(id) {
 }
 $('tbSettings').addEventListener('click', () => toggleFly('flySettings'));
 $('tbAuto').addEventListener('click', () => toggleFly('flyAuto'));
-addEventListener('pointerdown', (e) => { if (!e.target.closest('.flyout, #tb')) closeFlies(null); });
+let chromeSuppressClick = false;
+addEventListener('pointerdown', (e) => {
+  const open = !$('flySettings').hidden || !$('flyAuto').hidden;
+  const inside = !!e.target.closest('.flyout, #tb');
+  if (!inside) closeFlies(null);
+  chromeSuppressClick = open && !inside;
+});
 
 function syncControls() {
   $('w').value = rp.widthPct; $('dim').value = rp.dim; $('saver').checked = saverNow;
@@ -235,85 +270,48 @@ function onAutoChange(running) {
 auto.setSpeed(prefs.get('autoSpeed', 4)); onAutoChange(false);
 $('autoSpeed').addEventListener('input', (e) => { auto.setSpeed(+e.target.value); prefs.set('autoSpeed', auto.speed); $('autoVal').textContent = auto.speed; $('autoText').textContent = t('reader.autoOn', { n: auto.speed }); });
 $('autoToggle').addEventListener('click', () => auto.toggle()); $('autoStop').addEventListener('click', () => auto.stop());
-$('host').addEventListener('wheel', (e) => { if (!e.ctrlKey) noteChromeScroll(); auto.stop(); }, { passive: true });
+$('host').addEventListener('wheel', () => { auto.stop(); }, { passive: true });
 
-// Scroll-mode chrome (v0.7.8). v0.7.7 hid on the first few pixels and came back
-// ~480ms after the last scroll, so a wheel notch or a Space tap made the bars
-// flash. Now: only hide after continuous reading motion (~700ms), show again
-// after a longer idle (~1100ms), and restore immediately at the screen edge.
-// .no-bp (c / list) stays independent. Bookmark drawer and page directory are
-// not part of this.
-const CHROME_HIDE_AFTER_MS = 700;
-const CHROME_SHOW_AFTER_MS = 1100;
-const CHROME_EDGE_PX = 40;
-const CHROME_MIN_DY = 8;
-let chromeHidden = false, chromeEdge = false, chromeActiveSince = 0, chromeLastY = 0;
-let chromeHideTimer = 0, chromeShowTimer = 0, chromePointer = false, chromeArmedUntil = 0;
-function resetScrollChrome() {
-  chromeHidden = false; chromeEdge = false; chromePointer = false; chromeActiveSince = 0; chromeArmedUntil = 0;
-  clearTimeout(chromeHideTimer); clearTimeout(chromeShowTimer);
-  const rg = $('rg');
-  if (!rg) return;
-  rg.classList.remove('chrome-away', 'chrome-fade');
+// Sticky chrome. v0.7.7–v0.7.8 hid the side bars from scroll alone, so a wheel
+// notch or a Space hold flashed them. They now stay until the reader toggles:
+// the floating button, the T key, or a click on blank page margin. Comic pages,
+// the scrubber, and the other controls keep their own clicks. .no-bp (c / list)
+// still only collapses history.
+let chromeHidden = false;
+function syncChromeToggle() {
+  const btn = $('chromeToggle');
+  if (!btn) return;
+  const key = chromeHidden ? 'reader.chromeShow' : 'reader.chromeHide';
+  btn.setAttribute('aria-pressed', chromeHidden ? 'true' : 'false');
+  btn.setAttribute('aria-label', t(key));
+  btn.title = t(key);
+  const label = $('chromeToggleText');
+  if (label) label.textContent = t(key);
 }
-function setChromeHidden(on) {
-  if (view?.mode !== 'scroll') on = false;
-  if (on && chromeEdge) on = false;
-  const rg = $('rg'); if (!rg) return;
-  if (chromeHidden === on) return;
-  chromeHidden = on;
-  clearTimeout(rg._chromeCollapse);
-  if (on) {
-    rg.classList.add('chrome-fade');
-    rg._chromeCollapse = setTimeout(() => {
-      if (!chromeHidden) return;
-      rg.classList.add('chrome-away');
-      rg.classList.remove('chrome-fade');
-    }, 180);
-  } else {
-    rg.classList.remove('chrome-away', 'chrome-fade');
+function applyReaderChrome(hidden, { persist = true } = {}) {
+  chromeHidden = applyReaderChromeClasses(document, hidden);
+  if (chromeHidden) closeFlies(null);
+  syncChromeToggle();
+  if (persist) prefs.set('reader.chromeHidden', chromeHidden);
+}
+function toggleReaderChrome() { applyReaderChrome(!chromeHidden); }
+$('chromeToggle')?.addEventListener('click', (e) => {
+  e.stopPropagation();
+  chromeSuppressClick = false;
+  toggleReaderChrome();
+});
+$('vp').addEventListener('click', (e) => {
+  if (chromeSuppressClick) { chromeSuppressClick = false; return; }
+  if (e.button !== 0 || e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return;
+  if (isModalOpen() || helpOpen()) return;
+  if (!isReaderBlankTarget(e.target)) return;
+  const sc = e.target.classList?.contains('scroller') ? e.target : null;
+  if (sc) {
+    const box = sc.getBoundingClientRect();
+    if (e.clientX >= box.left + sc.clientWidth || e.clientY >= box.top + sc.clientHeight) return;
   }
-}
-function noteChromeScroll() { chromeArmedUntil = performance.now() + 500; }
-function onChromeScrollActivity() {
-  if (view?.mode !== 'scroll' || !view.strip) return;
-  if (view.strip.ignoreChromeScroll) return;
-  const sc = view.strip.scroller;
-  const y = sc.scrollTop;
-  const dy = Math.abs(y - chromeLastY);
-  chromeLastY = y;
-  const user = performance.now() < chromeArmedUntil || chromePointer || auto.running || !!view._keyScroll;
-  if (!user || (dy < CHROME_MIN_DY && !auto.running && !view._keyScroll)) return;
-  const now = performance.now();
-  if (!chromeActiveSince) chromeActiveSince = now;
-  clearTimeout(chromeShowTimer);
-  clearTimeout(chromeHideTimer);
-  const waitHide = Math.max(0, CHROME_HIDE_AFTER_MS - (now - chromeActiveSince));
-  chromeHideTimer = setTimeout(() => { if (chromeActiveSince && !chromeEdge) setChromeHidden(true); }, waitHide);
-  chromeShowTimer = setTimeout(() => {
-    chromeActiveSince = 0;
-    setChromeHidden(false);
-  }, CHROME_SHOW_AFTER_MS);
-}
-$('host').addEventListener('scroll', onChromeScrollActivity, true);
-$('host').addEventListener('pointerdown', (e) => { if (e.target.closest('.scroller')) chromePointer = true; }, true);
-addEventListener('pointerup', () => { chromePointer = false; });
-addEventListener('pointercancel', () => { chromePointer = false; });
-addEventListener('pointermove', (e) => {
-  const near = e.clientX <= CHROME_EDGE_PX || e.clientY <= CHROME_EDGE_PX
-    || e.clientX >= innerWidth - CHROME_EDGE_PX || e.clientY >= innerHeight - CHROME_EDGE_PX;
-  if (near === chromeEdge) return;
-  chromeEdge = near;
-  if (near) {
-    clearTimeout(chromeHideTimer);
-    setChromeHidden(false);
-  }
-}, { passive: true });
-addEventListener('keydown', (e) => {
-  if (e.ctrlKey || e.metaKey || e.altKey) return;
-  if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
-  if ([' ', 'PageDown', 'PageUp', 'ArrowDown', 'ArrowUp', 'ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(e.key)) noteChromeScroll();
-}, true);
+  toggleReaderChrome();
+});
 
 // ---- page directory, prev/next page, jump ----------------------------------------------------------------------
 $('tbDir').addEventListener('click', () => {
@@ -360,6 +358,7 @@ const HELP_ROWS = [
   ['A', 'help.auto'],
   ['D', 'help.dir'],
   ['C', 'help.history'],
+  ['T', 'help.chrome'],
   ['G', 'help.jump'],
   ['F  ·  F11', 'help.full'],
   ['[  ·  ]', 'help.episode'],
@@ -400,6 +399,7 @@ addEventListener('keydown', (e) => {
     setHelp(!helpOpen()); e.preventDefault(); return;
   }
   if (helpOpen() || e.ctrlKey || e.metaKey || e.altKey) return;
+  if (k === 't') { if (e.repeat) return; toggleReaderChrome(); e.preventDefault(); return; }
   if (!view) return;
   if (k === 'b') toggleBookmark(); else if (k === 'm') $('tbMode').click(); else if (k === 'a') auto.toggle(); else if (k === 'd') $('tbDir').click(); else if (k === 'c') $('bpToggle').click();
   else if (k === 'g') $('pgCount').click(); else if (k === 'f' || k === 'f11') toggleFs(); else if (k === '[') goEpisode(prevTarget(chs, view.topPos())); else if (k === ']') goEpisode(nextTarget(chs, view.topPos())); else return;
@@ -414,6 +414,7 @@ win.onCloseRequested(async (e) => {
 
 // ---- go ---------------------------------------------------------------------------------------------------------------
 wireTrack(); trackObserver.observe($('track'));
+applyReaderChrome(!!prefs.get('reader.chromeHidden', false), { persist: false });
 invoke('get_chapter_defaults').then(d => { chDefaults = d; }).catch(() => {});
 startView();
 if (new URLSearchParams(location.search).get('help') === '1') setHelp(true);

@@ -27,4 +27,5 @@
 <symbol id="chevron-up" viewBox="0 0 24 24"><path d="m6 15 6-6 6 6"/></symbol>
 <symbol id="chevron-down" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></symbol>
 <symbol id="pencil" viewBox="0 0 24 24"><path d="M4 20h4L19 9a2.1 2.1 0 0 0-3-3L5 17z"/><path d="m14 7 3 3"/></symbol>
+<symbol id="layout" viewBox="0 0 24 24"><rect x="3.5" y="4" width="17" height="16" rx="2"/><path d="M3.5 9h17M9 9v11M15 9v11"/></symbol>
 </svg>
