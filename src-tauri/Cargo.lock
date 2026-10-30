@@ -2238,7 +2238,7 @@ dependencies = [
 
 [[package]]
 name = "mh-reader"
-version = "0.7.8"
+version = "0.7.9"
 dependencies = [
  "http",
  "image",
