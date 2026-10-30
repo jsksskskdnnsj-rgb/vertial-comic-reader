@@ -1,4 +1,4 @@
-// v0.7.8: key tap/hold share one velocity; chrome hide is delayed.
+// v0.7.8: key tap/hold share one velocity. Chrome is a sticky toggle, not a scroll timer.
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -38,21 +38,15 @@ assert.equal(/case ' ':.*behavior:\s*'smooth'/.test(src), false);
 assert.equal(/case 'PageDown':.*behavior:\s*'smooth'/.test(src), false);
 assert.equal(/case 'ArrowDown':\s*sc\.scrollBy/.test(src), false);
 
-assert.match(boot, /CHROME_HIDE_AFTER_MS = 700/);
-assert.match(boot, /CHROME_SHOW_AFTER_MS = 1100/);
-assert.match(boot, /chrome-fade/);
-assert.equal(boot.includes('CHROME_SETTLE_MS = 480'), false);
-
-assert.match(css, /\.rg\.chrome-fade/);
-assert.match(css, /transition:opacity/);
-
-// A Space tap covering 0.9vh at page speed finishes in under the hide delay,
-// so chrome should not flash on a single page turn.
-{
-  const viewH = 700;
-  const travel = viewH * KEY_PAGE_TRAVEL_VH;
-  const ms = (travel / KEY_PAGE_PX_PER_SEC) * 1000;
-  assert.ok(ms < 700, `tap duration ${ms}ms should stay under chrome hide delay`);
-}
+assert.equal(boot.includes('CHROME_HIDE_AFTER_MS'), false);
+assert.equal(boot.includes('CHROME_SHOW_AFTER_MS'), false);
+assert.equal(boot.includes('noteChromeScroll'), false);
+assert.equal(boot.includes('onChromeScrollActivity'), false);
+assert.match(boot, /toggleReaderChrome/);
+assert.match(boot, /isReaderBlankTarget/);
+assert.match(boot, /applyReaderChromeClasses/);
+assert.match(css, /calc\(var\(--p, 0\) \* 100%\)/);
+assert.match(css, /body\.reader-chrome-away \.shell-top/);
+assert.match(css, /\.rg\.chrome-away \.mp__head\{display:none\}/);
 
 console.log('scroll v0.7.8 checks passed');

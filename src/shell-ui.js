@@ -93,6 +93,7 @@ export function mountShell(active = '', opts = {}) {
       const tag = e.target?.tagName;
       if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || e.target?.isContentEditable) return;
       if (document.documentElement.dataset.modal === '1' || document.querySelector('.modal-backdrop')) return;
+      if (document.body.classList.contains('reader-chrome-away')) return;
       const slash = e.key === '/' && !e.ctrlKey && !e.metaKey && !e.altKey;
       const find = (e.key === 'k' || e.key === 'K') && (e.ctrlKey || e.metaKey) && !e.altKey;
       if (!slash && !find) return;

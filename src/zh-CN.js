@@ -196,6 +196,9 @@ export default {
   'reader.tbPages': '\u76ee\u5f55', // Pages
   'reader.tbSettings': '\u9605\u8bfb\u8bbe\u7f6e', // Settings
   'reader.toggleHistory': '\u663e\u793a / \u9690\u85cf\u9605\u8bfb\u5386\u53f2', // Show / hide reading history
+  'reader.chromeToggle': '\u663e\u793a\u6216\u9690\u85cf\u4e24\u4fa7\u529f\u80fd\u533a', // Show or hide the side panels
+  'reader.chromeHide': '\u9690\u85cf\u754c\u9762', // Hide panels
+  'reader.chromeShow': '\u663e\u793a\u754c\u9762', // Show panels
   'reader.wheel': '\u6eda\u8f6e\u901f\u5ea6', // Wheel speed
   'reader.width': '\u9875\u9762\u5bbd\u5ea6', // Page width
   'chapters.defaultHelp': '\u5bf9\u6240\u6709\u4e66\u751f\u6548\uff0c\u9664\u975e\u4f60\u5728\u9605\u8bfb\u5668\u91cc\u4e3a\u67d0\u672c\u4e66\u5355\u72ec\u4fee\u6539\u3002', // Applies to every book unless you change it for one book in the reader.
@@ -341,6 +344,7 @@ export default {
   'help.auto': '开始或停止自动滚动',
   'help.dir': '打开页目录',
   'help.history': '显示或隐藏阅读记录',
+  'help.chrome': '显示或隐藏两侧功能区、顶栏和进度条。点击页面空白处也可以切换。',
   'help.jump': '跳到指定页',
   'help.full': '全屏',
   'help.episode': '上一话或下一话',
