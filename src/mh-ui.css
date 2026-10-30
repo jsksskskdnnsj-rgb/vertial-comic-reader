@@ -611,12 +611,23 @@ button:focus-visible,a.btn:focus-visible{outline:2px solid var(--accent-ink);out
 }
 /* ==== end v0.7.4 ==== */
 
-/* ==== v0.7.7 scroll chrome ====
-   While the vertical strip is moving, tuck the history column, the toolbar and the
-   bottom bar so the page column can use that space. Flyouts (reading settings,
-   auto-scroll) hide with them and come back with them. The bookmark drawer, the
-   page directory and the help layer are not in this rule. .no-bp still owns the
-   manual history collapse (the list button and the c key). */
+/* ==== v0.7.7 / v0.7.8 scroll chrome ====
+   Sustained vertical scrolling tucks the history column, toolbar, bottom bar and
+   reading flyouts so the page column can widen. v0.7.8: fade briefly before the
+   grid collapses, and the boot script waits for continuous motion before hiding.
+   Bookmark drawer / page directory / help are not in this rule. .no-bp still owns
+   the manual history collapse (list button and the c key). */
+.rg > .bp,.rg > .tb,.rg > .bb,.rg > .flyout{
+  transition:opacity .18s ease,transform .18s ease;
+}
+.rg.chrome-fade > .bp,
+.rg.chrome-fade > .tb,
+.rg.chrome-fade > .bb,
+.rg.chrome-fade > .flyout{
+  opacity:0;
+  pointer-events:none;
+  transform:translateY(4px);
+}
 .rg.chrome-away{
   grid-template-columns:minmax(0,1fr);
   grid-template-rows:minmax(0,1fr);
@@ -626,9 +637,12 @@ button:focus-visible,a.btn:focus-visible{outline:2px solid var(--accent-ink);out
 .rg.chrome-away .tb,
 .rg.chrome-away .bb{display:none}
 .rg.chrome-away .mp{grid-column:1;grid-row:1}
-.rg.chrome-away .flyout{visibility:hidden;pointer-events:none}
+.rg.chrome-away .flyout{visibility:hidden;pointer-events:none;opacity:0}
 @media(max-width:760px){
   .rg.chrome-away{grid-template-columns:minmax(0,1fr);grid-template-rows:minmax(0,1fr);gap:0}
   .rg.chrome-away .bp{display:none}
 }
-/* ==== end v0.7.7 ==== */
+@media(prefers-reduced-motion:reduce){
+  .rg > .bp,.rg > .tb,.rg > .bb,.rg > .flyout{transition:none}
+}
+/* ==== end v0.7.8 chrome ==== */
