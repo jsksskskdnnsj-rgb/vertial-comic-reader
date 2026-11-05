@@ -662,3 +662,58 @@ body.reader-chrome-away .work{padding:0;gap:0}
 .flip-view .flip-stage{display:flex;flex:1;align-items:center;justify-content:center;min-width:0;height:100%}
 .flip-image.pg-crop{object-fit:fill}
 .flip-image.flip-image--b[hidden]{display:none!important}
+
+/* ==== v0.8.1 unified shell frame + smoother in-app navigation ====
+   One frosted surface for the left rail + main column (no gap / double border).
+   Inner .panel.glass blocks become inset sections, not separate glass cards.
+   Backdrop blur stays off large surfaces (v0.5.1 rule); the frame uses translucent fill only. */
+body:has(.shell-frame) .shell-top{
+  backdrop-filter:none;-webkit-backdrop-filter:none;
+  padding-left:14px;padding-right:14px;
+}
+.work.shell-frame{
+  flex:1;min-height:0;margin:0 14px 14px;padding:0;gap:0;
+  border-radius:var(--radius);overflow:hidden;
+  border:1px solid var(--line);
+  box-shadow:var(--hl,none),var(--shadow-soft,0 18px 50px #0003);
+  background:linear-gradient(180deg,rgba(255,255,255,.24),rgba(255,255,255,0) 40%),var(--panel);
+  contain:layout style;
+}
+.work.shell-frame .shell-rail{
+  backdrop-filter:none;-webkit-backdrop-filter:none;
+  border-right:1px solid var(--line);
+  background:transparent;
+  align-self:stretch;
+}
+.work.shell-frame .page-main{
+  background:transparent;
+  contain:content;
+}
+.work.shell-frame .panel.glass,
+.work.shell-frame .hero.glass,
+.work.shell-frame .folder-panel.glass,
+.work.shell-frame .lib-main.glass{
+  background:rgba(255,255,255,.18);
+  border:none;box-shadow:none;
+  backdrop-filter:none;-webkit-backdrop-filter:none;
+}
+.work.shell-frame .lib-layout{gap:0;min-height:100%;align-items:stretch}
+.work.shell-frame .folder-panel.glass{
+  border-radius:0;border-right:1px solid var(--line);
+}
+.work.shell-frame .lib-main.glass{border-radius:0}
+.work.shell-frame .page-main:has(.hero){padding-top:0}
+.work.shell-frame .hero.glass{
+  border-radius:0;margin-bottom:12px;
+}
+.work.shell-frame .home-grid .history-panel.glass{
+  border-right:1px solid var(--line);border-radius:0;
+}
+@media(max-width:900px){
+  .work.shell-frame .home-grid .history-panel.glass{border-right:none;border-bottom:1px solid var(--line)}
+}
+.page-main.is-swapping{opacity:.94;pointer-events:none}
+@media(prefers-reduced-motion:reduce){
+  .page-main.is-swapping{opacity:1}
+}
+/* ==== end v0.8.1 unified shell ==== */

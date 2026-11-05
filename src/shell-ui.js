@@ -1,9 +1,7 @@
 // shell-ui.js - fills <header id="shell-top"> and <nav id="shell-rail">, applies the accent colour,
-// the whole-window background and the home banner (separate images since v0.6). Changes vs v0.5.1: the dim strength is a CSS variable (--bg-dim) that
-// drives BOTH the default background (painted by mh-ui.css) and a custom image, so the Settings
-// slider works either way; a custom image also becomes --banner-image for the Home banner;
-// resetting to the default removes the layer; language button label is translated; the drop-queue
-// poll pauses while the window is hidden.
+// the whole-window background and the home banner (separate images since v0.6). v0.8.1: one-shot shell
+// chrome (rail/top not rebuilt every navigation), cached wallpaper layer, in-app fetch navigation between
+// shell pages so the background and frame stay put.
 import { T, invoke, t, esc, toast, prefs, applyTheme, applyI18n, wireWindow, lang, setLang } from './shell.js';
 import { appearanceVars } from './appearance.js';
 import { extrasVars } from './appearance-extras.js';
@@ -13,9 +11,14 @@ export const COVER_BASE = T.core?.convertFileSrc
   : '';
 export const coverUrl = (id, v = 0) => `${COVER_BASE}/${id}?v=${v ?? 0}`;
 
+const SHELL_PAGES = new Set(['home.html', 'library.html', 'import.html', 'settings.html', 'scan.html', 'book.html']);
+
+let coverWired = false;
 /** Cover <img data-cover="id"> fallback: a 404 means "not generated yet" -> ask Rust once
  *  (ensure_cover), then reload the image. Call once per page. */
 export function wireCoverFallback() {
+  if (coverWired) return;
+  coverWired = true;
   document.addEventListener('error', async (e) => {
     const img = e.target;
     if (!(img instanceof HTMLImageElement) || !img.dataset.cover || img.dataset.retried) return;
@@ -35,6 +38,226 @@ const RAIL = [
   { key: 'import', href: 'import.html', icon: 'download', label: 'nav.import' },
 ];
 
+const searchCtx = { onSearch: null, searchTimer: 0 };
+let navGen = 0;
+let navBusy = false;
+let themeCfgCache = null;
+let themeCfgAt = 0;
+let lastHeroLayer = '';
+let lastBannerVar = '';
+
+export function railActiveFromUrl(url = location) {
+  const base = url.pathname.split('/').pop() || 'home.html';
+  const view = url.searchParams.get('view');
+  if (base === 'library.html') {
+    if (view === 'recent') return 'recent';
+    if (view === 'marked') return 'marked';
+    return 'library';
+  }
+  if (base === 'settings.html') return 'settings';
+  if (base === 'import.html' || base === 'scan.html') return 'import';
+  if (base === 'book.html') return 'library';
+  if (base === 'home.html') return 'home';
+  return '';
+}
+
+function isShellUrl(url) {
+  if (url.origin !== location.origin) return false;
+  const base = url.pathname.split('/').pop() || '';
+  return SHELL_PAGES.has(base);
+}
+
+function syncRailActive(active) {
+  const rail = document.getElementById('shell-rail');
+  if (!rail) return;
+  rail.querySelectorAll('a[href]').forEach((a) => {
+    const key = a.href.includes('settings.html') ? 'settings'
+      : a.href.includes('view=recent') ? 'recent'
+        : a.href.includes('view=marked') ? 'marked'
+          : a.href.includes('import.html') ? 'import'
+            : a.href.includes('library.html') ? 'library'
+              : a.href.includes('home.html') ? 'home' : '';
+    a.classList.toggle('is-on', key === active);
+  });
+}
+
+function renderRail(active) {
+  const rail = document.getElementById('shell-rail');
+  if (!rail) return;
+  rail.className = 'shell-rail';
+  rail.innerHTML =
+    RAIL.map((r) => `<a href="${r.href}" class="${active === r.key ? 'is-on' : ''}">
+        <svg class="i"><use href="icons.svg#${r.icon}"/></svg><span>${esc(t(r.label))}</span></a>`).join('') +
+    `<span class="rail-spacer"></span>
+     <a href="settings.html" class="${active === 'settings' ? 'is-on' : ''}">
+       <svg class="i"><use href="icons.svg#settings"/></svg><span>${esc(t('nav.settings'))}</span></a>`;
+}
+
+function buildShellTop(opts = {}) {
+  const top = document.getElementById('shell-top');
+  if (!top || top.dataset.built === '1') return top;
+  top.dataset.built = '1';
+  top.className = 'shell-top';
+  top.innerHTML = `
+    <a class="brand" href="home.html">
+      <span class="brand__logo"><svg class="i"><use href="icons.svg#book-open"/></svg></span>
+      <span class="brand__txt"><b>${esc(t('app.name'))}</b><small>${esc(t('app.tagline'))}</small></span>
+    </a>
+    <label class="search shell-search">
+      <svg class="i"><use href="icons.svg#search"/></svg>
+      <input id="shellSearch" type="search" autocomplete="off" placeholder="${esc(t('search.placeholder'))}">
+    </label>
+    <span class="spacer"></span>
+    <button class="ibtn" id="shellLang" aria-label="${esc(t('settings.language'))}" title="${esc(t('settings.language'))}"><svg class="i"><use href="icons.svg#globe"/></svg></button>
+    <div class="wc">
+      <button data-window-minimize aria-label="${esc(t('win.min'))}"><svg class="i"><use href="icons.svg#min"/></svg></button>
+      <button data-window-maximize aria-label="${esc(t('win.max'))}"><svg class="i"><use href="icons.svg#max"/></svg></button>
+      <button data-window-close aria-label="${esc(t('win.close'))}"><svg class="i"><use href="icons.svg#close"/></svg></button>
+    </div>`;
+  const q = top.querySelector('#shellSearch');
+  q.title = t('search.shortcut');
+  const runSearch = () => {
+    const v = q.value.trim();
+    if (searchCtx.onSearch) searchCtx.onSearch(v);
+    else if (v) shellNavigate(`library.html?q=${encodeURIComponent(v)}`);
+  };
+  q.addEventListener('input', () => {
+    if (!searchCtx.onSearch) return;
+    clearTimeout(searchCtx.searchTimer);
+    searchCtx.searchTimer = setTimeout(runSearch, 80);
+  });
+  q.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      e.stopPropagation();
+      if (q.value) { q.value = ''; if (searchCtx.onSearch) searchCtx.onSearch(''); }
+      else q.blur();
+      return;
+    }
+    if (e.key !== 'Enter') return;
+    e.preventDefault();
+    clearTimeout(searchCtx.searchTimer);
+    runSearch();
+  });
+  document.addEventListener('keydown', (e) => {
+    if (e.isComposing) return;
+    const tag = e.target?.tagName;
+    if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || e.target?.isContentEditable) return;
+    if (document.documentElement.dataset.modal === '1' || document.querySelector('.modal-backdrop')) return;
+    if (document.body.classList.contains('reader-chrome-away')) return;
+    const slash = e.key === '/' && !e.ctrlKey && !e.metaKey && !e.altKey;
+    const find = (e.key === 'k' || e.key === 'K') && (e.ctrlKey || e.metaKey) && !e.altKey;
+    if (!slash && !find) return;
+    e.preventDefault();
+    q.focus();
+    q.select();
+  });
+  top.addEventListener('mousedown', (e) => {
+    if (e.button !== 0) return;
+    if (e.target.closest?.('a, button, input, select, textarea, label, [data-no-drag]')) return;
+    e.preventDefault();
+    invoke(e.detail === 2 ? 'win_toggle_maximize' : 'win_start_drag').catch(() => {});
+  });
+  top.querySelector('#shellLang').addEventListener('click', () => {
+    setLang(lang() === 'en' ? 'zh-CN' : 'en');
+    location.reload();
+  });
+  return top;
+}
+
+function syncShellSearch(opts = {}) {
+  searchCtx.onSearch = opts.onSearch || null;
+  const q = document.getElementById('shellSearch');
+  if (q && opts.searchValue != null) q.value = opts.searchValue;
+}
+
+async function loadPageModule(pathname) {
+  const base = pathname.split('/').pop() || 'home.html';
+  const stem = base.replace(/\.html$/i, '');
+  const gen = ++navGen;
+  await import(`./${stem}.js?shell=${gen}`);
+}
+
+async function swapShellMain(href, { historyMode = 'push' } = {}) {
+  const url = new URL(href, location.href);
+  if (!isShellUrl(url)) {
+    location.assign(url.href);
+    return;
+  }
+  const main = document.querySelector('.page-main');
+  if (!main) {
+    location.assign(url.href);
+    return;
+  }
+  const same = url.pathname === location.pathname && url.search === location.search && url.hash === location.hash;
+  if (same && historyMode !== 'pop') return;
+
+  navBusy = true;
+  main.classList.add('is-swapping');
+  try {
+    const res = await fetch(url.pathname + url.search);
+    if (!res.ok) throw new Error(String(res.status));
+    const doc = new DOMParser().parseFromString(await res.text(), 'text/html');
+    const incoming = doc.querySelector('.page-main');
+    if (!incoming) throw new Error('no main');
+    main.innerHTML = incoming.innerHTML;
+    main.scrollTop = 0;
+    if (historyMode === 'push') history.pushState(null, '', url.pathname + url.search + url.hash);
+    else if (historyMode === 'replace') history.replaceState(null, '', url.pathname + url.search + url.hash);
+    syncRailActive(railActiveFromUrl(url));
+    await loadPageModule(url.pathname);
+    applyI18n();
+    if (url.hash) document.querySelector(url.hash)?.scrollIntoView({ block: 'start' });
+  } catch {
+    location.assign(url.href);
+  } finally {
+    main.classList.remove('is-swapping');
+    navBusy = false;
+  }
+}
+
+/** In-app navigation between shell HTML pages (keeps wallpaper + unified frame). */
+export function shellNavigate(href, opts = {}) {
+  if (navBusy) return Promise.resolve();
+  const url = new URL(href, location.href);
+  if (!isShellUrl(url)) {
+    location.assign(url.href);
+    return Promise.resolve();
+  }
+  const mode = opts.replace ? 'replace' : 'push';
+  return swapShellMain(url.href, { historyMode: mode });
+}
+
+function wireShellNavigation() {
+  if (!document.querySelector('.work.shell-frame') || document.body.dataset.shellNav === '1') return;
+  document.body.dataset.shellNav = '1';
+  document.addEventListener('click', (e) => {
+    if (navBusy || e.defaultPrevented) return;
+    const a = e.target.closest('a[href]');
+    if (!a || a.target === '_blank') return;
+    if (e.ctrlKey || e.metaKey || e.shiftKey || e.altKey) return;
+    const url = new URL(a.href, location.href);
+    if (!isShellUrl(url)) return;
+    e.preventDefault();
+    void shellNavigate(url.href);
+  });
+  addEventListener('popstate', () => {
+    if (navBusy) return;
+    void swapShellMain(location.pathname + location.search + location.hash, { historyMode: 'pop' });
+  });
+  const rail = document.getElementById('shell-rail');
+  rail?.addEventListener('mouseover', (e) => {
+    const a = e.target.closest('a[href]');
+    if (!a) return;
+    const u = new URL(a.href, location.href);
+    if (!isShellUrl(u)) return;
+    const link = document.createElement('link');
+    link.rel = 'prefetch';
+    link.href = u.pathname + u.search;
+    document.head.append(link);
+  }, { passive: true });
+}
+
 /** Fill #shell-top / #shell-rail (either may be absent), apply accent + background.
  *  opts: { onSearch(q), searchValue } */
 export function mountShell(active = '', opts = {}) {
@@ -42,93 +265,20 @@ export function mountShell(active = '', opts = {}) {
   applyAccent();
   applyBackground();
 
-  const top = document.getElementById('shell-top');
-  if (top) {
-    top.className = 'shell-top';
-    top.innerHTML = `
-      <a class="brand" href="home.html">
-        <span class="brand__logo"><svg class="i"><use href="icons.svg#book-open"/></svg></span>
-        <span class="brand__txt"><b>${esc(t('app.name'))}</b><small>${esc(t('app.tagline'))}</small></span>
-      </a>
-      <label class="search shell-search">
-        <svg class="i"><use href="icons.svg#search"/></svg>
-        <input id="shellSearch" type="search" autocomplete="off" placeholder="${esc(t('search.placeholder'))}">
-      </label>
-      <span class="spacer"></span>
-      <button class="ibtn" id="shellLang" aria-label="${esc(t('settings.language'))}" title="${esc(t('settings.language'))}"><svg class="i"><use href="icons.svg#globe"/></svg></button>
-      <div class="wc">
-        <button data-window-minimize aria-label="${esc(t('win.min'))}"><svg class="i"><use href="icons.svg#min"/></svg></button>
-        <button data-window-maximize aria-label="${esc(t('win.max'))}"><svg class="i"><use href="icons.svg#max"/></svg></button>
-        <button data-window-close aria-label="${esc(t('win.close'))}"><svg class="i"><use href="icons.svg#close"/></svg></button>
-      </div>`;
-    const q = top.querySelector('#shellSearch');
-    if (opts.searchValue) q.value = opts.searchValue;
-    q.title = t('search.shortcut');
-    let searchTimer = 0;
-    const runSearch = () => {
-      const v = q.value.trim();
-      if (opts.onSearch) opts.onSearch(v);
-      else if (v) location.href = `library.html?q=${encodeURIComponent(v)}`;
-    };
-    q.addEventListener('input', () => {
-      if (!opts.onSearch) return;
-      clearTimeout(searchTimer);
-      searchTimer = setTimeout(runSearch, 80);
-    });
-    q.addEventListener('keydown', (e) => {
-      if (e.key === 'Escape') {
-        e.preventDefault();
-        e.stopPropagation();
-        if (q.value) { q.value = ''; if (opts.onSearch) opts.onSearch(''); }
-        else q.blur();
-        return;
-      }
-      if (e.key !== 'Enter') return;
-      e.preventDefault();
-      clearTimeout(searchTimer);
-      runSearch();
-    });
-    document.addEventListener('keydown', (e) => {
-      if (e.isComposing) return;
-      const tag = e.target?.tagName;
-      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || e.target?.isContentEditable) return;
-      if (document.documentElement.dataset.modal === '1' || document.querySelector('.modal-backdrop')) return;
-      if (document.body.classList.contains('reader-chrome-away')) return;
-      const slash = e.key === '/' && !e.ctrlKey && !e.metaKey && !e.altKey;
-      const find = (e.key === 'k' || e.key === 'K') && (e.ctrlKey || e.metaKey) && !e.altKey;
-      if (!slash && !find) return;
-      e.preventDefault();
-      q.focus();
-      q.select();
-    });
-    // Window drag: the whole top bar except its controls drags the window; double-click toggles maximize. Done through our own
-    // Rust commands (like the window buttons), so it does not depend on the webview's window-API permissions or on which
-    // elements carry Tauri's drag-region attribute (only the element carrying it counted, which left just the thin spacer).
-    top.addEventListener('mousedown', (e) => {
-      if (e.button !== 0) return;
-      if (e.target.closest?.('a, button, input, select, textarea, label, [data-no-drag]')) return;
-      e.preventDefault();
-      invoke(e.detail === 2 ? 'win_toggle_maximize' : 'win_start_drag').catch(() => {});
-    });
-    top.querySelector('#shellLang').addEventListener('click', () => {
-      setLang(lang() === 'en' ? 'zh-CN' : 'en');
-      location.reload();
-    });
-  }
+  buildShellTop(opts);
+  syncShellSearch(opts);
 
   const rail = document.getElementById('shell-rail');
   if (rail) {
-    rail.className = 'shell-rail';
-    rail.innerHTML =
-      RAIL.map((r) => `<a href="${r.href}" class="${active === r.key ? 'is-on' : ''}">
-          <svg class="i"><use href="icons.svg#${r.icon}"/></svg><span>${esc(t(r.label))}</span></a>`).join('') +
-      `<span class="rail-spacer"></span>
-       <a href="settings.html" class="${active === 'settings' ? 'is-on' : ''}">
-         <svg class="i"><use href="icons.svg#settings"/></svg><span>${esc(t('nav.settings'))}</span></a>`;
+    if (rail.dataset.built !== '1') {
+      renderRail(active);
+      rail.dataset.built = '1';
+    } else syncRailActive(active);
   }
   applyI18n();
   wireWindow();
   mountScanFloat();
+  wireShellNavigation();
 }
 
 /** Corner pill while a folder scan is running, on every page. Click opens the scan page.
@@ -141,7 +291,7 @@ function mountScanFloat() {
   btn.className = 'scan-float';
   btn.hidden = true;
   btn.innerHTML = `<span class="spin" aria-hidden="true"></span><span id="scanFloatText"></span>`;
-  btn.addEventListener('click', () => { location.href = 'scan.html'; });
+  btn.addEventListener('click', () => { void shellNavigate('scan.html'); });
   document.body.append(btn);
   const text = btn.querySelector('#scanFloatText');
   const preview = new URLSearchParams(location.search).get('preview');
@@ -151,7 +301,6 @@ function mountScanFloat() {
     return;
   }
   const onScan = /(?:^|\/)scan\.html$/.test(location.pathname);
-  let noted = '';
   let pendingCache = null;
   let pendingAt = 0;
   const showRunning = (s) => {
@@ -239,43 +388,70 @@ export function applyExtras() {
   return colorMode;
 }
 
+async function readThemeConfig() {
+  const now = Date.now();
+  if (themeCfgCache != null && now - themeCfgAt < 15000) return themeCfgCache;
+  themeCfgAt = now;
+  try {
+    themeCfgCache = (await invoke('get_theme_config')) || {};
+  } catch {
+    themeCfgCache = themeCfgCache || {};
+  }
+  return themeCfgCache;
+}
+
 /** Whole-window background (theme config `hero`) and home banner (`banner`), independent of each other.
  *  The default background is painted by mh-ui.css; a custom background is drawn by .bg-layer above it.
  *  A custom banner becomes the CSS variable --banner-image used by .hero. Call again after changing either
  *  image or the dim slider. */
 export async function applyBackground() {
   applyAppearance();
-  const colorMode = applyExtras();            // plain-colour mode: no picture, and the dim overlay would only tint the colour
+  const colorMode = applyExtras();
   const root = document.documentElement;
   const dim = colorMode ? 0 : Math.min(90, Math.max(0, +prefs.get('bgDim', 55))) / 100;
-  root.style.setProperty('--bg-dim', String(dim)); // runs before the first await: no flash
-  let cfg = {};
-  try { cfg = (await invoke('get_theme_config')) || {}; } catch {}
-  // Custom pictures are copied into the data dir and served by the mhfile protocol
-  // (hero-custom.* / banner-custom.* only). The asset protocol is disabled.
+  root.style.setProperty('--bg-dim', String(dim));
+  const cfg = await readThemeConfig();
   const fileUrl = (abs) => {
     if (!abs || abs === 'default' || !T.core?.convertFileSrc) return '';
     return T.core.convertFileSrc(abs, 'mhfile').replace(/["\\\n\r]/g, '');
   };
-  const hero = cfg.hero || 'default', banner = cfg.banner || 'default'; // `banner` is absent on a backend without v0.6
+  const hero = cfg.hero || 'default';
+  const banner = cfg.banner || 'default';
   const heroUrl = colorMode ? '' : fileUrl(hero);
   let layer = document.querySelector('.bg-layer');
   if (!heroUrl) {
-    layer?.remove();
+    if (layer) layer.remove();
     document.body.classList.remove('has-bg');
+    lastHeroLayer = '';
   } else {
+    const layerStyle =
+      `linear-gradient(rgba(250,253,252,calc(var(--bg-dim) * .45)), rgba(250,253,252,calc(var(--bg-dim) * .55))), url("${heroUrl}")`;
     if (!layer) {
       layer = document.createElement('div');
       layer.className = 'bg-layer';
       document.body.prepend(layer);
     }
-    layer.style.backgroundImage =
-      `linear-gradient(rgba(250,253,252,calc(var(--bg-dim) * .45)), rgba(250,253,252,calc(var(--bg-dim) * .55))), url("${heroUrl}")`;   // soft white veil (v0.7); the slider value still scales it
+    if (lastHeroLayer !== layerStyle) {
+      layer.style.backgroundImage = layerStyle;
+      lastHeroLayer = layerStyle;
+    }
     document.body.classList.add('has-bg');
   }
   const bannerUrl = fileUrl(banner);
-  if (!bannerUrl) root.style.removeProperty('--banner-image');
-  else root.style.setProperty('--banner-image', `url("${bannerUrl}")`);
+  const bannerCss = bannerUrl ? `url("${bannerUrl}")` : '';
+  if (bannerCss !== lastBannerVar) {
+    if (!bannerUrl) root.style.removeProperty('--banner-image');
+    else root.style.setProperty('--banner-image', bannerCss);
+    lastBannerVar = bannerCss;
+  }
+}
+
+/** Invalidate cached theme paths after the user changes hero/banner in Settings. */
+export function invalidateThemeCache() {
+  themeCfgCache = null;
+  themeCfgAt = 0;
+  lastHeroLayer = '';
+  lastBannerVar = '';
 }
 
 /** Poll the Rust drop queue (native drag-drop writes paths there). */
