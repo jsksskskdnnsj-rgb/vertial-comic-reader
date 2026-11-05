@@ -2,7 +2,7 @@
 // Each returns true when something changed (caller reloads), false when cancelled or failed
 // (an error toast has already been shown).
 import { T, t, toast, confirmDialog, promptDialog } from './shell.js';
-import { lib } from './legacy-api.js';
+import { lib } from './api.js';
 
 const errText = (e) => String(e?.detail ?? e?.message ?? e);
 async function run(fn, okMsg) {

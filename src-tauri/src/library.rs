@@ -1,6 +1,6 @@
 //! Library management + page-edit commands (v0.5).
 //!
-//! These are the commands the repaired frontend (legacy-api.js) had to give up
+//! These are the commands the repaired frontend (api.js) had to give up
 //! on because the design backend never implemented them:
 //!   reorder_pages / delete_pages / append_pages / reset_page_edits / page_edit_info
 //!   shelf_rename / book_reset_progress / check_books_missing / import_merged / library_stats
