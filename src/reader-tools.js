@@ -1,7 +1,7 @@
 // reader-tools.js - reader features restored from v0.3.2:
 //   AutoScroll        : continuous scroll (strip) / timed page turns (flip), speed 1..10
 //   openPageDirectory : thumbnail grid of every page: tap to jump, select + delete, smart sort, reverse order, append pages
-// Backend calls arrive through `ctx.lib` (legacy-api.js), so the real command names live in ONE file.
+// Backend calls arrive through `ctx.lib` (api.js), so the real command names live in ONE file.
 import { openModal, confirmDialog, choiceDialog, toast, T, esc, t } from './shell.js';
 import { orderByRange } from './merge-order.js';
 import { archiveAndImageFilters } from './image-exts.js';

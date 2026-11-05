@@ -3,7 +3,7 @@
 // v0.6: history is a stack of progress cards (the chapter-list panel is gone); drag-over highlight
 // no longer flickers; reset errors are reported; banner changes re-apply without a reload.
 import { T, invoke, t, esc, ago, toast, bootPage } from './shell.js';
-import { lib } from './legacy-api.js';
+import { lib } from './api.js';
 import { mountShell, coverUrl, wireCoverFallback, watchDrops, applyBackground } from './shell-ui.js';
 import { fetchEpisodeInfo } from './chapters.js';
 import { setBanner, resetBanner } from './theme-api.js';

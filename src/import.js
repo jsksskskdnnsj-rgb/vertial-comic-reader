@@ -7,7 +7,7 @@
 // is listed it is inspected with list_images, the row shows how many images / subfolders it holds, and a folder with no
 // images at any depth is refused (reported under the list) instead of being added silently.
 import { T, invoke, t, esc, toast, bootPage } from './shell.js';
-import { lib } from './legacy-api.js';
+import { lib } from './api.js';
 import { mountShell, watchDrops } from './shell-ui.js';
 import { sortSources } from './naming.js';
 import { orderByRange, suggestName, compareSources, baseName } from './merge-order.js';
