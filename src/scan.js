@@ -2,7 +2,7 @@
 // The walk runs in the background. Cancelling or leaving the page keeps a checkpoint, so the next
 // scan of the same folder continues. Problems (empty files, unreadable directories, links) are listed.
 import { T, invoke, t, esc, toast, bootPage } from './shell.js';
-import { lib } from './legacy-api.js';
+import { lib } from './api.js';
 import { mountShell } from './shell-ui.js';
 import { openMergeDialog } from './merge-ui.js';
 

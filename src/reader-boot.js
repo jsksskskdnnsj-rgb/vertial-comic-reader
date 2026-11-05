@@ -3,7 +3,7 @@
 import { T, invoke, win, t, esc, ago, toast, bootPage, prefs, isModalOpen, confirmDialog, choiceDialog, promptDialog } from './shell.js';
 import { Reader, thumbUrl, wheelGear, scrubProgress, pageReadout, isReaderBlankTarget, applyReaderChromeClasses } from './reader.js';
 import { FlipView } from './flip.js';
-import { lib } from './legacy-api.js';
+import { lib } from './api.js';
 import { resolve, episodeAt, prevTarget, nextTarget, tickFractions, episodeLabel, sanePages, DEFAULT_PAGES, fetchEpisodeInfo } from './chapters.js';
 import { findNearby, thumbVirtualIndex, bookmarkTicks, BookmarkPanel } from './bookmarks.js';
 import { HistoryStack, ThumbStrip } from './reader-panels.js';

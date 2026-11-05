@@ -12,7 +12,7 @@
 // filter, status filter and view mode are remembered next to the sort (prefs libFolder / libStatus / libMode / libSort); ?status=
 // overrides the saved status like ?sort= does. Filtering and status rules live in library-filters.js (pure, unit-tested).
 import { invoke, t, esc, toast, bootPage, prefs, confirmDialog, promptDialog, ago } from './shell.js';
-import { lib } from './legacy-api.js';
+import { lib } from './api.js';
 import { mountShell, coverUrl, wireCoverFallback } from './shell-ui.js';
 import { fetchEpisodeInfo } from './chapters.js';
 import { sortBy, compareTitles } from './naming.js';
