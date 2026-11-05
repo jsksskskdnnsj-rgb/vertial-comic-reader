@@ -169,6 +169,19 @@ export default {
   'reader.autoStop': '\u505c\u6b62', // Stop
   'reader.bookmarkHere': '\u5728\u6b64\u6dfb\u52a0\u4e66\u7b7e', // Bookmark here
   'reader.brightness': '\u9875\u9762\u4eae\u5ea6', // Page brightness
+  'reader.contrast': '\u5bf9\u6bd4\u5ea6', // Contrast
+  'reader.filter': '\u62a4\u773c\u6ee4\u955c', // Eye comfort filter
+  'reader.filterNone': '\u5173', // Off
+  'reader.filterWarm': '\u6696\u8272', // Warm
+  'reader.filterNight': '\u591c\u9605', // Night
+  'reader.filterPaper': '\u7eb8\u611f', // Paper
+  'reader.filterStrength': '\u6ee4\u955c\u5f3a\u5ea6', // Filter strength
+  'reader.spread': '\u53cc\u9875\u5bf9\u5f00', // Two-page spread
+  'reader.spreadHint': '\u5377\u8f74\uff1a\u76f8\u90bb\u4e24\u9875\u5e76\u6392\u3002\u7ffb\u9875\uff1a\u6bcf\u6b21\u663e\u793a\u4e24\u9875\uff0c\u8fdb\u5ea6\u4e0e\u9875\u7801\u4ecd\u6309\u5355\u9875\u8bb0\u5f55\u3002',
+  'reader.crop': '\u88c1\u8fb9\u5207\u767d', // Trim margins
+  'reader.cropAuto': '\u81ea\u52a8\u68c0\u6d4b\u767d\u8fb9', // Auto-detect white borders
+  'reader.cropTrim': '\u989d\u5916\u5185\u6536', // Extra trim
+  'reader.cropHint': '\u4ec5\u5728\u9605\u8bfb\u65f6\u88c1\u5207\uff0c\u4e0d\u6539\u52a8\u78c1\u76d8\u4e0a\u7684\u539f\u6587\u4ef6\u3002',
   'reader.errCorrupt': '\u65e0\u6cd5\u8bfb\u53d6\u8fd9\u672c\u4e66', // This book could not be read
   'reader.errMissing': '\u627e\u4e0d\u5230\u6587\u4ef6', // File not found
   'reader.fullscreen': '\u5168\u5c4f', // Fullscreen

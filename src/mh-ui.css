@@ -643,3 +643,22 @@ body.reader-chrome-away .work{padding:0;gap:0}
   .rg.chrome-away .bp{display:none}
 }
 /* ==== end sticky reader chrome ==== */
+
+/* ---- v0.8.0 reading surface: filters, dual spread, margin crop (comic area only) ---- */
+#host{--reader-filter:none}
+#host .scroller,#host .flip-view{filter:var(--reader-filter)}
+.page img.pg{opacity:0;transition:opacity .12s}
+.page img.pg.ready{opacity:1}
+.page img.pg.pg-crop,.flip-image.pg-crop{
+  width:calc(100% / (1 - var(--crop-l, 0) - var(--crop-r, 0)));
+  height:calc(100% / (1 - var(--crop-t, 0) - var(--crop-b, 0)));
+  max-width:none;max-height:none;
+  margin-left:calc(-100% * var(--crop-l, 0) / (1 - var(--crop-l, 0) - var(--crop-r, 0)));
+  margin-top:calc(-100% * var(--crop-t, 0) / (1 - var(--crop-t, 0) - var(--crop-b, 0)));
+  object-fit:fill;
+}
+.flip-view--spread .flip-stage{display:flex;flex:1;min-width:0;gap:8px;align-items:center;justify-content:center;height:100%}
+.flip-view--spread .flip-image{flex:1;min-width:0;max-height:100%;object-fit:contain}
+.flip-view .flip-stage{display:flex;flex:1;align-items:center;justify-content:center;min-width:0;height:100%}
+.flip-image.pg-crop{object-fit:fill}
+.flip-image.flip-image--b[hidden]{display:none!important}

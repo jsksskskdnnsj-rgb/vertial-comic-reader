@@ -3,6 +3,7 @@
 import { T, invoke, win, t, esc, ago, toast, bootPage, prefs, isModalOpen, confirmDialog, choiceDialog, promptDialog } from './shell.js';
 import { Reader, thumbUrl, wheelGear, scrubProgress, pageReadout, isReaderBlankTarget, applyReaderChromeClasses } from './reader.js';
 import { FlipView } from './flip.js';
+import { readerEffectVars } from './reader-effects.js';
 import { lib } from './api.js';
 import { resolve, episodeAt, prevTarget, nextTarget, tickFractions, episodeLabel, sanePages, DEFAULT_PAGES, fetchEpisodeInfo } from './chapters.js';
 import { findNearby, thumbVirtualIndex, bookmarkTicks, BookmarkPanel } from './bookmarks.js';
@@ -20,7 +21,19 @@ const coverUrl = (id, v = 0) => `${COVER_BASE}/${id}?v=${v ?? 0}`;
 const LARGE_BOOK_PAGES = 1200;                         // above this the large-book warning appears (once per book per session)
 
 // ---- state -----------------------------------------------------------------------------------------------
-const rp = { widthPct: prefs.get('reader.widthPct', 100), gap: prefs.get('reader.gap', 0), dim: prefs.get('reader.dim', 100), wheel: wheelGear(prefs.get('reader.wheelSpeed', 2)) };
+const rp = {
+  widthPct: prefs.get('reader.widthPct', 100),
+  gap: prefs.get('reader.gap', 0),
+  dim: prefs.get('reader.dim', 100),
+  contrast: prefs.get('reader.contrast', 100),
+  filter: prefs.get('reader.filter', 'none'),
+  filterStrength: prefs.get('reader.filterStrength', 70),
+  spread: !!prefs.get('reader.spread', false),
+  cropOn: !!prefs.get('reader.crop', false),
+  cropAuto: prefs.get('reader.cropAuto', true) !== false,
+  cropTrim: Math.min(12, Math.max(0, Math.round(+prefs.get('reader.cropTrim', 0) || 0))),
+  wheel: wheelGear(prefs.get('reader.wheelSpeed', 2)),
+};
 let modeNow = prefs.get('mode', 'scroll');             // default reading mode (Settings); the toolbar toggles it for this session only
 let saverNow = prefs.get('saver', false);
 let view = null, book = null, bms = [], chs = [], chMode = 'folder', chN = DEFAULT_PAGES, chDefaults = { mode: 'folder', pages: DEFAULT_PAGES };
@@ -30,7 +43,18 @@ let shown = 0, lastPos = null, endDismissed = false, endArmAt = 0;
 // Prefer an explicit page count (from onPosition) so open-time callbacks work before `book` is assigned.
 const pageText = (p, n = book?.realPages ?? 0) => t('common.pageOf', { p: p + 1, n });
 const epText = (p, n) => (chs.length ? episodeLabel(t, chs, p, chMode) : pageText(p, n));
-const applyDim = () => $('host').style.setProperty('--dim', rp.dim / 100);
+const applyReaderSurface = () => {
+  const { vars } = readerEffectVars(rp);
+  const host = $('host');
+  for (const [k, v] of Object.entries(vars)) host.style.setProperty(k, v);
+};
+const cropOpts = () => ({ enabled: rp.cropOn, auto: rp.cropAuto, manualTrim: rp.cropTrim });
+const applyViewDisplay = () => {
+  applyReaderSurface();
+  if (!view) return;
+  view.setCrop?.(cropOpts());
+  view.setSpread?.(rp.spread);
+};
 /** Thumb URL for real page `p`; empty string while book/layout are not ready yet. */
 const pageThumb = (p) => {
   const i = book && view?.layout?.gFirst?.[p];
@@ -124,7 +148,7 @@ async function startView({ startPos = null } = {}) {
   showOpening(true);
   if (view) { await view.close(); view = null; }
   book = null;                                                  // drop stale info while the next open is in flight
-  resetTrack(); strip.reset(); applyDim();
+  resetTrack(); strip.reset(); applyReaderSurface();
   const Mode = modeNow === 'flip' ? FlipView : Reader;
   view = new Mode($('host'), { onPosition, scrubber: [$('track'), $('thumb'), $('tiplabel')] });
   view.onScrubPreview = (page, n) => paintPageReadout(page, n, { commit: false });
@@ -132,9 +156,10 @@ async function startView({ startPos = null } = {}) {
     // Assign `book` in beforeMount (runs after openBook, before first onPosition from tick/render)
     // so pageText / ThumbStrip never see null during open.
     await view.open(bookId, {
-      perf: saverNow ? 'saver' : 'balanced', widthPct: rp.widthPct, gap: rp.gap, startPos, wheelSpeed: rp.wheel,
+      perf: saverNow ? 'saver' : 'balanced', widthPct: rp.widthPct, gap: rp.gap, spread: rp.spread, startPos, wheelSpeed: rp.wheel,
       beforeMount: async (info) => { book = info; return largeBookGuard(info); },
     });
+    view.setCrop?.(cropOpts());
   } catch (e) { book = null; view = null; showOpening(false); return openFailed(e); }
   book = view.info; endDismissed = false; endArmAt = performance.now() + 1500;
   chMode = book.chapterMode; chN = sanePages(book.chapterPages); $('chrem').checked = !!book.chapterOverridden;
@@ -243,17 +268,49 @@ addEventListener('pointerdown', (e) => {
 });
 
 function syncControls() {
-  $('w').value = rp.widthPct; $('dim').value = rp.dim; $('saver').checked = saverNow;
+  $('w').value = rp.widthPct;
+  $('dim').value = rp.dim;
+  $('contrast').value = rp.contrast;
+  $('filterStrength').value = rp.filterStrength;
+  $('filterStrengthVal').textContent = rp.filterStrength;
+  $('spread').checked = rp.spread;
+  $('cropOn').checked = rp.cropOn;
+  $('cropAuto').checked = rp.cropAuto;
+  $('cropTrim').value = rp.cropTrim;
+  $('cropTrimVal').textContent = rp.cropTrim;
+  $('cropAutoRow').hidden = !rp.cropOn;
+  $('cropTrimRow').hidden = !rp.cropOn;
+  $('saver').checked = saverNow;
   $('wheel').value = rp.wheel; $('wheelVal').textContent = rp.wheel;
   document.querySelectorAll('#gap button').forEach(b => b.setAttribute('aria-pressed', String(+b.dataset.gap === rp.gap)));
   document.querySelectorAll('#fMode button').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.mode === modeNow)));
+  document.querySelectorAll('#fFilter button').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.filter === rp.filter)));
   document.querySelectorAll('#flySettings [data-for="scroll"]').forEach(r => { r.hidden = modeNow !== 'scroll'; });
   $('tbModeIcon').innerHTML = `<use href="icons.svg#${modeNow === 'flip' ? 'flip' : 'scroll'}"/>`; $('tbModeText').textContent = t(modeNow === 'flip' ? 'reader.modeFlipShort' : 'reader.modeScrollShort');
   $('autoSpeed').value = auto.speed; $('autoVal').textContent = auto.speed;
 }
 $('w').addEventListener('input', (e) => { rp.widthPct = +e.target.value; prefs.set('reader.widthPct', rp.widthPct); if (view?.mode === 'scroll') view.setWidthPct(rp.widthPct); });
 $('wheel').addEventListener('input', (e) => { rp.wheel = wheelGear(+e.target.value); prefs.set('reader.wheelSpeed', rp.wheel); $('wheelVal').textContent = rp.wheel; if (view?.mode === 'scroll') view.setWheelSpeed(rp.wheel); });
-$('dim').addEventListener('input', (e) => { rp.dim = +e.target.value; prefs.set('reader.dim', rp.dim); applyDim(); });
+$('dim').addEventListener('input', (e) => { rp.dim = +e.target.value; prefs.set('reader.dim', rp.dim); applyViewDisplay(); });
+$('contrast').addEventListener('input', (e) => { rp.contrast = +e.target.value; prefs.set('reader.contrast', rp.contrast); applyViewDisplay(); });
+$('filterStrength').addEventListener('input', (e) => { rp.filterStrength = +e.target.value; prefs.set('reader.filterStrength', rp.filterStrength); $('filterStrengthVal').textContent = rp.filterStrength; applyViewDisplay(); });
+$('fFilter').addEventListener('click', (e) => {
+  const b = e.target.closest('button'); if (!b) return;
+  rp.filter = b.dataset.filter; prefs.set('reader.filter', rp.filter); syncControls(); applyViewDisplay();
+});
+$('spread').addEventListener('change', (e) => {
+  rp.spread = e.target.checked; prefs.set('reader.spread', rp.spread);
+  if (modeNow === 'flip' && view) view.setSpread(rp.spread);
+  else if (view?.mode === 'scroll') view.setSpread(rp.spread);
+  else startView({ startPos: view?.topPos() });
+});
+const syncCropUi = () => {
+  $('cropAutoRow').hidden = !rp.cropOn;
+  $('cropTrimRow').hidden = !rp.cropOn;
+};
+$('cropOn').addEventListener('change', (e) => { rp.cropOn = e.target.checked; prefs.set('reader.crop', rp.cropOn); syncCropUi(); applyViewDisplay(); });
+$('cropAuto').addEventListener('change', (e) => { rp.cropAuto = e.target.checked; prefs.set('reader.cropAuto', rp.cropAuto); applyViewDisplay(); });
+$('cropTrim').addEventListener('input', (e) => { rp.cropTrim = +e.target.value; prefs.set('reader.cropTrim', rp.cropTrim); $('cropTrimVal').textContent = rp.cropTrim; applyViewDisplay(); });
 $('gap').addEventListener('click', (e) => { const b = e.target.closest('button'); if (!b) return; rp.gap = +b.dataset.gap; prefs.set('reader.gap', rp.gap); if (view?.mode === 'scroll') view.setGap(rp.gap); syncControls(); });
 $('saver').addEventListener('change', async (e) => { saverNow = e.target.checked; prefs.set('saver', saverNow); await startView({ startPos: view?.topPos() }); });
 const setMode = async (m) => { if (m === modeNow) return; modeNow = m; await startView({ startPos: view?.topPos() }); };

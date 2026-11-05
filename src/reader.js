@@ -5,6 +5,7 @@
 //           ImageWindow (IO-driven mount/unmount)   Prefetcher (-> Rust set_reading_window)
 //           ProgressSaver (debounced save)   Scrubber (bottom slider)   Reader (glue)
 import { Layout } from './layout.js';
+import { applyCropStyle, cropCacheKey, detectCropFromImage, mergeCropInsets } from './reader-crop.js';
 
 const T = globalThis.window?.__TAURI__;
 const invoke = (cmd, args) => (T?.core?.invoke ? T.core.invoke(cmd, args) : Promise.reject(new Error('no backend')));
@@ -182,7 +183,10 @@ class Strip {
     this.sizer.style.height = L.sizerH + 'px';
     for (let i = 0; i < L.n; i++) {
       const s = this.pages[i].style;
-      s.top = L.vTop[i] + 'px'; s.left = L.left + 'px'; s.width = L.colW + 'px'; s.height = L.vH[i] + 'px';
+      s.top = L.vTop[i] + 'px';
+      s.left = (L.vLeft[i] ?? L.left) + 'px';
+      s.width = (L.vW[i] || L.colW) + 'px';
+      s.height = L.vH[i] + 'px';
     }
   }
 
@@ -348,7 +352,30 @@ class ImageWindow {
       if (this.mounted.get(i) !== rec) return;           // unmounted meanwhile
       rec.img.classList.add('ready');
       this.checkDims(i, rec.img);
+      this.applyCrop(i, rec.img);
     }).catch(() => { if (this.mounted.get(i) === rec) this.onError(i, rec); });
+  }
+
+  applyCrop(i, img) {
+    const crop = this.r.crop;
+    if (!crop?.enabled) {
+      applyCropStyle(img, null, false);
+      return;
+    }
+    const { bookId, sig } = this.r.info;
+    const key = cropCacheKey(bookId, sig, i);
+    let base = crop.cache.get(key);
+    if (base === undefined && crop.auto) {
+      base = detectCropFromImage(img, crop.detectOpts);
+      crop.cache.set(key, base);
+    }
+    base = base || { top: 0, right: 0, bottom: 0, left: 0 };
+    const insets = mergeCropInsets(base, crop.manualTrim);
+    applyCropStyle(img, insets, true);
+  }
+
+  refreshCrop() {
+    for (const [i, rec] of this.mounted) this.applyCrop(i, rec.img);
   }
 
   release(i) {
@@ -490,7 +517,8 @@ export class Reader {
   constructor(host, { onPosition = () => {}, scrubber = null } = {}) {
     this.host = host; this.onPosition = onPosition; this.scrubberEls = scrubber;
     this.strip = new Strip(host);
-    this.params = { widthPct: 100, maxW: Infinity, zoom: 1, gap: 0, endPad: CFG.endPad };
+    this.params = { widthPct: 100, maxW: Infinity, zoom: 1, gap: 0, endPad: CFG.endPad, spread: false, spreadGap: 8 };
+    this.crop = { enabled: false, auto: true, manualTrim: 0, cache: new Map(), detectOpts: {} };
     this.wheelGear = WHEEL_GEAR_DEFAULT;
     this.perfName = 'balanced'; this.perf = PERF.balanced;
     this.info = null; this.fixes = new Map(); this.fixRaf = 0;
@@ -501,10 +529,10 @@ export class Reader {
 
   // opts: perf, widthPct, gap, startPos ({page,frac}: overrides the saved resume point),
   //       beforeMount(info) -> false (cancel) | {perf} | undefined   (used for the large-book warning)
-  async open(bookId, { perf = 'balanced', widthPct = 100, gap = 0, startPos = null, beforeMount = null, wheelSpeed = WHEEL_GEAR_DEFAULT } = {}) {
+  async open(bookId, { perf = 'balanced', widthPct = 100, gap = 0, spread = false, startPos = null, beforeMount = null, wheelSpeed = WHEEL_GEAR_DEFAULT } = {}) {
     this.perfName = perf; this.perf = PERF[perf];
     this.wheelGear = wheelGear(wheelSpeed);
-    Object.assign(this.params, { widthPct, gap });
+    Object.assign(this.params, { widthPct, gap, spread: !!spread });
     this.info = await api.openBook(bookId);                 // { bookId, sig, dims, src, realPages, chapters, resume, ... }
     if (beforeMount) {
       const r = await beforeMount(this.info);
@@ -646,6 +674,17 @@ export class Reader {
   }
   setWidthPct(pct) { this.params.widthPct = clamp(pct, 40, 100); this.strip.relayout(this.layoutParams()); }
   setGap(px)       { this.params.gap = px;                       this.strip.relayout(this.layoutParams()); }
+  setSpread(on, spreadGap = this.params.spreadGap) {
+    this.params.spread = !!on;
+    this.params.spreadGap = spreadGap;
+    this.strip.relayout(this.layoutParams());
+  }
+  setCrop(opts = {}) {
+    Object.assign(this.crop, opts);
+    if (opts.enabled === false) this.crop.cache.clear();
+    this.imageWindow?.refreshCrop();
+  }
+  refreshCropAll() { this.imageWindow?.refreshCrop(); }
 
   // Corrections for pages whose real size differs from the header (batched per frame).
   fixDim(i, w, h) {
