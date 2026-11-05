@@ -13,7 +13,7 @@
 // row used the "Folders" and "Change image" strings; swatch labels are translated; stat label
 // "Pages" comes from the dictionaries; the dim slider also affects the default background.
 import { T, invoke, t, esc, toast, bootPage, prefs, confirmDialog, choiceDialog, lang, setLang } from './shell.js';
-import { lib } from './legacy-api.js';
+import { lib } from './api.js';
 import { mountShell, applyBackground, applyAppearance, applyExtras } from './shell-ui.js';
 import { BORDER_PRESETS, BG_COLOR_PRESETS, BG_COLOR_DEFAULT, isHex } from './appearance-extras.js';
 import { DEFAULTS, PANEL_MIN, PANEL_MAX } from './appearance.js';
@@ -65,7 +65,7 @@ $('bgChange').addEventListener('click', async () => { const p = await pickImage(
 $('bgReset').addEventListener('click', () => imageAction(resetBackground, 'settings.imageRestored'));
 $('bannerChange').addEventListener('click', async () => { const p = await pickImage(); if (p) imageAction(() => setBanner(p), 'settings.imageSaved'); });
 $('bannerReset').addEventListener('click', () => imageAction(resetBanner, 'settings.imageRestored'));
-$('bgDim').value = prefs.get('bgDim', 55);
+$('bgDim').value = prefs.get('bgDim', DEFAULTS.bgDim);
 $('bgDimVal').textContent = $('bgDim').value + '%';
 $('bgDim').addEventListener('input', (e) => {
   prefs.set('bgDim', +e.target.value);

@@ -1,6 +1,8 @@
 // library-filters.js - pure helpers for the library page (no imports, no DOM, no Tauri; unit-tested in Node).
 // Reading status, filtering, status counts and the remembered library state (sort, status, folder, view mode).
-export const SORTS = ['recent', 'added', 'name', 'title'];
+export const SORTS = ['recent', 'added', 'name'];
+/** Older prefs may still store `title` (A–Z); treat it as natural name sort. */
+export const normalizeSort = (v) => (v === 'title' ? 'name' : v);
 export const STATUSES = ['all', 'unread', 'progress', 'finished'];
 export const MODES = ['grid', 'list'];
 
@@ -35,8 +37,9 @@ export function readLibraryState(getPref, search) {
   const params = new URLSearchParams(search || '');
   const pick = (v, list, d) => (list.includes(v) ? v : d);
   const folderPref = getPref('libFolder', 'all');
+  const sortRaw = normalizeSort(params.get('sort') || getPref('libSort', 'recent'));
   return {
-    sort: pick(params.get('sort'), SORTS, pick(getPref('libSort', 'recent'), SORTS, 'recent')),
+    sort: pick(sortRaw, SORTS, 'recent'),
     status: pick(params.get('status'), STATUSES, pick(getPref('libStatus', 'all'), STATUSES, 'all')),
     folder: folderPref === 'all' || folderPref === 'none' ? folderPref : Number.isInteger(folderPref) && folderPref > 0 ? folderPref : 'all',
     mode: pick(getPref('libMode', 'grid'), MODES, 'grid'),

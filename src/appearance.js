@@ -1,8 +1,8 @@
 // appearance.js - pure mapping from the two appearance prefs to CSS variables (no DOM; unit-tested in Node).
 // Panel opacity scales the two glass levels (.glass uses --panel, overlays use --panel2); wallpaper fit sets --bg-size.
-// CSS variables only: nothing here adds blur, so large panels stay free of backdrop-filter.
+// Blur / saturate live in CSS (liquid-glass block); these vars only tune fill alpha.
 export const FIT = { cover: 'cover', contain: 'contain', stretch: '100% 100%' };
-export const DEFAULTS = { panelOpacity: 82, bgFit: 'cover', bgDim: 55 };
+export const DEFAULTS = { panelOpacity: 68, bgFit: 'cover', bgDim: 40 };
 export const PANEL_MIN = 40;   // below 40 % text over a bright wallpaper stops being readable
 export const PANEL_MAX = 100;
 

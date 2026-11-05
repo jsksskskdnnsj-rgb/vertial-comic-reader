@@ -1,14 +1,13 @@
-// home.js - banner (its own custom image, independent of the window background), stacked reading-history
-// cards (list_recent_books; click resumes), drop import, quick tiles, recently added.
+// home.js - stacked reading-history cards (list_recent_books; click resumes), drop import,
+// recently added. Banner image is set in Settings; the hero only keeps the primary CTA.
 // v0.6: history is a stack of progress cards (the chapter-list panel is gone); drag-over highlight
-// no longer flickers; reset errors are reported; banner changes re-apply without a reload.
+// no longer flickers.
 import { T, invoke, t, esc, ago, toast, bootPage } from './shell.js';
-import { lib } from './legacy-api.js';
-import { mountShell, coverUrl, wireCoverFallback, watchDrops, applyBackground } from './shell-ui.js';
+import { lib } from './api.js';
+import { mountShell, coverUrl, wireCoverFallback, watchDrops } from './shell-ui.js';
 import { fetchEpisodeInfo } from './chapters.js';
-import { setBanner, resetBanner } from './theme-api.js';
 import { inspectFolder, looksLikeFile } from './folder-scan.js';
-import { archiveAndImageFilters, imageFilters } from './image-exts.js';
+import { archiveAndImageFilters } from './image-exts.js';
 
 bootPage('home');
 mountShell('home');
@@ -60,18 +59,6 @@ addEventListener('dragover', (e) => e.preventDefault());
 addEventListener('dragleave', () => { dragDepth = Math.max(0, dragDepth - 1); if (!dragDepth) zone.classList.remove('is-over'); });
 addEventListener('drop', (e) => { e.preventDefault(); dragDepth = 0; zone.classList.remove('is-over'); });
 watchDrops(doImport);
-
-// ---- custom home banner (independent of the window background, which lives in Settings) -----------------
-$('heroBg').addEventListener('click', async () => {
-  const picked = await T.dialog.open({ multiple: false, filters: imageFilters(t) }).catch(() => null);
-  if (!picked) return;
-  try { await setBanner(picked); toast(t('settings.imageSaved')); applyBackground(); }
-  catch (e) { toast(t('settings.imageFailed', { e: errText(e) })); }
-});
-$('heroBgReset').addEventListener('click', async () => {
-  try { await resetBanner(); toast(t('settings.imageRestored')); applyBackground(); }
-  catch (e) { toast(t('settings.imageFailed', { e: errText(e) })); }
-});
 
 // ---- lists --------------------------------------------------------------------------------------
 function hcard(b, sub, pct) {

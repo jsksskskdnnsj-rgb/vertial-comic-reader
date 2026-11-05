@@ -3,7 +3,7 @@
 // reset page edits, move to folder). Data: shelf_get, folder_list, episode_info (chapters.js),
 // bookmark_counts, check_books_missing, page_edit_info.
 import { invoke, t, esc, ago, fmtBytes, bootPage, lang } from './shell.js';
-import { lib } from './legacy-api.js';
+import { lib } from './api.js';
 import { mountShell, coverUrl, wireCoverFallback } from './shell-ui.js';
 import { fetchEpisodeInfo } from './chapters.js';
 import * as act from './book-actions.js';

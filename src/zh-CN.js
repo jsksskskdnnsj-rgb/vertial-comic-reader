@@ -38,12 +38,12 @@ export default {
   'accent.rose': '\u73ab\u7470\u7c89', // Rose
   'accent.amber': '\u7425\u73c0\u9ec4', // Amber
   'home.welcome': '\u6b22\u8fce\u4f7f\u7528\u6f2b\u753b\u9605\u8bfb\u5668', // Welcome to MH Reader
-  'home.welcomeSub': '\u672c\u5730\u9605\u8bfb \u00b7 \u5b8c\u5168\u79bb\u7ebf \u00b7 \u7eaf\u51c0\u4f53\u9a8c', // Local reading · Offline · Clean experience
+  'home.welcomeSub': '\u672c\u5730\u79bb\u7ebf\u9605\u8bfb\u3002\u4e0b\u9762\u53ef\u76f4\u63a5\u62d6\u5165\uff1b\u9605\u8bfb\u65f6\u6309 T \u6216\u70b9\u7a7a\u767d\u53ef\u6536\u8d77\u754c\u9762\u3002', // Local offline reading. Drop files below; press T or click blank to tuck the chrome while reading.
   'home.bannerChange': '\u66f4\u6362\u6a2a\u5e45', // Change banner
   'home.bannerReset': '\u6062\u590d\u9ed8\u8ba4', // Restore default
   'home.dropTitle': '\u62d6\u653e\u6587\u4ef6\u5939\u6216\u538b\u7f29\u5305\u5230\u8fd9\u91cc', // Drop folders or archives here
   'home.dropSub': '\u652f\u6301 ZIP / CBZ \u538b\u7f29\u5305\u3001\u56fe\u7247\u6587\u4ef6\u5939\u548c\u6563\u56fe', // Supports ZIP / CBZ archives, image folders and loose images
-  'home.pick': '\u9009\u62e9\u6587\u4ef6 / \u6587\u4ef6\u5939', // Choose files / folders
+  'home.pick': '\u53bb\u5bfc\u5165', // Go import
   'home.dropNote': '\u672c\u5730\u8bfb\u53d6 \u00b7 \u4e0d\u8054\u7f51 \u00b7 \u6309\u9700\u89e3\u538b', // Read locally · No network · Extracted on demand
   'home.quick': '\u5feb\u901f\u5f00\u59cb', // Quick start
   'home.qImport': '\u672c\u5730\u5bfc\u5165', // Local import
@@ -136,6 +136,7 @@ export default {
   'settings.accentCustom': '\u81ea\u5b9a\u4e49\u989c\u8272', // Custom color
   'settings.accentReset': '\u91cd\u7f6e', // Reset
   'settings.appearance': '\u5916\u89c2', // Appearance
+  'settings.appearanceMore': '\u66f4\u591a\u5916\u89c2\u9009\u9879', // More appearance options
   'settings.autoSpeed': '\u9ed8\u8ba4\u81ea\u52a8\u6eda\u52a8\u901f\u5ea6', // Default auto-scroll speed
   'settings.wheelSpeed': '\u9f20\u6807\u6eda\u8f6e\u901f\u5ea6', // Mouse wheel speed
   'settings.wheelSpeedHelp': '\u7ad6\u6ed1\u65f6\u6bcf\u4e00\u683c\u6eda\u8f6e\u79fb\u52a8\u7684\u8ddd\u79bb\u30021 \u662f\u539f\u6765\u7684\u901f\u5ea6\uff0c\u9ed8\u8ba4 2\uff0c\u660e\u663e\u66f4\u5feb\u3002\u7ffb\u9875\u6a21\u5f0f\u4e0d\u7528\u8fd9\u4e2a\u3002', // How far one notch moves in vertical scroll. 1 is the previous speed; 2 is the default and clearly faster. Page-flip mode does not use this.

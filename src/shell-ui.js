@@ -5,7 +5,7 @@
 // resetting to the default removes the layer; language button label is translated; the drop-queue
 // poll pauses while the window is hidden.
 import { T, invoke, t, esc, toast, prefs, applyTheme, applyI18n, wireWindow, lang, setLang } from './shell.js';
-import { appearanceVars } from './appearance.js';
+import { appearanceVars, DEFAULTS } from './appearance.js';
 import { extrasVars } from './appearance-extras.js';
 
 export const COVER_BASE = T.core?.convertFileSrc
@@ -247,7 +247,7 @@ export async function applyBackground() {
   applyAppearance();
   const colorMode = applyExtras();            // plain-colour mode: no picture, and the dim overlay would only tint the colour
   const root = document.documentElement;
-  const dim = colorMode ? 0 : Math.min(90, Math.max(0, +prefs.get('bgDim', 55))) / 100;
+  const dim = colorMode ? 0 : Math.min(90, Math.max(0, +prefs.get('bgDim', DEFAULTS.bgDim))) / 100;
   root.style.setProperty('--bg-dim', String(dim)); // runs before the first await: no flash
   let cfg = {};
   try { cfg = (await invoke('get_theme_config')) || {}; } catch {}
