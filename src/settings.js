@@ -65,7 +65,7 @@ $('bgChange').addEventListener('click', async () => { const p = await pickImage(
 $('bgReset').addEventListener('click', () => imageAction(resetBackground, 'settings.imageRestored'));
 $('bannerChange').addEventListener('click', async () => { const p = await pickImage(); if (p) imageAction(() => setBanner(p), 'settings.imageSaved'); });
 $('bannerReset').addEventListener('click', () => imageAction(resetBanner, 'settings.imageRestored'));
-$('bgDim').value = prefs.get('bgDim', 55);
+$('bgDim').value = prefs.get('bgDim', DEFAULTS.bgDim);
 $('bgDimVal').textContent = $('bgDim').value + '%';
 $('bgDim').addEventListener('input', (e) => {
   prefs.set('bgDim', +e.target.value);
