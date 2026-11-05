@@ -15,7 +15,7 @@ import { invoke, t, esc, toast, bootPage, prefs, confirmDialog, promptDialog, ag
 import { lib } from './api.js';
 import { mountShell, coverUrl, wireCoverFallback } from './shell-ui.js';
 import { fetchEpisodeInfo } from './chapters.js';
-import { sortBy, compareTitles } from './naming.js';
+import { sortBy } from './naming.js';
 import { filterBooks, countStatuses, statusOf, readLibraryState, validFolder } from './library-filters.js';
 import * as act from './book-actions.js';
 import { openMergeDialog } from './merge-ui.js';
@@ -37,7 +37,8 @@ const saved = readLibraryState((k, d) => prefs.get(k, d), location.search);
 let filter = saved.folder;          // 'all' | 'none' | folder id (remembered)
 let statusFilter = saved.status;    // 'all' | 'unread' | 'progress' | 'finished' (remembered; ?status= overrides)
 let viewMode = saved.mode;          // 'grid' | 'list' (remembered)
-let sortMode = saved.sort;          // 'recent' | 'added' | 'name' | 'title' (remembered; ?sort= overrides)
+let sortMode = saved.sort;          // 'recent' | 'added' | 'name' (remembered; ?sort= overrides; old `title` maps to name)
+if (prefs.get('libSort', 'recent') === 'title') prefs.set('libSort', 'name');
 let query = (params.get('q') || '').trim();
 let loadSeq = 0;
 let page = 0;
@@ -66,7 +67,6 @@ function visibleBooks() {
   const list = filterBooks(books, { view, folder: filter, status: statusFilter, query, bmCounts });
   if (sortMode === 'added') return list.sort((a, b) => (b.created_at || 0) - (a.created_at || 0));
   if (sortMode === 'name') return sortBy(list, (b) => b.name);
-  if (sortMode === 'title') return list.sort((a, b) => compareTitles(a.name, b.name));   // alphabetical, zh-CN collation
   return list.sort((a, b) => (b.updated_at || 0) - (a.updated_at || 0));
 }
 
