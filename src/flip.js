@@ -1,10 +1,155 @@
 // Lightweight page-turning view sharing Reader's backend and position contract.
 import { api, pageUrl } from './reader.js';
 import { Layout } from './layout.js';
+import { applyCropStyle, cropCacheKey, detectCropFromImage, mergeCropInsets } from './reader-crop.js';
+
 export class FlipView {
- constructor(host,{onPosition=()=>{},scrubber=null}={}){this.host=host;this.onPosition=onPosition;this.scrubber=scrubber;this.mode='flip';this.page=0;this.info=null;this.layout=new Layout();this.params={};this.viewH=host.clientHeight;this._key=e=>{if(document.documentElement.dataset.modal==='1'||e.target instanceof HTMLInputElement||e.target instanceof HTMLTextAreaElement)return;if(e.key==='ArrowRight'||e.key==='PageDown')this.next();if(e.key==='ArrowLeft'||e.key==='PageUp')this.prev()};}
- async open(bookId,opts={}){this.info=await api.openBook(bookId);this.bookId=bookId;this.params=opts;if(opts.beforeMount){const r=await opts.beforeMount(this.info);if(r===false){await api.closeBook(bookId).catch(()=>{});throw{code:'cancelled'}}}this.layout.setBook(this.info.dims||[],this.info.src||[]);this.layout.compute({viewW:this.host.clientWidth||800,widthPct:opts.widthPct||100,gap:0});this.page=Math.max(0,Math.min(this.layout.realPages-1,opts.startPos?.page??this.info.resume?.page??0));this.host.innerHTML='<div class="flip-view"><button class="flip-arrow flip-prev" aria-label="Previous page">‹</button><img class="flip-image" alt="Comic page"><button class="flip-arrow flip-next" aria-label="Next page">›</button></div>';this.image=this.host.querySelector('img');this.host.querySelector('.flip-prev').onclick=()=>this.prev();this.host.querySelector('.flip-next').onclick=()=>this.next();window.addEventListener('keydown',this._key);this.render();return this.info;}
- refresh(){this.render()}
- render(){if(!this.info)return;this.viewH=this.host.clientHeight;this.image.src=pageUrl(this.info,this.page,0);this.image.style.maxWidth=(this.params.widthPct||100)+'%';this.onPosition({page:this.page,frac:0,shownPage:this.page,realPages:this.layout.realPages,atEnd:this.page===this.layout.realPages-1});this.image.onerror=()=>{};}
- topPos(){return {page:this.page,frac:0}} centerPos(){return this.topPos()} jumpTo(pos){this.page=Math.max(0,Math.min(this.layout.realPages-1,Math.floor(pos?.page||0)));this.render()} prev(){if(this.page>0){this.page--;this.render()}} next(){if(this.page<this.layout.realPages-1){this.page++;this.render()}} scrollable(){return false} setFit(){if(this.image)this.image.style.maxWidth='100%'} setWidthPct(p){if(this.image)this.image.style.maxWidth=p+'%'} setGap(){} setBrightness(){} async close(){window.removeEventListener('keydown',this._key);if(this.bookId)await api.closeBook(this.bookId).catch(()=>{});this.host.replaceChildren()}
+  constructor(host, { onPosition = () => {}, scrubber = null } = {}) {
+    this.host = host;
+    this.onPosition = onPosition;
+    this.scrubber = scrubber;
+    this.mode = 'flip';
+    this.page = 0;
+    this.spread = false;
+    this.crop = { enabled: false, auto: true, manualTrim: 0, cache: new Map(), detectOpts: {} };
+    this.info = null;
+    this.layout = new Layout();
+    this.params = { widthPct: 100, spreadGap: 8 };
+    this.viewH = host.clientHeight;
+    this._key = (e) => {
+      if (document.documentElement.dataset.modal === '1' || e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
+      if (e.key === 'ArrowRight' || e.key === 'PageDown') this.next();
+      if (e.key === 'ArrowLeft' || e.key === 'PageUp') this.prev();
+    };
+  }
+
+  async open(bookId, opts = {}) {
+    this.info = await api.openBook(bookId);
+    this.bookId = bookId;
+    this.params = { widthPct: opts.widthPct || 100, spreadGap: opts.spreadGap ?? 8 };
+    this.spread = !!opts.spread;
+    if (opts.beforeMount) {
+      const r = await opts.beforeMount(this.info);
+      if (r === false) { await api.closeBook(bookId).catch(() => {}); throw { code: 'cancelled' }; }
+    }
+    this.layout.setBook(this.info.dims || [], this.info.src || []);
+    this.layout.compute({ viewW: this.host.clientWidth || 800, widthPct: this.params.widthPct, gap: 0, spread: false });
+    const start = opts.startPos?.page ?? this.info.resume?.page ?? 0;
+    this.page = this.spread ? this.layout.spreadStart(start) : Math.max(0, Math.min(this.layout.realPages - 1, start));
+    this.mountDom();
+    window.addEventListener('keydown', this._key);
+    this.render();
+    return this.info;
+  }
+
+  mountDom() {
+    const spreadCls = this.spread ? ' flip-view--spread' : '';
+    this.host.innerHTML = `<div class="flip-view${spreadCls}">
+      <button class="flip-arrow flip-prev" type="button" aria-label="Previous">‹</button>
+      <div class="flip-stage">
+        <img class="flip-image flip-image--a" alt="">
+        <img class="flip-image flip-image--b" alt="" hidden>
+      </div>
+      <button class="flip-arrow flip-next" type="button" aria-label="Next">›</button>
+    </div>`;
+    this.imgA = this.host.querySelector('.flip-image--a');
+    this.imgB = this.host.querySelector('.flip-image--b');
+    this.host.querySelector('.flip-prev').onclick = () => this.prev();
+    this.host.querySelector('.flip-next').onclick = () => this.next();
+  }
+
+  refresh() { this.render(); }
+
+  render() {
+    if (!this.info) return;
+    this.viewH = this.host.clientHeight;
+    const maxW = this.spread ? '48%' : `${this.params.widthPct || 100}%`;
+    const setImg = (img, p) => {
+      if (p == null || p >= this.layout.realPages) { img.hidden = true; img.removeAttribute('src'); return; }
+      img.hidden = false;
+      img.style.maxWidth = maxW;
+      img.src = pageUrl(this.info, p, 0);
+      img.onload = () => this.decorateImg(p, img);
+    };
+    if (this.spread) {
+      setImg(this.imgA, this.page);
+      setImg(this.imgB, this.page + 1 < this.layout.realPages ? this.page + 1 : null);
+    } else {
+      setImg(this.imgA, this.page);
+      this.imgB.hidden = true;
+    }
+    const shown = this.spread ? this.page : this.page;
+    const maxStart = this.layout.spreadStart(this.layout.realPages - 1);
+    const atEnd = this.spread ? this.page >= maxStart : this.page === this.layout.realPages - 1;
+    this.onPosition({
+      page: shown,
+      frac: 0,
+      shownPage: shown,
+      realPages: this.layout.realPages,
+      atEnd,
+    });
+  }
+
+  decorateImg(page, img) {
+    const crop = this.crop;
+    if (!crop.enabled) { applyCropStyle(img, null, false); return; }
+    const vi = this.layout.gFirst[page];
+    const key = cropCacheKey(this.info.bookId, this.info.sig, vi);
+    let base = crop.cache.get(key);
+    if (base === undefined && crop.auto) {
+      base = detectCropFromImage(img, crop.detectOpts);
+      crop.cache.set(key, base);
+    }
+    base = base || { top: 0, right: 0, bottom: 0, left: 0 };
+    applyCropStyle(img, mergeCropInsets(base, crop.manualTrim), true);
+  }
+
+  topPos() { return { page: this.page, frac: 0 }; }
+  centerPos() { return { page: this.spread ? Math.min(this.page, this.layout.realPages - 1) : this.page, frac: 0 }; }
+  jumpTo(pos) {
+    const p = Math.max(0, Math.min(this.layout.realPages - 1, Math.floor(pos?.page || 0)));
+    this.page = this.spread ? this.layout.spreadStart(p) : p;
+    this.render();
+  }
+  stepPage(dir) {
+    if (this.spread) {
+      const n = this.layout.spreadStart(this.page) + (dir > 0 ? 2 : -2);
+      this.page = Math.max(0, Math.min(this.layout.realPages - 1, n));
+      if (this.spread) this.page = this.layout.spreadStart(this.page);
+    } else {
+      this.page = Math.max(0, Math.min(this.layout.realPages - 1, this.page + dir));
+    }
+    this.render();
+  }
+  prev() { this.stepPage(-1); }
+  next() { this.stepPage(1); }
+  scrollable() { return false; }
+  setFit() {
+    this.params.widthPct = 100;
+    if (this.imgA) this.imgA.style.maxWidth = this.spread ? '48%' : '100%';
+    if (this.imgB) this.imgB.style.maxWidth = '48%';
+  }
+  setWidthPct(p) {
+    this.params.widthPct = p;
+    const maxW = this.spread ? '48%' : `${p}%`;
+    if (this.imgA) this.imgA.style.maxWidth = maxW;
+  }
+  setGap() {}
+  setSpread(on) {
+    const was = this.page;
+    this.spread = !!on;
+    this.mountDom();
+    this.page = this.spread ? this.layout.spreadStart(was) : was;
+    this.render();
+  }
+  setCrop(opts = {}) {
+    Object.assign(this.crop, opts);
+    if (opts.enabled === false) this.crop.cache.clear();
+    this.render();
+  }
+  async close() {
+    window.removeEventListener('keydown', this._key);
+    if (this.bookId) await api.closeBook(this.bookId).catch(() => {});
+    this.host.replaceChildren();
+  }
 }
