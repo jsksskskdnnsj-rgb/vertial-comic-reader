@@ -733,3 +733,11 @@ body:has(.shell-frame) .shell-top{
 .meta-opts{display:flex;flex-wrap:wrap;gap:12px;margin-top:10px;font-size:12px}
 label.check{display:inline-flex;align-items:center;gap:6px;cursor:pointer}
 .meta-sum,.meta-list .muted{font-size:12px}
+/* Reading feel only. No color, type, or chrome change.
+   The scrollport stays on the fast path (filter lives on the strip, not the scroller).
+   Page-image fades used to leave the fill color visible on the join while moving. */
+.scroller{overflow-anchor:none}
+#host .scroller{filter:none}
+#host .sizer{filter:var(--reader-filter)}
+.page img.pg{transition:none}
+.flip-stage{touch-action:none}

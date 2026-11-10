@@ -4,7 +4,7 @@
 // and Yomikiru manga reader preload flow (MIT, Copyright (c) 2023 mienaiyami); reimplemented here.
 
 /** Default how many single-page steps to warm on each side of the current page. */
-export const FLIP_WARM_STEPS = 2;
+export const FLIP_WARM_STEPS = 3;
 
 /**
  * @param {number} page — current real page index

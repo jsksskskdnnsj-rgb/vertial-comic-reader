@@ -4,6 +4,7 @@ import { Layout } from './layout.js';
 import { applyCropStyle, cropCacheKey, detectCropFromImage, mergeCropInsets } from './reader-crop.js';
 import { flipWarmPages, flipTapZone } from './flip-adjacent.js';
 import { rtlStep, rtlTapZone } from './reader-rtl.js';
+import { createFlipWheelState, flipSwipeDir, flipVisualSign, flipWheelAdvance } from './reader-feel.js';
 
 export class FlipView {
   constructor(host, { onPosition = () => {}, scrubber = null } = {}) {
@@ -20,12 +21,39 @@ export class FlipView {
     this.params = { widthPct: 100, spreadGap: 8 };
     this.viewH = host.clientHeight;
     this._warm = new Map();
+    this._wheelState = createFlipWheelState();
+    this._ptr = null;
+    this._suppressClick = false;
+    this._anim = null;
+    this._aimedPage = -1;
+    this._lastDir = 1;
+    this._keyAt = 0;
     this._key = (e) => {
       if (document.documentElement.dataset.modal === '1' || e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
-      if (e.key === 'ArrowRight' || e.key === 'PageDown' || (e.key === ' ' && !e.shiftKey)) { e.preventDefault(); this.next(); }
-      else if (e.key === 'ArrowLeft' || e.key === 'PageUp' || (e.key === ' ' && e.shiftKey)) { e.preventDefault(); this.prev(); }
+      const forward = e.key === 'ArrowRight' || e.key === 'PageDown' || (e.key === ' ' && !e.shiftKey);
+      const back = e.key === 'ArrowLeft' || e.key === 'PageUp' || (e.key === ' ' && e.shiftKey);
+      if (!forward && !back) return;
+      e.preventDefault();
+      // OS key-repeat is faster than a page can settle. The first press is
+      // immediate; repeats are capped so a hold turns pages instead of flashing.
+      const now = performance.now();
+      if (e.repeat && now - this._keyAt < 160) return;
+      this._keyAt = now;
+      if (forward) this.next();
+      else this.prev();
+    };
+    this._onWheel = (e) => {
+      if (e.ctrlKey) return;
+      // Flip has nothing to scroll. Keep the gesture, including the part of a
+      // flick that has not yet crossed the page threshold.
+      e.preventDefault();
+      const now = e.timeStamp || performance.now();
+      const step = flipWheelAdvance(this._wheelState, e, now);
+      this._wheelState = step.state;
+      if (step.dir) this.stepPage(step.dir);
     };
     this._tap = (e) => {
+      if (this._suppressClick) { this._suppressClick = false; return; }
       const stage = e.currentTarget;
       const z = rtlTapZone(flipTapZone(e.clientX - stage.getBoundingClientRect().left, stage.clientWidth), this.rtl);
       if (z < 0) this.prev();
@@ -48,6 +76,7 @@ export class FlipView {
     this.page = this.spread ? this.layout.spreadStart(start) : Math.max(0, Math.min(this.layout.realPages - 1, start));
     this.mountDom();
     window.addEventListener('keydown', this._key);
+    this.host.addEventListener('wheel', this._onWheel, { passive: false });
     this.render();
     return this.info;
   }
@@ -68,28 +97,131 @@ export class FlipView {
     this.host.querySelector('.flip-next').onclick = () => this.next();
     const stage = this.host.querySelector('.flip-stage');
     stage.addEventListener('click', this._tap);
+    stage.addEventListener('pointerdown', (e) => this._pointerDown(e));
+    stage.addEventListener('pointerup', (e) => this._pointerUp(e));
+    stage.addEventListener('pointercancel', () => { this._ptr = null; });
     this._stageEl = stage;
   }
 
   refresh() { this.render(); }
 
+  _pointerDown(e) {
+    if (e.button !== 0) return;
+    this._ptr = { id: e.pointerId, x: e.clientX, y: e.clientY, t: performance.now() };
+    try { e.currentTarget.setPointerCapture(e.pointerId); } catch { /* not a captor */ }
+  }
+
+  _pointerUp(e) {
+    const p = this._ptr;
+    this._ptr = null;
+    if (!p || p.id !== e.pointerId) return;
+    const dir = flipSwipeDir(e.clientX - p.x, e.clientY - p.y, performance.now() - p.t, this.rtl);
+    if (!dir) return;
+    this._suppressClick = true;
+    this.stepPage(dir);
+  }
+
+  _reduceMotion() {
+    return typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches;
+  }
+
+  _play(keyframes, duration) {
+    const stage = this._stageEl;
+    if (!stage || this._reduceMotion()) return;
+    this._anim?.cancel();
+    this._anim = stage.animate(keyframes, { duration, easing: 'cubic-bezier(0.16, 0.84, 0.22, 1)', fill: 'none' });
+  }
+
+  _settle(indexDir) {
+    const sign = flipVisualSign(indexDir, this.rtl);
+    if (!sign) return;
+    const from = sign * 26;
+    this._play(
+      [{ transform: `translate3d(${from}px,0,0)` }, { transform: 'translate3d(0,0,0)' }],
+      190,
+    );
+  }
+
+  _resist(indexDir) {
+    const sign = flipVisualSign(indexDir, this.rtl);
+    if (!sign) return;
+    const px = sign * 12;
+    this._play(
+      [
+        { transform: 'translate3d(0,0,0)' },
+        { transform: `translate3d(${px}px,0,0)` },
+        { transform: 'translate3d(0,0,0)' },
+      ],
+      230,
+    );
+  }
+
+  _aimExtractor() {
+    if (!this.info || this._aimedPage === this.page) return;
+    this._aimedPage = this.page;
+    // Same index the <img> requests. Aiming the queue there lets the next
+    // turn reuse an extracted bitmap instead of stalling on the click.
+    api.setWindow({
+      bookId: this.info.bookId,
+      variant: 0,
+      center: this.page,
+      direction: this._lastDir < 0 ? -1 : 1,
+      ahead: 5,
+      behind: 2,
+    }).catch(() => {});
+  }
+
+  /** Put a decoded warm bitmap into the visible slot. Returns true when it painted immediately. */
+  _place(slot, page, maxW) {
+    if (!slot || page == null || page >= this.layout.realPages) {
+      if (slot) { slot.hidden = true; slot.removeAttribute('src'); delete slot.dataset.page; }
+      return true;
+    }
+    const url = pageUrl(this.info, page, 0);
+    slot.hidden = false;
+    slot.style.maxWidth = maxW;
+    slot.draggable = false;
+    const warm = this._warm.get(page);
+    if (warm && warm.complete && warm.naturalWidth > 0 && warm !== slot) {
+      warm.className = slot.className;
+      warm.alt = '';
+      warm.hidden = false;
+      warm.draggable = false;
+      warm.style.maxWidth = maxW;
+      warm.dataset.page = String(page);
+      slot.replaceWith(warm);
+      if (slot === this.imgA) this.imgA = warm;
+      else if (slot === this.imgB) this.imgB = warm;
+      this._warm.delete(page);
+      this.decorateImg(page, warm);
+      return true;
+    }
+    if (slot.dataset.page !== String(page)) {
+      slot.dataset.page = String(page);
+      if ('fetchPriority' in slot) slot.fetchPriority = 'high';
+      slot.src = url;
+      slot.onload = () => this.decorateImg(page, slot);
+    }
+    const hot = slot.complete && slot.naturalWidth > 0;
+    if (hot) this.decorateImg(page, slot);
+    return hot;
+  }
+
   render() {
-    if (!this.info) return;
+    if (!this.info) return false;
+    this._aimExtractor();
     this.viewH = this.host.clientHeight;
     const maxW = this.spread ? '48%' : `${this.params.widthPct || 100}%`;
-    const setImg = (img, p) => {
-      if (p == null || p >= this.layout.realPages) { img.hidden = true; img.removeAttribute('src'); return; }
-      img.hidden = false;
-      img.style.maxWidth = maxW;
-      img.src = pageUrl(this.info, p, 0);
-      img.onload = () => this.decorateImg(p, img);
-    };
+    let hot = true;
     if (this.spread) {
-      setImg(this.imgA, this.page);
-      setImg(this.imgB, this.page + 1 < this.layout.realPages ? this.page + 1 : null);
+      hot = this._place(this.imgA, this.page, maxW) && hot;
+      const pair = this.page + 1 < this.layout.realPages ? this.page + 1 : null;
+      hot = this._place(this.imgB, pair, maxW) && hot;
     } else {
-      setImg(this.imgA, this.page);
+      hot = this._place(this.imgA, this.page, maxW) && hot;
       this.imgB.hidden = true;
+      this.imgB.removeAttribute('src');
+      delete this.imgB.dataset.page;
     }
     const shown = this.spread ? this.page : this.page;
     const maxStart = this.layout.spreadStart(this.layout.realPages - 1);
@@ -102,6 +234,7 @@ export class FlipView {
       atEnd,
     });
     this.warmAdjacent();
+    return hot;
   }
 
   warmAdjacent() {
@@ -114,6 +247,8 @@ export class FlipView {
       if (this._warm.has(p)) continue;
       const img = new Image();
       img.decoding = 'async';
+      img.draggable = false;
+      if ('fetchPriority' in img) img.fetchPriority = 'low';
       img.src = pageUrl(this.info, p, 0);
       this._warm.set(p, img);
     }
@@ -141,14 +276,20 @@ export class FlipView {
     this.render();
   }
   stepPage(dir) {
+    const before = this.page;
+    const indexDir = Math.sign(dir) || 0;
     if (this.spread) {
       const n = this.layout.spreadStart(this.page) + (dir > 0 ? 2 : -2);
       this.page = Math.max(0, Math.min(this.layout.realPages - 1, n));
-      if (this.spread) this.page = this.layout.spreadStart(this.page);
+      this.page = this.layout.spreadStart(this.page);
     } else {
       this.page = Math.max(0, Math.min(this.layout.realPages - 1, this.page + dir));
     }
-    this.render();
+    if (indexDir) this._lastDir = indexDir;
+    const changed = this.page !== before;
+    const hot = this.render();
+    if (!changed) this._resist(indexDir);
+    else if (hot) this._settle(indexDir);
   }
   setRtl(on) { this.rtl = !!on; }
   prev() { this.stepPage(rtlStep(-1, this.rtl)); }
@@ -178,7 +319,10 @@ export class FlipView {
     this.render();
   }
   async close() {
+    this._anim?.cancel();
+    this._anim = null;
     window.removeEventListener('keydown', this._key);
+    this.host.removeEventListener('wheel', this._onWheel);
     this._stageEl?.removeEventListener('click', this._tap);
     for (const img of this._warm.values()) img.removeAttribute('src');
     this._warm.clear();

@@ -7,6 +7,9 @@
 import { Layout } from './layout.js';
 import { applyCropStyle, cropCacheKey, detectCropFromImage, mergeCropInsets } from './reader-crop.js';
 import { rtlPageDelta } from './reader-rtl.js';
+import {
+  KEY_SOFT_LAND_PX, classifyWheel, glideChase, glideTauMs, keyReleaseSpeed, pageSeamCover,
+} from './reader-feel.js';
 
 const T = globalThis.window?.__TAURI__;
 const invoke = (cmd, args) => (T?.core?.invoke ? T.core.invoke(cmd, args) : Promise.reject(new Error('no backend')));
@@ -184,10 +187,13 @@ class Strip {
     this.sizer.style.height = L.sizerH + 'px';
     for (let i = 0; i < L.n; i++) {
       const s = this.pages[i].style;
-      s.top = L.vTop[i] + 'px';
+      const cover = pageSeamCover(L, i);
       s.left = (L.vLeft[i] ?? L.left) + 'px';
       s.width = (L.vW[i] || L.colW) + 'px';
-      s.height = L.vH[i] + 'px';
+      // One extra pixel upward, painted by this later page, hides the hairline
+      // the compositor flashes between abutting boxes. Gap > 0 does not abut.
+      s.top = (L.vTop[i] - cover) + 'px';
+      s.height = (L.vH[i] + cover) + 'px';
     }
   }
 
@@ -280,12 +286,14 @@ class ImageWindow {
     const candidates = new Set(this.near);
     for (const i of virtualsNear(L, top, vh, this.perf.nearVh)) candidates.add(i);
     const want = [...candidates].sort((a, b) => dist(a) - dist(b)).slice(0, this.perf.maxMounted);
-    let synced = false;
+    let urgent = false;
     for (const i of want) {
       if (this.mounted.has(i)) continue;
-      const sync = !synced && dist(i) <= vh;
-      this.mount(i, sync);
-      if (sync) synced = true;
+      // Priority only. A synchronous decode on the scroll frame freezes the
+      // strip for a whole page bitmap — that hitch reads as a seam stutter.
+      const high = !urgent && dist(i) <= vh;
+      this.mount(i, high);
+      if (high) urgent = true;
     }
   }
 
@@ -331,17 +339,22 @@ class ImageWindow {
     return `${PAGE_BASE}/${bookId}/${i}?v=${this.perf.variant}&s=${sig}` + (tries ? `&r=${tries}` : '');
   }
 
-  mount(i, syncDecode = false) {
+  mount(i, urgent = false) {
     if (this.mounted.has(i)) return;
     const box = this.r.strip.pages[i];
     let img = this.takeWarm(i);
     if (!img) {
       img = new Image();
       img.className = 'pg'; img.draggable = false; img.alt = '';
-      img.decoding = syncDecode ? 'sync' : 'async';
-      if ('fetchPriority' in img) img.fetchPriority = syncDecode ? 'high' : 'auto';
+      img.decoding = 'async';
+      if ('fetchPriority' in img) img.fetchPriority = urgent ? 'high' : 'auto';
       img.src = this.url(i);
+    } else if ('fetchPriority' in img && urgent) {
+      img.fetchPriority = 'high';
     }
+    // Already-decoded warm bitmaps paint on the first frame. A fade here
+    // would show the page fill along the join while the strip is moving.
+    if (img.complete && img.naturalWidth > 0) img.classList.add('ready', 'pg-hot');
     const rec = { img, tries: 0 };
     this.mounted.set(i, rec);
     box.append(img);
@@ -525,6 +538,11 @@ export class Reader {
     this.perfName = 'balanced'; this.perf = PERF.balanced;
     this.info = null; this.fixes = new Map(); this.fixRaf = 0;
     this._keyScroll = null;
+    this._glide = null;
+    this._glideWrite = false;
+    this._glideWrittenY = 0;
+    this._glideWrittenX = 0;
+    this._wheelAt = 0;
   }
 
   layoutParams() { return { viewW: this.strip.viewW, ...this.params }; }
@@ -567,6 +585,14 @@ export class Reader {
     this.ro.observe(sc);
 
     sc.addEventListener('wheel', (e) => this.onWheel(e), { passive: false });
+    sc.addEventListener('pointerdown', () => { this.stopGlide(); this.stopKeyScroll(); }, { passive: true });
+    // Scroll events from our own glide can arrive after the write flag clears.
+    // Only a position we did not just apply cancels the chase (user grabbed it).
+    sc.addEventListener('scroll', () => {
+      if (this._glideWrite || !this._glide) return;
+      if (Math.abs(sc.scrollTop - this._glideWrittenY) < 1 && Math.abs(sc.scrollLeft - this._glideWrittenX) < 1) return;
+      this.stopGlide();
+    }, { passive: true });
     window.addEventListener('keydown', this.keyHandler = (e) => this.onKey(e));
     document.addEventListener('visibilitychange', this.visHandler = () => { if (document.hidden) this.saver.flush(); });
     window.addEventListener('blur', this.blurHandler = () => this.saver.flush());
@@ -604,9 +630,82 @@ export class Reader {
     const y = clamp(L.posToY(pos) - (atCenter ? sc.clientHeight / 2 : 0), 0, sc.scrollHeight - sc.clientHeight);
     const center = L.findVirtual(y + sc.clientHeight * 0.5);
     this.prefetcher.jumpNow({ ...this.computeWindow(y, y >= sc.scrollTop ? 1 : -1), center });
-    if (smooth) { sc.scrollTo({ top: y, behavior: 'smooth' }); return; }
+    if (smooth) { this.glideTo(y); return; }
+    this.stopGlide();
     this.tracker.expectJump(y);
     sc.scrollTop = y;                                        // observers fire next frame -> demand requests
+  }
+
+  // Notch scrolling and keyboard page jumps share one chase. The target moves
+  // immediately; the viewport eases onto it, including when another notch lands
+  // mid-glide. Trackpad pixel streams never enter here.
+  glideBy(dx, dy) {
+    const sc = this.strip.scroller;
+    const maxY = Math.max(0, sc.scrollHeight - sc.clientHeight);
+    const maxX = Math.max(0, sc.scrollWidth - sc.clientWidth);
+    if (!this._glide) this._glide = { y: sc.scrollTop, x: sc.scrollLeft, tau: 70, last: 0, raf: 0 };
+    this._glide.y = clamp(this._glide.y + (dy || 0), 0, maxY);
+    this._glide.x = clamp(this._glide.x + (dx || 0), 0, maxX);
+    this._glide.tau = glideTauMs(Math.hypot(this._glide.y - sc.scrollTop, this._glide.x - sc.scrollLeft));
+    this._kickGlide();
+  }
+
+  glideTo(y, x = null) {
+    const sc = this.strip.scroller;
+    const maxY = Math.max(0, sc.scrollHeight - sc.clientHeight);
+    const maxX = Math.max(0, sc.scrollWidth - sc.clientWidth);
+    if (!this._glide) this._glide = { y: sc.scrollTop, x: sc.scrollLeft, tau: 70, last: 0, raf: 0 };
+    this._glide.y = clamp(y, 0, maxY);
+    this._glide.x = x == null ? sc.scrollLeft : clamp(x, 0, maxX);
+    this._glide.tau = glideTauMs(Math.abs(this._glide.y - sc.scrollTop));
+    this._kickGlide();
+  }
+
+  _kickGlide() {
+    const g = this._glide;
+    if (!g || g.raf) return;
+    g.last = performance.now();
+    const tick = (now) => {
+      const cur = this._glide;
+      if (!cur) return;
+      const sc = this.strip.scroller;
+      const dt = Math.min(48, Math.max(0, now - cur.last));
+      cur.last = now;
+      const maxY = Math.max(0, sc.scrollHeight - sc.clientHeight);
+      const maxX = Math.max(0, sc.scrollWidth - sc.clientWidth);
+      cur.y = clamp(cur.y, 0, maxY);
+      cur.x = clamp(cur.x, 0, maxX);
+      const beforeY = sc.scrollTop;
+      const beforeX = sc.scrollLeft;
+      const y = glideChase(beforeY, cur.y, dt, cur.tau);
+      const x = glideChase(beforeX, cur.x, dt, cur.tau);
+      this._glideWrite = true;
+      if (y !== beforeY) sc.scrollTop = y;
+      if (x !== beforeX) sc.scrollLeft = x;
+      this._glideWrittenY = sc.scrollTop;
+      this._glideWrittenX = sc.scrollLeft;
+      this._glideWrite = false;
+      // The engine sometimes keeps an integer scroll offset. Chasing a
+      // fraction it will not apply would spin forever.
+      if (sc.scrollTop === beforeY && sc.scrollLeft === beforeX && (y !== beforeY || x !== beforeX)) {
+        cur.raf = 0; this._glide = null; return;
+      }
+      if (Math.abs(sc.scrollTop - cur.y) < 0.5 && Math.abs(sc.scrollLeft - cur.x) < 0.5) {
+        sc.scrollTop = cur.y; sc.scrollLeft = cur.x;
+        this._glideWrittenY = sc.scrollTop;
+        this._glideWrittenX = sc.scrollLeft;
+        cur.raf = 0; this._glide = null; return;
+      }
+      cur.raf = requestAnimationFrame(tick);
+    };
+    g.raf = requestAnimationFrame(tick);
+  }
+
+  stopGlide() {
+    const g = this._glide;
+    if (!g) return;
+    cancelAnimationFrame(g.raf);
+    this._glide = null;
   }
 
   // Ctrl+wheel zoom anchored on the pointer. Plain wheel uses the saved gear;
@@ -618,10 +717,16 @@ export class Reader {
       return;
     }
     this.stopKeyScroll();
+    const now = e.timeStamp || performance.now();
+    const kind = classifyWheel(e, this._wheelAt, now);
+    this._wheelAt = now;
+    // Trackpad and other pixel streams keep the platform's own inertia.
+    // Multiplying those and calling preventDefault is what made a flick step.
+    if (kind !== 'notch') return;
     const d = wheelScrollDelta(e, this.wheelGear, { w: this.strip.viewW, h: this.strip.viewH });
     if (!d) return;
     e.preventDefault();
-    this.strip.scroller.scrollBy({ left: d.dx, top: d.dy, behavior: 'auto' });
+    this.glideBy(d.dx, d.dy);
   }
   setWheelSpeed(gear) { this.wheelGear = wheelGear(gear); }
 
@@ -629,10 +734,12 @@ export class Reader {
     const plan = keyScrollPlan(key, { shift, viewH: this.strip.viewH });
     if (!plan) return;
     this.stopKeyScroll();
+    this.stopGlide();
     const hold = {
       ...plan,
       traveled: 0,
       holding: true,
+      stopAt: Infinity,
       raf: 0,
       lastT: performance.now(),
       onUp: null,
@@ -640,6 +747,8 @@ export class Reader {
     this._keyScroll = hold;
     hold.onUp = (ev) => {
       if (ev.key !== hold.key) return;
+      const extra = Math.min(KEY_SOFT_LAND_PX, Math.max(36, hold.pxPerSec * 0.06));
+      hold.stopAt = Math.max(hold.minTravel, hold.traveled + extra);
       hold.holding = false;
       window.removeEventListener('keyup', hold.onUp);
       hold.onUp = null;
@@ -650,15 +759,16 @@ export class Reader {
       const dt = Math.min(0.05, Math.max(0, (now - hold.lastT) / 1000));
       hold.lastT = now;
       const sc = this.strip.scroller;
+      const remain = hold.holding ? Infinity : (hold.stopAt - hold.traveled);
+      const speed = hold.holding ? hold.pxPerSec : keyReleaseSpeed(hold.pxPerSec, remain);
+      if (speed <= 0) { this.stopKeyScroll(); return; }
       const before = sc.scrollTop;
-      sc.scrollTop = before + hold.dir * hold.pxPerSec * dt;
+      const max = Math.max(0, sc.scrollHeight - sc.clientHeight);
+      sc.scrollTop = clamp(before + hold.dir * speed * dt, 0, max);
       hold.traveled += Math.abs(sc.scrollTop - before);
-      const atEnd = (hold.dir > 0 && sc.scrollTop + sc.clientHeight >= sc.scrollHeight - 1)
+      const atEnd = (hold.dir > 0 && sc.scrollTop >= max - 0.5)
         || (hold.dir < 0 && sc.scrollTop <= 0);
-      if (atEnd || (!hold.holding && hold.traveled >= hold.minTravel)) {
-        this.stopKeyScroll();
-        return;
-      }
+      if (atEnd) { this.stopKeyScroll(); return; }
       hold.raf = requestAnimationFrame(tick);
     };
     hold.raf = requestAnimationFrame(tick);
@@ -738,6 +848,7 @@ export class Reader {
 
   async close() {
     this.stopKeyScroll();
+    this.stopGlide();
     await this.saver?.flush();
     window.removeEventListener('keydown', this.keyHandler);
     document.removeEventListener('visibilitychange', this.visHandler);
