@@ -4,6 +4,7 @@
 // shell pages so the background and frame stay put.
 import { T, invoke, t, esc, toast, prefs, applyTheme, applyI18n, wireWindow, lang, setLang } from './shell.js';
 import { appearanceVars } from './appearance.js';
+import { glassVars } from './appearance-glass.js';
 import { extrasVars } from './appearance-extras.js';
 
 export const COVER_BASE = T.core?.convertFileSrc
@@ -373,7 +374,8 @@ function applyAccent() {
  *  mh-ui.css derives --panel / --panel2 and the wallpaper sizing from them. Variables only: no blur is added anywhere. */
 export function applyAppearance() {
   const { vars } = appearanceVars({ panelOpacity: prefs.get('panelOpacity', null), bgFit: prefs.get('bgFit', null) });
-  for (const [k, v] of Object.entries(vars)) document.documentElement.style.setProperty(k, v);
+  const glass = glassVars({ chromeBlur: prefs.get('chromeBlur', null), bgBlur: prefs.get('bgBlur', null) });
+  for (const [k, v] of Object.entries({ ...vars, ...glass.vars })) document.documentElement.style.setProperty(k, v);
 }
 
 /** Background style, background colour and border colour (prefs bgMode / bgColor / borderColor) -> CSS variables on <html>

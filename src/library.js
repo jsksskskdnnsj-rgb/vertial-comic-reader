@@ -19,6 +19,7 @@ import { sortBy, compareTitles } from './naming.js';
 import { filterBooks, countStatuses, statusOf, readLibraryState, validFolder } from './library-filters.js';
 import * as act from './book-actions.js';
 import { openMergeDialog } from './merge-ui.js';
+import { libraryRenderCount, LIBRARY_RENDER_BATCH, libraryScopeKey } from './library-render-window.js';
 
 const params = new URLSearchParams(location.search);
 const view = params.get('view') || '';
@@ -40,17 +41,51 @@ let viewMode = saved.mode;          // 'grid' | 'list' (remembered)
 let sortMode = saved.sort;          // 'recent' | 'added' | 'name' | 'title' (remembered; ?sort= overrides)
 let query = (params.get('q') || '').trim();
 let loadSeq = 0;
-let page = 0;
 let extraSeq = 0;
+let activeScope = '';
+let renderCount = LIBRARY_RENDER_BATCH;
 let picking = false;
 const selected = new Set();
-const PAGE_SIZE = 48;
+const countStoreKey = (scope) => `mh.lib.count.${scope}`;
+const scrollStoreKey = (scope) => `mh.lib.scroll.${scope}`;
+function filterScope() {
+  return libraryScopeKey({ view, filter: String(filter), status: statusFilter, sort: sortMode, query, mode: viewMode });
+}
+function rememberScroll() {
+  const main = document.querySelector('.page-main');
+  if (!main || !activeScope) return;
+  try { sessionStorage.setItem(scrollStoreKey(activeScope), String(main.scrollTop)); } catch { /* private mode */ }
+}
+function ensureRenderCount(total) {
+  const scope = filterScope();
+  if (scope !== activeScope) {
+    activeScope = scope;
+    let saved;
+    try { saved = sessionStorage.getItem(countStoreKey(scope)); } catch { saved = null; }
+    const n = saved != null && saved !== '' ? Number(saved) : undefined;
+    renderCount = libraryRenderCount(total, n);
+    const main = document.querySelector('.page-main');
+    let st = null;
+    try { st = sessionStorage.getItem(scrollStoreKey(scope)); } catch { st = null; }
+    if (main && st != null) requestAnimationFrame(() => { main.scrollTop = Math.max(0, Number(st) || 0); });
+  } else renderCount = libraryRenderCount(total, renderCount);
+  return scope;
+}
+function persistRenderCount() {
+  if (!activeScope) return;
+  try { sessionStorage.setItem(countStoreKey(activeScope), String(renderCount)); } catch { /* ignore */ }
+}
+function revealMore() {
+  const list = visibleBooks();
+  renderCount = libraryRenderCount(list.length, renderCount + LIBRARY_RENDER_BATCH);
+  persistRenderCount();
+  renderGrid({ keepScroll: true });
+}
 
 mountShell(view === 'recent' ? 'recent' : view === 'marked' ? 'marked' : 'library', {
   searchValue: query,
   onSearch: (v) => {
     query = v;
-    page = 0;
     const u = new URL(location.href);
     if (v) u.searchParams.set('q', v); else u.searchParams.delete('q');
     if (u.href !== location.href) history.replaceState(null, '', u);
@@ -126,27 +161,24 @@ function renderStatus() {
   document.querySelectorAll('#modeSeg button').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.mode === viewMode)));
 }
 
-function pageWindow(list) {
-  const pages = Math.max(1, Math.ceil(list.length / PAGE_SIZE));
-  if (page >= pages) page = pages - 1;
-  if (page < 0) page = 0;
-  return { slice: list.slice(page * PAGE_SIZE, page * PAGE_SIZE + PAGE_SIZE), pages, total: list.length };
-}
-function renderGrid() {
+function renderGrid(opts = {}) {
   $('libLoading').hidden = true;
   const list = visibleBooks();
-  const win = pageWindow(list);
+  ensureRenderCount(list.length);
+  const slice = list.slice(0, renderCount);
   renderStatus();
   $('count').textContent = t('lib.count', { n: list.length });
   $('grid').className = viewMode === 'list' ? 'lib-list' : 'cards-row lib-grid';
-  $('grid').innerHTML = win.slice.map((b) => cardHtml(b)).join('');
+  $('grid').innerHTML = slice.map((b) => cardHtml(b)).join('');
   const empty = $('empty');
   empty.hidden = list.length > 0;
   $('emptyText').textContent = books.length ? t('lib.noBooks') : t('lib.emptyLibrary');
   $('emptyImport').hidden = books.length > 0;
-  $('pager').hidden = list.length <= PAGE_SIZE;
-  $('pageLabel').textContent = t('lib.page', { n: page + 1, m: win.pages });
-  loadExtras(win.slice);
+  const more = renderCount < list.length;
+  $('libMore').hidden = !more;
+  $('libMoreLabel').textContent = t('lib.shownCount', { n: slice.length, m: list.length });
+  if (!opts.keepScroll) rememberScroll();
+  loadExtras(slice);
 }
 function render() { renderFolders(); renderGrid(); }
 
@@ -178,6 +210,17 @@ document.addEventListener('pointerdown', (e) => {
   menuWasOpen = !!menuEl;
   if (menuEl && !menuEl.contains(e.target) && !e.target.closest('[data-more]')) closeMenu();
 }, true);
+let scrollAutoTimer = 0;
+document.querySelector('.page-main')?.addEventListener('scroll', () => {
+  rememberScroll();
+  if (menuEl) closeMenu();
+  clearTimeout(scrollAutoTimer);
+  scrollAutoTimer = setTimeout(() => {
+    const main = document.querySelector('.page-main');
+    if (!main || $('libMore').hidden) return;
+    if (main.scrollTop + main.clientHeight >= main.scrollHeight - 360) revealMore();
+  }, 90);
+}, { passive: true });
 document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeMenu(); });
 
 const reload = async (ok, id, bumpCover) => { if (ok) { if (bumpCover) bust.set(id, Date.now()); await load(); } };
@@ -259,7 +302,7 @@ document.addEventListener('click', (e) => {
   const fd = e.target.closest('[data-fdel]');
   if (fd) { e.stopPropagation(); deleteFolder(+fd.dataset.fdel); return; }
   const frow = e.target.closest('[data-f]');
-  if (frow) { const v = frow.dataset.f; filter = v === 'all' || v === 'none' ? v : +v; page = 0; prefs.set('libFolder', filter); render(); return; }
+  if (frow) { const v = frow.dataset.f; filter = v === 'all' || v === 'none' ? v : +v; prefs.set('libFolder', filter); render(); return; }
   const card = e.target.closest('.book-card, .lib-row');
   if (card && !closedMenu) {
     if (picking) {
@@ -285,11 +328,11 @@ document.addEventListener('keydown', (e) => {
   }
 });
 $('sortSel').value = sortMode;
-$('sortSel').addEventListener('change', () => { sortMode = $('sortSel').value; page = 0; prefs.set('libSort', sortMode); renderGrid(); });
+$('sortSel').addEventListener('change', () => { sortMode = $('sortSel').value; prefs.set('libSort', sortMode); renderGrid(); });
 $('newFolder').addEventListener('click', newFolder);
 $('statusSeg').addEventListener('click', (e) => {
   const b = e.target.closest('[data-status]'); if (!b) return;
-  statusFilter = b.dataset.status; page = 0; prefs.set('libStatus', statusFilter); renderGrid();
+  statusFilter = b.dataset.status; prefs.set('libStatus', statusFilter); renderGrid();
 });
 $('modeSeg').addEventListener('click', (e) => {
   const b = e.target.closest('[data-mode]'); if (!b) return;
@@ -321,8 +364,8 @@ async function loadExtras(slice) {
   for (const id of found) edited.add(id);
   renderFolders();
   const list = visibleBooks();
-  const win = pageWindow(list);
-  $('grid').innerHTML = win.slice.map((b) => cardHtml(b)).join('');
+  const slice = list.slice(0, libraryRenderCount(list.length, renderCount));
+  $('grid').innerHTML = slice.map((b) => cardHtml(b)).join('');
 }
 function firstPath(b) {
   try {
@@ -396,7 +439,7 @@ function cardHtml(b) {
 }
 async function load() {
   const my = ++loadSeq;
-  page = 0;
+  activeScope = '';
   const [bk, fl] = await Promise.all([lib.allBooks().catch(() => []), lib.folders().catch(() => null)]);
   if (my !== loadSeq) return;
   books = bk; folders = fl ?? [];
@@ -413,9 +456,7 @@ async function load() {
   bmCounts = new Map((counts || []).map((r) => [r.bookId, r.count]));
   missing = new Set(miss || []);
   renderFolders();
-  const list = visibleBooks();
-  const win = pageWindow(list);
-  $('grid').innerHTML = win.slice.map((b) => cardHtml(b)).join('');
+  renderGrid({ keepScroll: true });
 }
 $('pickMode').addEventListener('click', () => {
   picking = !picking;
@@ -424,6 +465,5 @@ $('pickMode').addEventListener('click', () => {
   renderGrid();
 });
 $('mergeSel').addEventListener('click', mergeSelected);
-$('pagePrev').addEventListener('click', () => { if (page > 0) { page -= 1; renderGrid(); } });
-$('pageNext').addEventListener('click', () => { page += 1; renderGrid(); });
+$('libMoreBtn').addEventListener('click', revealMore);
 load();

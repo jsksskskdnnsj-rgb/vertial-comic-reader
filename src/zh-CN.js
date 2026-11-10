@@ -91,6 +91,8 @@ export default {
   'lib.page': '{n} / {m}',
   'lib.pagePrev': '上一页', // Previous
   'lib.pageNext': '下一页', // Next
+  'lib.loadMore': '加载更多',
+  'lib.shownCount': '已显示 {n} / {m}',
   'book.pages': '{n} \u9875', // {n} pages
   'book.size': '\u6587\u4ef6\u5927\u5c0f', // File size
   'book.progress': '\u9605\u8bfb\u8fdb\u5ea6', // Progress
@@ -324,6 +326,10 @@ export default {
   'lib.viewList': '列表视图',
   'settings.panelOpacity': '面板不透明度',
   'settings.panelOpacityHelp': '玻璃面板的实心程度。数值越低，越能透出壁纸。',
+  'settings.chromeBlur': '顶栏磨砂强度',
+  'settings.chromeBlurHelp': '侧栏、顶栏、浮层等的 backdrop 模糊。设为 0 可减轻低配机开销。',
+  'settings.bgBlur': '壁纸模糊',
+  'settings.bgBlurHelp': '仅模糊自定义壁纸层，配合压暗可做出更柔和的液态背景。',
   'settings.bgFit': '壁纸适应方式',
   'settings.fitHelp': '填充会铺满窗口并可能裁切；适应会完整显示图片；拉伸会铺满窗口并可能变形。',
   'settings.fitCover': '填充',

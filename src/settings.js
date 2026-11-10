@@ -17,6 +17,7 @@ import { lib } from './api.js';
 import { mountShell, applyBackground, applyAppearance, applyExtras } from './shell-ui.js';
 import { BORDER_PRESETS, BG_COLOR_PRESETS, BG_COLOR_DEFAULT, isHex } from './appearance-extras.js';
 import { DEFAULTS, PANEL_MIN, PANEL_MAX } from './appearance.js';
+import { DEFAULT_CHROME_BLUR, DEFAULT_BG_BLUR, CHROME_BLUR_MAX, BG_BLUR_MAX } from './appearance-glass.js';
 import { sanePages, DEFAULT_PAGES } from './chapters.js';
 import { setBackground, resetBackground, setBanner, resetBanner } from './theme-api.js';
 import { imageFilters } from './image-exts.js';
@@ -107,15 +108,24 @@ function syncAppearance() {
   const op = Math.min(PANEL_MAX, Math.max(PANEL_MIN, +prefs.get('panelOpacity', DEFAULTS.panelOpacity) || DEFAULTS.panelOpacity));
   $('panelOpacity').value = op;
   $('panelOpacityVal').textContent = $('panelOpacity').value + '%';
+  const cb = Math.min(CHROME_BLUR_MAX, Math.max(0, Math.round(+prefs.get('chromeBlur', DEFAULT_CHROME_BLUR) || DEFAULT_CHROME_BLUR)));
+  $('chromeBlur').value = cb;
+  $('chromeBlurVal').textContent = cb + 'px';
+  const bb = Math.min(BG_BLUR_MAX, Math.max(0, Math.round(+prefs.get('bgBlur', DEFAULT_BG_BLUR) || DEFAULT_BG_BLUR)));
+  $('bgBlur').value = bb;
+  $('bgBlurVal').textContent = bb + 'px';
   pressed('#fitSeg button', 'fit', prefs.get('bgFit', DEFAULTS.bgFit));
 }
 $('panelOpacity').addEventListener('input', (e) => { prefs.set('panelOpacity', +e.target.value); syncAppearance(); applyAppearance(); });
+$('chromeBlur').addEventListener('input', (e) => { prefs.set('chromeBlur', +e.target.value); syncAppearance(); applyAppearance(); });
+$('bgBlur').addEventListener('input', (e) => { prefs.set('bgBlur', +e.target.value); syncAppearance(); applyAppearance(); });
 $('fitSeg').addEventListener('click', (e) => {
   const b = e.target.closest('[data-fit]'); if (!b) return;
   prefs.set('bgFit', b.dataset.fit); syncAppearance(); applyAppearance();
 });
 $('appearanceReset').addEventListener('click', () => {
   prefs.set('panelOpacity', DEFAULTS.panelOpacity); prefs.set('bgFit', DEFAULTS.bgFit); prefs.set('bgDim', DEFAULTS.bgDim);
+  prefs.set('chromeBlur', DEFAULT_CHROME_BLUR); prefs.set('bgBlur', DEFAULT_BG_BLUR);
   $('bgDim').value = DEFAULTS.bgDim; $('bgDimVal').textContent = DEFAULTS.bgDim + '%';
   syncAppearance(); applyAppearance(); applyBackground();
   toast(t('common.saved'));
