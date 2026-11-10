@@ -10,6 +10,7 @@ import { findNearby, thumbVirtualIndex, bookmarkTicks, BookmarkPanel } from './b
 import { HistoryStack, ThumbStrip } from './reader-panels.js';
 import { AutoScroll, openPageDirectory } from './reader-tools.js';
 import { mountShell } from './shell-ui.js';
+import { shortcutHelpRows } from './reader-shortcuts.js';
 
 const $ = (id) => document.getElementById(id);
 bootPage('library');
@@ -313,7 +314,12 @@ $('cropAuto').addEventListener('change', (e) => { rp.cropAuto = e.target.checked
 $('cropTrim').addEventListener('input', (e) => { rp.cropTrim = +e.target.value; prefs.set('reader.cropTrim', rp.cropTrim); $('cropTrimVal').textContent = rp.cropTrim; applyViewDisplay(); });
 $('gap').addEventListener('click', (e) => { const b = e.target.closest('button'); if (!b) return; rp.gap = +b.dataset.gap; prefs.set('reader.gap', rp.gap); if (view?.mode === 'scroll') view.setGap(rp.gap); syncControls(); });
 $('saver').addEventListener('change', async (e) => { saverNow = e.target.checked; prefs.set('saver', saverNow); await startView({ startPos: view?.topPos() }); });
-const setMode = async (m) => { if (m === modeNow) return; modeNow = m; await startView({ startPos: view?.topPos() }); };
+const setMode = async (m) => {
+  if (m === modeNow) return;
+  modeNow = m;
+  if (helpOpen()) renderHelp();
+  await startView({ startPos: view?.topPos() });
+};
 $('fMode').addEventListener('click', (e) => { const b = e.target.closest('button'); if (b) setMode(b.dataset.mode); });
 $('tbMode').addEventListener('click', () => setMode(modeNow === 'scroll' ? 'flip' : 'scroll'));
 $('tbFit').addEventListener('click', () => { view?.setFit(); if (view?.mode === 'scroll') { rp.widthPct = 100; $('w').value = 100; prefs.set('reader.widthPct', 100); } });
@@ -403,29 +409,11 @@ $('errLocate').addEventListener('click', async () => {
 });
 const toggleFs = async () => win.setFullscreen(!(await win.isFullscreen()));
 $('fsBtn').addEventListener('click', toggleFs);
-const HELP_ROWS = [
-  ['Space  ·  PgDn', 'help.space'],
-  ['Shift+Space  ·  PgUp', 'help.pageUp'],
-  ['↑  ↓', 'help.nudge'],
-  ['←  →', 'help.page'],
-  ['Home  ·  End', 'help.ends'],
-  ['Ctrl  +  −  0', 'help.zoom'],
-  ['B', 'help.bookmark'],
-  ['M', 'help.mode'],
-  ['A', 'help.auto'],
-  ['D', 'help.dir'],
-  ['C', 'help.history'],
-  ['T', 'help.chrome'],
-  ['G', 'help.jump'],
-  ['F  ·  F11', 'help.full'],
-  ['[  ·  ]', 'help.episode'],
-  ['Esc', 'help.leave'],
-  ['?  ·  H', 'help.toggle'],
-];
 const helpOpen = () => !$('helpOverlay').hidden;
 function renderHelp() {
-  $('helpGrid').innerHTML = HELP_ROWS.map(([keys, key]) =>
-    `<div class="help-row"><kbd>${esc(keys)}</kbd><span>${esc(t(key))}</span></div>`).join('');
+  const rows = shortcutHelpRows(modeNow === 'flip' ? 'flip' : 'scroll');
+  $('helpGrid').innerHTML = rows.map(({ keys, i18n }) =>
+    `<div class="help-row"><kbd>${esc(keys)}</kbd><span>${esc(t(i18n))}</span></div>`).join('');
 }
 function setHelp(open) {
   $('helpOverlay').hidden = !open;

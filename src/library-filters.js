@@ -1,6 +1,14 @@
 // library-filters.js - pure helpers for the library page (no imports, no DOM, no Tauri; unit-tested in Node).
 // Reading status, filtering, status counts and the remembered library state (sort, status, folder, view mode).
-export const SORTS = ['recent', 'added', 'name', 'title'];
+export const SORTS = ['recent', 'added', 'progress', 'name', 'title'];
+
+/** 0–100 reading progress for sorting (same denominator as library progress chips). */
+export function progressPct(b) {
+  const n = Math.max(0, Math.floor(Number(b?.page_count) || 0));
+  if (n <= 1) return 0;
+  const p = Math.max(0, Math.min(n - 1, Math.floor(Number(b?.last_page) || 0)));
+  return Math.round((p / (n - 1)) * 100);
+}
 export const STATUSES = ['all', 'unread', 'progress', 'finished'];
 export const MODES = ['grid', 'list'];
 

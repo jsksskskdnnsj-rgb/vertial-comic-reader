@@ -659,7 +659,7 @@ body.reader-chrome-away .work{padding:0;gap:0}
 }
 .flip-view--spread .flip-stage{display:flex;flex:1;min-width:0;gap:8px;align-items:center;justify-content:center;height:100%}
 .flip-view--spread .flip-image{flex:1;min-width:0;max-height:100%;object-fit:contain}
-.flip-view .flip-stage{display:flex;flex:1;align-items:center;justify-content:center;min-width:0;height:100%}
+.flip-view .flip-stage{display:flex;flex:1;align-items:center;justify-content:center;min-width:0;height:100%;cursor:pointer}
 .flip-image.pg-crop{object-fit:fill}
 .flip-image.flip-image--b[hidden]{display:none!important}
 

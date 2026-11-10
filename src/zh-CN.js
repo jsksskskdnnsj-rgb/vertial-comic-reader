@@ -67,6 +67,7 @@ export default {
   'lib.sort': '\u6392\u5e8f', // Sort
   'lib.sortRecent': '\u6700\u8fd1\u9605\u8bfb', // Recently read
   'lib.sortAdded': '\u6700\u8fd1\u6dfb\u52a0', // Recently added
+  'lib.sortProgress': '\u9605\u8bfb\u8fdb\u5ea6\uff08\u9ad8\u2192\u4f4e\uff09', // Reading progress (high to low)
   'lib.sortName': '\u540d\u79f0\uff08A\u2013Z\uff09', // Name (A–Z)
   'lib.noBooks': '\u6ca1\u6709\u5339\u914d\u7684\u4e66\u3002', // No books match.
   'lib.missing': '\u6587\u4ef6\u7f3a\u5931', // Missing
@@ -356,6 +357,8 @@ export default {
   'help.pageUp': '上一屏',
   'help.nudge': '小幅上移或下移',
   'help.page': '上一页或下一页。翻页模式下，左右方向键翻页',
+  'help.flipPage': '下一页或上一页（与方向键相同）',
+  'help.flipTap': '点击画面左缘或右缘翻页',
   'help.ends': '第一页或最后一页',
   'help.zoom': '放大、缩小，或回到 100%（竖滑模式）',
   'help.bookmark': '在此处添加或取消书签',

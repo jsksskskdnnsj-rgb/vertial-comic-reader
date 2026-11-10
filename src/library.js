@@ -16,7 +16,8 @@ import { lib } from './api.js';
 import { mountShell, coverUrl, wireCoverFallback } from './shell-ui.js';
 import { fetchEpisodeInfo } from './chapters.js';
 import { sortBy, compareTitles } from './naming.js';
-import { filterBooks, countStatuses, statusOf, readLibraryState, validFolder } from './library-filters.js';
+import { filterBooks, countStatuses, statusOf, readLibraryState, validFolder, progressPct } from './library-filters.js';
+import { libraryCoversToWarm } from './library-cover-warm.js';
 import * as act from './book-actions.js';
 import { openMergeDialog } from './merge-ui.js';
 import { libraryRenderCount, LIBRARY_RENDER_BATCH, libraryScopeKey } from './library-render-window.js';
@@ -38,7 +39,7 @@ const saved = readLibraryState((k, d) => prefs.get(k, d), location.search);
 let filter = saved.folder;          // 'all' | 'none' | folder id (remembered)
 let statusFilter = saved.status;    // 'all' | 'unread' | 'progress' | 'finished' (remembered; ?status= overrides)
 let viewMode = saved.mode;          // 'grid' | 'list' (remembered)
-let sortMode = saved.sort;          // 'recent' | 'added' | 'name' | 'title' (remembered; ?sort= overrides)
+let sortMode = saved.sort;          // 'recent' | 'added' | 'progress' | 'name' | 'title' (remembered; ?sort= overrides)
 let query = (params.get('q') || '').trim();
 let loadSeq = 0;
 let extraSeq = 0;
@@ -100,9 +101,28 @@ const coverOf = (b) => coverUrl(b.id, bust.get(b.id) ?? 0);
 function visibleBooks() {
   const list = filterBooks(books, { view, folder: filter, status: statusFilter, query, bmCounts });
   if (sortMode === 'added') return list.sort((a, b) => (b.created_at || 0) - (a.created_at || 0));
+  if (sortMode === 'progress') {
+    return list.sort((a, b) => {
+      const d = progressPct(b) - progressPct(a);
+      return d || (b.updated_at || 0) - (a.updated_at || 0);
+    });
+  }
   if (sortMode === 'name') return sortBy(list, (b) => b.name);
   if (sortMode === 'title') return list.sort((a, b) => compareTitles(a.name, b.name));   // alphabetical, zh-CN collation
   return list.sort((a, b) => (b.updated_at || 0) - (a.updated_at || 0));
+}
+
+const warmCovers = new Set();
+function prefetchCoversAhead(list, mounted) {
+  const ids = libraryCoversToWarm(list, mounted);
+  const base = typeof coverUrl === 'function' ? coverUrl : () => '';
+  for (const id of ids) {
+    if (warmCovers.has(id)) continue;
+    warmCovers.add(id);
+    const img = new Image();
+    img.decoding = 'async';
+    img.src = base(id, 0);
+  }
 }
 
 function renderFolders() {
@@ -179,6 +199,7 @@ function renderGrid(opts = {}) {
   $('libMoreLabel').textContent = t('lib.shownCount', { n: slice.length, m: list.length });
   if (!opts.keepScroll) rememberScroll();
   loadExtras(slice);
+  prefetchCoversAhead(list, slice.length);
 }
 function render() { renderFolders(); renderGrid(); }
 

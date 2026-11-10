@@ -2,6 +2,7 @@
 import { api, pageUrl } from './reader.js';
 import { Layout } from './layout.js';
 import { applyCropStyle, cropCacheKey, detectCropFromImage, mergeCropInsets } from './reader-crop.js';
+import { flipWarmPages, flipTapZone } from './flip-adjacent.js';
 
 export class FlipView {
   constructor(host, { onPosition = () => {}, scrubber = null } = {}) {
@@ -16,10 +17,17 @@ export class FlipView {
     this.layout = new Layout();
     this.params = { widthPct: 100, spreadGap: 8 };
     this.viewH = host.clientHeight;
+    this._warm = new Map();
     this._key = (e) => {
       if (document.documentElement.dataset.modal === '1' || e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
-      if (e.key === 'ArrowRight' || e.key === 'PageDown') this.next();
-      if (e.key === 'ArrowLeft' || e.key === 'PageUp') this.prev();
+      if (e.key === 'ArrowRight' || e.key === 'PageDown' || (e.key === ' ' && !e.shiftKey)) { e.preventDefault(); this.next(); }
+      else if (e.key === 'ArrowLeft' || e.key === 'PageUp' || (e.key === ' ' && e.shiftKey)) { e.preventDefault(); this.prev(); }
+    };
+    this._tap = (e) => {
+      const stage = e.currentTarget;
+      const z = flipTapZone(e.clientX - stage.getBoundingClientRect().left, stage.clientWidth);
+      if (z < 0) this.prev();
+      else if (z > 0) this.next();
     };
   }
 
@@ -56,6 +64,9 @@ export class FlipView {
     this.imgB = this.host.querySelector('.flip-image--b');
     this.host.querySelector('.flip-prev').onclick = () => this.prev();
     this.host.querySelector('.flip-next').onclick = () => this.next();
+    const stage = this.host.querySelector('.flip-stage');
+    stage.addEventListener('click', this._tap);
+    this._stageEl = stage;
   }
 
   refresh() { this.render(); }
@@ -88,6 +99,22 @@ export class FlipView {
       realPages: this.layout.realPages,
       atEnd,
     });
+    this.warmAdjacent();
+  }
+
+  warmAdjacent() {
+    if (!this.info) return;
+    const want = new Set(flipWarmPages(this.page, this.layout.realPages, this.spread));
+    for (const [p, img] of this._warm) {
+      if (!want.has(p)) { img.removeAttribute('src'); this._warm.delete(p); }
+    }
+    for (const p of want) {
+      if (this._warm.has(p)) continue;
+      const img = new Image();
+      img.decoding = 'async';
+      img.src = pageUrl(this.info, p, 0);
+      this._warm.set(p, img);
+    }
   }
 
   decorateImg(page, img) {
@@ -149,6 +176,9 @@ export class FlipView {
   }
   async close() {
     window.removeEventListener('keydown', this._key);
+    this._stageEl?.removeEventListener('click', this._tap);
+    for (const img of this._warm.values()) img.removeAttribute('src');
+    this._warm.clear();
     if (this.bookId) await api.closeBook(this.bookId).catch(() => {});
     this.host.replaceChildren();
   }
