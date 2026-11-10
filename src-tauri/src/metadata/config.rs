@@ -16,6 +16,17 @@ pub struct PerSourceProxy {
     pub comic18: bool,
 }
 
+impl Default for PerSourceProxy {
+    fn default() -> Self {
+        Self {
+            bangumi: true,
+            mangaupdates: true,
+            anilist: true,
+            comic18: true,
+        }
+    }
+}
+
 fn default_true() -> bool {
     true
 }
@@ -35,6 +46,17 @@ pub struct SourceToggles {
     pub anilist: bool,
     #[serde(default = "default_false")]
     pub comic18: bool,
+}
+
+impl Default for SourceToggles {
+    fn default() -> Self {
+        Self {
+            bangumi: true,
+            mangaupdates: true,
+            anilist: true,
+            comic18: false,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

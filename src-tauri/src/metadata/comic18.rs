@@ -100,10 +100,13 @@ fn album_url(origin: &str, id: &str) -> String {
 async fn fetch_origin_for_host(
     cfg: &MetadataNetworkConfig,
     host: &str,
-) -> Result<String, reqwest::Error> {
+) -> Result<reqwest::Response, String> {
     let client = build_client_for(cfg, Provider::Comic18, BROWSER_UA)?;
     let entry = format!("https://{host}/");
-    browser_headers(client.get(&entry)).send().await
+    browser_headers(client.get(&entry))
+        .send()
+        .await
+        .map_err(|e| offline_message(&e))
 }
 
 pub(crate) async fn resolve_origin(cfg: &MetadataNetworkConfig) -> Result<String, String> {
@@ -112,8 +115,8 @@ pub(crate) async fn resolve_origin(cfg: &MetadataNetworkConfig) -> Result<String
     for host in domain_candidates(cfg) {
         let resp = match fetch_origin_for_host(cfg, &host).await {
             Ok(r) => r,
-            Err(e) => {
-                last_block = Some(offline_message(&e));
+            Err(msg) => {
+                last_block = Some(msg);
                 continue;
             }
         };
@@ -284,7 +287,7 @@ pub async fn search(
     if is_challenge_page(status, &html) {
         return Err(BLOCKED_HINT.into());
     }
-    if !resp.status().is_success() {
+    if status < 200 || status >= 300 {
         return Err(format!("18comic 搜索失败（HTTP {status}）"));
     }
     Ok(parse_search_html(
@@ -308,7 +311,7 @@ pub async fn detail(cfg: &MetadataNetworkConfig, id: &str) -> Result<MetadataDet
     if is_challenge_page(status, &html) {
         return Err(BLOCKED_HINT.into());
     }
-    if !resp.status().is_success() {
+    if status < 200 || status >= 300 {
         return Err(format!("18comic 详情失败（HTTP {status}）"));
     }
     Ok(parse_album_html(&html, &origin, id.trim()))

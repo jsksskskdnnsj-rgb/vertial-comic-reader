@@ -131,7 +131,13 @@ fn authors(subject: &Subject) -> Vec<String> {
     };
     infobox_strings(raw)
         .into_iter()
-        .flat_map(|s| s.split(['、', ',', '，']).map(|p| p.trim().to_string()))
+        .flat_map(|s| {
+            let parts: Vec<String> = s
+                .split(['、', ',', '，'])
+                .map(|p| p.trim().to_string())
+                .collect();
+            parts.into_iter()
+        })
         .filter(|s| !s.is_empty())
         .collect()
 }
@@ -225,7 +231,7 @@ pub async fn search(
     let parsed: SearchResponse = response
         .json()
         .await
-        .map_err(|_| "Bangumi 搜索结果无法解析".into())?;
+        .map_err(|_| "Bangumi 搜索结果无法解析".to_string())?;
     Ok(parsed
         .data
         .into_iter()
@@ -264,7 +270,7 @@ pub async fn detail(cfg: &MetadataNetworkConfig, id: &str) -> Result<MetadataDet
     if !response.status().is_success() {
         return Err(http_status_message(response.status()));
     }
-    let subject: Subject = response.json().await.map_err(|_| "Bangumi 详情无法解析".into())?;
+    let subject: Subject = response.json().await.map_err(|_| "Bangumi 详情无法解析".to_string())?;
     let title = best_title(&subject);
     let title_cn = subject.name_cn.clone().filter(|s| !s.trim().is_empty());
     let title_original = subject

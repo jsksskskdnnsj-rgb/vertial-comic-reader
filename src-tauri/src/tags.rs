@@ -114,7 +114,7 @@ pub fn tag_delete(id: i64) -> Result<(), String> {
 
 #[tauri::command]
 pub fn book_set_tags(book_id: i64, tag_ids: Vec<i64>) -> Result<(), String> {
-    let conn = db_conn()?;
+    let mut conn = db_conn()?;
     let tx = conn.transaction().map_err(|e| e.to_string())?;
     tx.execute("DELETE FROM book_tags WHERE book_id=?1", [book_id])
         .map_err(|e| e.to_string())?;

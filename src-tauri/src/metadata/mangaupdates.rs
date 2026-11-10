@@ -147,7 +147,7 @@ pub async fn search(
     let parsed: SearchResponse = response
         .json()
         .await
-        .map_err(|_| "MangaUpdates 搜索结果无法解析".into())?;
+        .map_err(|_| "MangaUpdates 搜索结果无法解析".to_string())?;
     Ok(parsed
         .results
         .into_iter()
@@ -186,7 +186,7 @@ pub async fn detail(cfg: &MetadataNetworkConfig, id: &str) -> Result<MetadataDet
     let s: SeriesDetail = response
         .json()
         .await
-        .map_err(|_| "MangaUpdates 详情无法解析".into())?;
+        .map_err(|_| "MangaUpdates 详情无法解析".to_string())?;
     let aliases: Vec<String> = s
         .associated
         .iter()

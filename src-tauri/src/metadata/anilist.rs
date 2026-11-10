@@ -219,7 +219,7 @@ async fn gql<T: for<'de> Deserialize<'de>>(
     let envelope: GqlResponse<T> = response
         .json()
         .await
-        .map_err(|_| "AniList 响应无法解析".into())?;
+        .map_err(|_| "AniList 响应无法解析".to_string())?;
     if let Some(errs) = envelope.errors {
         if let Some(first) = errs.first() {
             return Err(format!("AniList：{}", first.message));

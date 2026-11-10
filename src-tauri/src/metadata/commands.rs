@@ -151,7 +151,7 @@ async fn cache_cover_file(book_id: i64, url: &str, cfg: &MetadataNetworkConfig, 
     if !response.status().is_success() {
         return Err(format!("封面下载失败（HTTP {}）", response.status()));
     }
-    let bytes = response.bytes().await.map_err(|_| "封面数据读取失败".into())?;
+    let bytes = response.bytes().await.map_err(|_| "封面数据读取失败".to_string())?;
     if bytes.len() > 8 * 1024 * 1024 {
         return Err("封面文件过大".into());
     }
@@ -211,7 +211,7 @@ fn apply_remote_cover_to_shelf(
         return Err("缓存封面不存在".into());
     }
     let covers = app.state::<CoversDir>().0.clone();
-    std::fs::create_dir_all(&covers).map_err(|e| e.to_string())?;
+    std::fs::create_dir_all(covers.as_ref()).map_err(|e| e.to_string())?;
     let dest = covers.join(format!("{book_id}.jpg"));
     let bytes = std::fs::read(&src).map_err(|e| e.to_string())?;
     let img = image::load_from_memory(&bytes).map_err(|_| "封面无法解码".to_string())?;
@@ -528,7 +528,6 @@ fn fallback_page_url(
             Provider::Comic18 => {
                 return Some(comic18::search_url_for_title(cfg, book_title));
             }
-            _ => {}
         }
     }
     Some(comic18::search_url_for_title(cfg, book_title))

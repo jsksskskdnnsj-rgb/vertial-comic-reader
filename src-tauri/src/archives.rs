@@ -54,11 +54,22 @@ pub fn extract_sevenz(archive: &Path, dest: &Path) -> Result<(), String> {
 }
 
 pub fn extract_rar(archive: &Path, dest: &Path) -> Result<(), String> {
-    unrar::Archive::new(archive)
+    let mut archive = unrar::Archive::new(archive)
         .open_for_processing()
-        .map_err(|e| format!("无法打开 RAR：{e}"))?
-        .extract_to(dest)
-        .map_err(|e| format!("RAR 解压失败：{e}"))
+        .map_err(|e| format!("无法打开 RAR：{e}"))?;
+    while let Some(entry) = archive
+        .read_header()
+        .map_err(|e| format!("RAR 读取失败：{e}"))?
+    {
+        archive = if entry.entry().is_file() {
+            entry
+                .extract_with_base(dest)
+                .map_err(|e| format!("RAR 解压失败：{e}"))?
+        } else {
+            entry.skip().map_err(|e| format!("RAR 解压失败：{e}"))?
+        };
+    }
+    Ok(())
 }
 
 /// Unpack archive → folder path. Returns None if the extension is not an archive we handle here.
@@ -78,7 +89,7 @@ pub fn import_unpack_to_folder(path: &str) -> Result<Option<PathBuf>, String> {
     } else {
         return Ok(None);
     }
-  if scan::count_images_recursive(&dest) == 0 {
+    if scan::count_images_recursive(&dest) == 0 {
         let _ = fs::remove_dir_all(&dest);
         return Err("压缩包内没有可识别的漫画图片".into());
     }
