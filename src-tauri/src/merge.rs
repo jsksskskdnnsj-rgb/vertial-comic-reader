@@ -2,8 +2,11 @@
 //!
 //! Names are normalised (width, volume/chapter markers, brackets, digits, punctuation).
 //! An identical base plus one non-overlapping order key per folder is merged automatically
-//! when `settings.merge.auto` is on (the default). Anything less certain is stored in
-//! `merge_pending` for the dialog. Merging only rewrites shelf rows: files stay where they are.
+//! when `settings.merge.auto` is on (the default). Near-copies, and names that share a
+//! non-generic run of 3+ characters, are stored in `merge_pending` for the dialog and
+//! are never auto-merged. A looser match against folders that already formed a confident
+//! group does not join that auto-merge; it opens one extra manual group. Merging only
+//! rewrites shelf rows: files stay where they are.
 
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
@@ -479,6 +482,240 @@ fn levenshtein(a: &[char], b: &[char]) -> usize {
     prev[b.len()]
 }
 
+/// A shared run is not evidence when it is only a volume word, a counter, digits, or an extension.
+const GENERIC_TOKENS: &[&str] = &[
+    "volume", "chapter", "episode", "chap", "vol", "part", "ep", "ch", "jpeg", "jpg", "png",
+    "webp", "gif", "avif", "cbz", "cbr", "zip", "rar", "pdf", "7z",
+];
+/// Skip a 3-gram that sits in more folders than this. Pair checks stay inside the bucket.
+const LOOSE_BUCKET_MAX: usize = 48;
+
+fn is_generic_char(c: char) -> bool {
+    c.is_ascii_digit() || c == '第' || is_counter(c) || is_cn_numeral(c)
+}
+
+/// True when `s` is covered entirely by generic tokens and generic characters.
+fn is_only_generic(s: &str) -> bool {
+    let chars: Vec<char> = s.chars().collect();
+    if chars.is_empty() {
+        return true;
+    }
+    let mut reach = vec![false; chars.len() + 1];
+    reach[0] = true;
+    for i in 0..chars.len() {
+        if !reach[i] {
+            continue;
+        }
+        if is_generic_char(chars[i]) {
+            reach[i + 1] = true;
+        }
+        let rest: String = chars[i..].iter().collect();
+        for tok in GENERIC_TOKENS {
+            if rest.starts_with(tok) {
+                reach[i + tok.chars().count()] = true;
+            }
+        }
+    }
+    reach[chars.len()]
+}
+
+fn char_grams(s: &str) -> Vec<String> {
+    let chars: Vec<char> = s.chars().take(96).collect();
+    if chars.len() < 3 {
+        return Vec::new();
+    }
+    let mut seen = HashSet::new();
+    let mut out = Vec::new();
+    for i in 0..=chars.len() - 3 {
+        let g: String = chars[i..i + 3].iter().collect();
+        if is_only_generic(&g) || !seen.insert(g.clone()) {
+            continue;
+        }
+        out.push(g);
+    }
+    out
+}
+
+/// A common run of at least 3 characters that is not just "vol" / "chapter" / "第话卷" / digits.
+fn has_meaningful_common(a: &str, b: &str) -> bool {
+    let av: Vec<char> = a.chars().take(96).collect();
+    let bv: Vec<char> = b.chars().take(96).collect();
+    if av.len() < 3 || bv.len() < 3 {
+        return false;
+    }
+    let mut prev = vec![0u16; bv.len() + 1];
+    let mut cur = vec![0u16; bv.len() + 1];
+    for i in 0..av.len() {
+        for j in 0..bv.len() {
+            if av[i] != bv[j] {
+                cur[j + 1] = 0;
+                continue;
+            }
+            let len = prev[j] + 1;
+            cur[j + 1] = len;
+            if len < 3 {
+                continue;
+            }
+            let extends = i + 1 < av.len() && j + 1 < bv.len() && av[i + 1] == bv[j + 1];
+            if extends {
+                continue;
+            }
+            let start = i + 1 - len as usize;
+            let sub: String = av[start..=i].iter().collect();
+            if !is_only_generic(&sub) {
+                return true;
+            }
+        }
+        std::mem::swap(&mut prev, &mut cur);
+        cur.fill(0);
+    }
+    false
+}
+
+fn loose_substring_groups(pool: &[Member], used: &mut [bool]) -> Vec<Group> {
+    let mut buckets: HashMap<String, Vec<usize>> = HashMap::new();
+    let mut any_free = false;
+    for (i, m) in pool.iter().enumerate() {
+        if char_len(&m.parsed.base) < 3 {
+            continue;
+        }
+        if !used[i] {
+            any_free = true;
+        }
+        for g in char_grams(&m.parsed.base) {
+            buckets.entry(g).or_default().push(i);
+        }
+    }
+    if !any_free {
+        return Vec::new();
+    }
+    let mut parent: Vec<usize> = (0..pool.len()).collect();
+    fn find(p: &mut [usize], x: usize) -> usize {
+        if p[x] != x {
+            p[x] = find(p, p[x]);
+        }
+        p[x]
+    }
+    let mut seen = HashSet::new();
+    let mut linked = vec![false; pool.len()];
+    for bucket in buckets.values() {
+        if bucket.len() < 2 || bucket.len() > LOOSE_BUCKET_MAX {
+            continue;
+        }
+        for a in 0..bucket.len() {
+            for b in (a + 1)..bucket.len() {
+                let ia = bucket[a];
+                let ib = bucket[b];
+                // Already-grouped folders are anchors only. Two of them are not a new pair.
+                if used[ia] && used[ib] {
+                    continue;
+                }
+                let (lo, hi) = if ia < ib { (ia, ib) } else { (ib, ia) };
+                if !seen.insert((lo, hi)) {
+                    continue;
+                }
+                if !has_meaningful_common(&pool[ia].parsed.base, &pool[ib].parsed.base) {
+                    continue;
+                }
+                let pa = find(&mut parent, ia);
+                let pb = find(&mut parent, ib);
+                if pa != pb {
+                    parent[pb] = pa;
+                }
+                linked[ia] = true;
+                linked[ib] = true;
+            }
+        }
+    }
+    let mut clusters: HashMap<usize, Vec<usize>> = HashMap::new();
+    for i in 0..pool.len() {
+        if linked[i] {
+            clusters.entry(find(&mut parent, i)).or_default().push(i);
+        }
+    }
+    let mut groups = Vec::new();
+    for members_i in clusters.into_values() {
+        if members_i.len() < 2 || members_i.iter().all(|&i| used[i]) {
+            continue;
+        }
+        let mut members: Vec<Member> = members_i.iter().map(|&i| pool[i].clone()).collect();
+        sort_members(&mut members);
+        let title = suggest_title(&members);
+        for i in members_i {
+            used[i] = true;
+        }
+        groups.push(Group { confident: false, title, members });
+    }
+    groups
+}
+
+/// After a confident auto-merge, point the manual group at the surviving shelf row
+/// instead of listing those folders a second time.
+fn collapse_consumed(g: Group, owner: &HashMap<String, i64>) -> Option<Group> {
+    let hit = g.members.iter().any(|m| m.paths.iter().any(|p| owner.contains_key(&path_key(p))));
+    if !hit {
+        return Some(g);
+    }
+    let mut out = Vec::new();
+    let mut seen_shelf = HashSet::new();
+    let mut seen_free = HashSet::new();
+    for m in g.members {
+        let mut ids = Vec::new();
+        for p in &m.paths {
+            if let Some(id) = owner.get(&path_key(p)) {
+                if !ids.contains(id) {
+                    ids.push(*id);
+                }
+            }
+        }
+        if ids.is_empty() {
+            let key = m.paths.first().map(|p| path_key(p)).unwrap_or_default();
+            if seen_free.insert(key) {
+                out.push(m);
+            }
+            continue;
+        }
+        let id = ids[0];
+        if seen_shelf.insert(id) {
+            let mut kept = m;
+            kept.shelf_id = Some(id);
+            out.push(kept);
+        }
+    }
+    if out.len() < 2 {
+        return None;
+    }
+    sort_members(&mut out);
+    Some(Group { confident: false, title: g.title, members: out })
+}
+
+fn group_paths(g: &Group) -> HashSet<String> {
+    g.members.iter().flat_map(|m| m.paths.iter().map(|p| path_key(p))).collect()
+}
+
+/// One review row per pile of folders. A confident subset is dropped when a wider
+/// manual group already contains it and nothing is being auto-merged.
+fn settle_pending(groups: Vec<Group>, owner: &HashMap<String, i64>, auto: bool) -> Vec<Group> {
+    let groups: Vec<Group> = groups.into_iter().filter_map(|g| collapse_consumed(g, owner)).collect();
+    if auto {
+        return groups;
+    }
+    let sets: Vec<HashSet<String>> = groups.iter().map(group_paths).collect();
+    groups
+        .into_iter()
+        .enumerate()
+        .filter(|(i, g)| {
+            if !g.confident {
+                return true;
+            }
+            !sets.iter().enumerate().any(|(j, other)| {
+                j != *i && sets[*i].is_subset(other) && sets[*i].len() < other.len()
+            })
+        })
+        .map(|(_, g)| g)
+        .collect()
+}
+
 fn similar(a: &str, b: &str) -> bool {
     if a == b {
         return true;
@@ -622,9 +859,13 @@ fn group_members(pool: &[Member]) -> Vec<Group> {
             let mut members: Vec<Member> = members_i.iter().map(|&i| pool[i].clone()).collect();
             sort_members(&mut members);
             let title = suggest_title(&members);
+            for i in &members_i {
+                used[*i] = true;
+            }
             groups.push(Group { confident: false, title, members });
         }
     }
+    groups.extend(loose_substring_groups(pool, &mut used));
     groups
 }
 
@@ -637,8 +878,12 @@ fn group_relevant(fresh: &[Member], library: &[Member]) -> Vec<Group> {
         return Vec::new();
     }
     let mut by_prefix: HashMap<String, Vec<usize>> = HashMap::new();
+    let mut by_gram: HashMap<String, Vec<usize>> = HashMap::new();
     for (i, m) in fresh_kept.iter().enumerate() {
         by_prefix.entry(prefix2(&m.parsed.base)).or_default().push(i);
+        for g in char_grams(&m.parsed.base) {
+            by_gram.entry(g).or_default().push(i);
+        }
     }
     let mut fresh_paths = HashSet::new();
     for m in fresh {
@@ -654,16 +899,30 @@ fn group_relevant(fresh: &[Member], library: &[Member]) -> Vec<Group> {
         if lib.paths.iter().any(|p| fresh_paths.contains(&path_key(p))) {
             continue;
         }
-        let Some(cands) = by_prefix.get(&prefix2(&lib.parsed.base)) else { continue };
-        let hit = cands.iter().any(|&i| {
-            let f = &pool[i];
-            f.parsed.base == lib.parsed.base || similar(&f.parsed.base, &lib.parsed.base)
+        let prefix_hit = by_prefix.get(&prefix2(&lib.parsed.base)).is_some_and(|cands| {
+            cands.iter().any(|&i| {
+                let f = &pool[i];
+                f.parsed.base == lib.parsed.base || similar(&f.parsed.base, &lib.parsed.base)
+            })
         });
-        if hit {
+        let mut loose_cands = HashSet::new();
+        for g in char_grams(&lib.parsed.base) {
+            let Some(hits) = by_gram.get(&g) else { continue };
+            if hits.len() > LOOSE_BUCKET_MAX {
+                continue;
+            }
+            loose_cands.extend(hits.iter().copied());
+        }
+        let loose_hit = loose_cands.len() <= LOOSE_BUCKET_MAX
+            && loose_cands.iter().any(|&i| has_meaningful_common(&pool[i].parsed.base, &lib.parsed.base));
+        if prefix_hit || loose_hit {
             pool.push(lib.clone());
         }
     }
     group_members(&pool)
+        .into_iter()
+        .filter(|g| group_paths(g).iter().any(|p| fresh_paths.contains(p)))
+        .collect()
 }
 
 fn member_from_scan(b: &ScanBook) -> Member {
@@ -1352,16 +1611,20 @@ pub fn finish_scan(conn: &Connection, snap: &mut ScanSnapshot) -> Result<(), Str
     let mut merged = 0u64;
     let mut pending = Vec::new();
     let mut consumed = Vec::new();
+    let mut consumed_owner: HashMap<String, i64> = HashMap::new();
     for g in groups {
         if g.confident && auto {
             match apply_parts(&tx, &g.title, None, &g.members, true) {
-                Ok(_) => {
+                Ok(id) => {
                     merged += 1;
                     if g.members.iter().all(|m| m.shelf_id.is_none()) {
                         added += 1;
                     }
                     for m in &g.members {
-                        consumed.extend(m.paths.clone());
+                        for p in &m.paths {
+                            consumed_owner.insert(path_key(p), id);
+                            consumed.push(p.clone());
+                        }
                     }
                 }
                 Err(_) => pending.push(g),
@@ -1370,6 +1633,7 @@ pub fn finish_scan(conn: &Connection, snap: &mut ScanSnapshot) -> Result<(), Str
             pending.push(g);
         }
     }
+    let pending = settle_pending(pending, &consumed_owner, auto);
     store_pending(&tx, &pending, true)?;
     tx.commit().map_err(|e| e.to_string())?;
     mark_already(snap, &consumed);
@@ -1397,15 +1661,24 @@ pub fn absorb_new(conn: &Connection, new_ids: &[i64]) -> Result<(), String> {
     let auto = auto_on(conn);
     let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
     let mut pending = Vec::new();
+    let mut consumed_owner: HashMap<String, i64> = HashMap::new();
     for g in groups {
         if g.confident && auto {
-            if apply_parts(&tx, &g.title, None, &g.members, true).is_err() {
-                pending.push(g);
+            match apply_parts(&tx, &g.title, None, &g.members, true) {
+                Ok(id) => {
+                    for m in &g.members {
+                        for p in &m.paths {
+                            consumed_owner.insert(path_key(p), id);
+                        }
+                    }
+                }
+                Err(_) => pending.push(g),
             }
         } else {
             pending.push(g);
         }
     }
+    let pending = settle_pending(pending, &consumed_owner, auto);
     store_pending(&tx, &pending, false)?;
     tx.commit().map_err(|e| e.to_string())
 }
@@ -1644,6 +1917,112 @@ mod tests {
         assert_eq!(parse_name("上海").base, "上海");
         assert!(parse_name("vol01-10").base.is_empty());
         assert!(grouped(&["vol01-10", "vol01-10"]).is_empty());
+    }
+
+    #[test]
+    fn shared_run_of_three_is_manual_review_only() {
+        // Old rule still auto-merges an identical base with distinct volumes.
+        let g = grouped(&["海贼王 第1-50话", "海贼王 第51-100话"]);
+        assert_eq!(g.len(), 1);
+        assert!(g[0].confident);
+
+        // Different bases, one shared title run. Not close enough for the old
+        // similarity test, so this is the looser manual candidate.
+        let g = grouped(&["海贼王外传", "海贼王特别篇"]);
+        assert_eq!(g.len(), 1);
+        assert!(!g[0].confident);
+        assert_eq!(g[0].members.len(), 2);
+
+        let wide = grouped(&["ＮＡＲＵＴＯ movie", "naruto special edition"]);
+        assert_eq!(wide.len(), 1);
+        assert!(!wide[0].confident);
+
+        // Two characters is not enough.
+        assert!(grouped(&["东京喰种", "东京复仇者"]).is_empty());
+
+        // The overlap is only a generic token or an extension.
+        assert!(grouped(&["volcano", "voltage"]).is_empty());
+        assert!(grouped(&["aaachapter", "bbbchapter"]).is_empty());
+        assert!(grouped(&["cover.png", "scan.png"]).is_empty());
+        assert!(grouped(&["第1话", "第2话"]).is_empty());
+
+        // Three folders, one shared run: one review group, not three pairs.
+        let g = grouped(&["AlphaBetaOne", "AlphaBetaTwoExtra", "AlphaBetaThreeStory"]);
+        assert_eq!(g.len(), 1);
+        assert!(!g[0].confident);
+        assert_eq!(g[0].members.len(), 3);
+
+        // A long shelf of unrelated names stays quiet; the one real pair is kept.
+        // Each filler name is three private characters so no 3-gram is shared.
+        let mut names: Vec<String> = (0..200)
+            .map(|i| {
+                (0..3)
+                    .map(|k| char::from_u32(0x4E00 + (i * 3 + k) as u32).unwrap())
+                    .collect()
+            })
+            .collect();
+        names.push("海贼王甲".into());
+        names.push("海贼王乙".into());
+        let refs: Vec<&str> = names.iter().map(|s| s.as_str()).collect();
+        let g = grouped(&refs);
+        assert_eq!(g.len(), 1);
+        assert!(!g[0].confident);
+        assert_eq!(g[0].members.len(), 2);
+        assert!(g[0].members.iter().all(|m| m.name.contains("海贼王")));
+
+        let fresh = vec![mem("海贼王外传")];
+        let library = vec![mem("海贼王特别篇"), mem("完全无关的书名甲乙")];
+        let g = group_relevant(&fresh, &library);
+        assert_eq!(g.len(), 1);
+        assert!(!g[0].confident);
+        assert_eq!(g[0].members.len(), 2);
+        assert!(g[0].members.iter().all(|m| m.parsed.base.contains("海贼王")));
+
+        // Exact volumes still auto-merge. A longer spinoff that only shares the title
+        // is a second, manual group — it is not pulled into the auto-merge.
+        let g = grouped(&["海贼王 第1话", "海贼王 第2话", "海贼王超长外传特别篇"]);
+        assert_eq!(g.len(), 2);
+        let conf = g.iter().find(|x| x.confident).expect("confident volumes");
+        assert_eq!(conf.members.len(), 2);
+        let loose = g.iter().find(|x| !x.confident).expect("manual spinoff");
+        assert_eq!(loose.members.len(), 3);
+        assert!(loose.members.iter().any(|m| m.name.contains("超长")));
+
+        // With auto-merge off, the dialog keeps the wider manual group only.
+        let held = settle_pending(grouped(&["海贼王 第1话", "海贼王 第2话", "海贼王超长外传特别篇"]), &HashMap::new(), false);
+        assert_eq!(held.len(), 1);
+        assert!(!held[0].confident);
+        assert_eq!(held[0].members.len(), 3);
+
+        // After the volumes auto-merge, the manual row points at that one shelf id
+        // plus the spinoff, so confirming it does not merge the volumes twice.
+        let loose = grouped(&["海贼王 第1话", "海贼王 第2话", "海贼王超长外传特别篇"])
+            .into_iter()
+            .find(|x| !x.confident)
+            .unwrap();
+        let mut owner = HashMap::new();
+        for m in &loose.members {
+            if m.parsed.base == "海贼王" {
+                for p in &m.paths {
+                    owner.insert(path_key(p), 7);
+                }
+            }
+        }
+        let settled = settle_pending(vec![loose], &owner, true);
+        assert_eq!(settled.len(), 1);
+        assert!(!settled[0].confident);
+        assert_eq!(settled[0].members.len(), 2);
+        assert_eq!(settled[0].members.iter().filter(|m| m.shelf_id == Some(7)).count(), 1);
+        assert!(settled[0].members.iter().any(|m| m.shelf_id.is_none() && m.name.contains("超长")));
+
+        // A spinoff import must not auto-merge two library volumes that only got
+        // pulled in by the loose rule. They stay inside the manual group.
+        let fresh = vec![mem("海贼王超长外传特别篇")];
+        let library = vec![mem("海贼王 第1话"), mem("海贼王 第2话")];
+        let g = group_relevant(&fresh, &library);
+        assert_eq!(g.len(), 1);
+        assert!(!g[0].confident);
+        assert_eq!(g[0].members.len(), 3);
     }
 
     #[test]

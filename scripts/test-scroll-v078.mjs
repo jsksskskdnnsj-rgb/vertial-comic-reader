@@ -4,8 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
-  KEY_NUDGE_MIN_PX, KEY_NUDGE_PX_PER_SEC, KEY_PAGE_PX_PER_SEC, KEY_PAGE_TRAVEL_VH,
-  keyScrollPlan,
+  KEY_NUDGE_MIN_PX, KEY_NUDGE_PX_PER_SEC, keyScrollPlan,
 } from '../src/reader.js';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -13,17 +12,20 @@ const src = fs.readFileSync(path.join(root, 'src/reader.js'), 'utf8');
 const boot = fs.readFileSync(path.join(root, 'src/reader-boot.js'), 'utf8');
 const css = fs.readFileSync(path.join(root, 'src/mh-ui.css'), 'utf8');
 
-// Tap and hold must use the same plan. OS key-repeat must not queue CSS smooth jumps.
+// Arrow nudges still share one velocity. Space is a page step, not that crawl.
+// OS key-repeat must not queue CSS smooth jumps.
 {
   const tap = keyScrollPlan(' ', { viewH: 800 });
   const hold = keyScrollPlan('PageDown', { viewH: 800 });
-  assert.equal(tap.pxPerSec, hold.pxPerSec);
-  assert.equal(tap.pxPerSec, KEY_PAGE_PX_PER_SEC);
-  assert.equal(tap.minTravel, 800 * KEY_PAGE_TRAVEL_VH);
+  assert.equal(tap.kind, 'page');
+  assert.equal(hold.kind, 'page');
+  assert.equal(tap.distance, hold.distance);
+  assert.equal(tap.duration, hold.duration);
   assert.equal(tap.dir, 1);
   assert.equal(keyScrollPlan(' ', { shift: true, viewH: 800 }).dir, -1);
   assert.equal(keyScrollPlan('PageUp', { viewH: 900 }).dir, -1);
   const nudge = keyScrollPlan('ArrowDown', { viewH: 800 });
+  assert.equal(nudge.kind, 'nudge');
   assert.equal(nudge.pxPerSec, KEY_NUDGE_PX_PER_SEC);
   assert.equal(nudge.minTravel, KEY_NUDGE_MIN_PX);
   assert.equal(keyScrollPlan('ArrowUp').dir, -1);

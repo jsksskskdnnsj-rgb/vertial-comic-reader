@@ -67,7 +67,134 @@ export function glideTauMs(distancePx) {
 }
 
 /**
- * Speed during the release coast of a key scroll.
+ * Chromium `ScrollableArea::PageStep`: max(7/8 of the scrollport,
+ * scrollport − 40px). Tall reader viewports therefore move almost a full
+ * screen and keep a 40px overlap. Space / PageDown / PageUp use this.
+ * Arrow nudges do not.
+ */
+export const KEY_PAGE_FRACTION = 0.875;
+export const KEY_PAGE_OVERLAP_PX = 40;
+/** One page step. Inside the 150–250ms range a browser uses for the gesture. */
+export const KEY_PAGE_DURATION_MS = 200;
+
+export function pageKeyDistance(viewH) {
+  const h = Math.max(1, Number(viewH) || 1);
+  const step = Math.max(h * KEY_PAGE_FRACTION, h - KEY_PAGE_OVERLAP_PX);
+  return Math.max(1, Math.round(step));
+}
+
+export function easeOutCubic(t) {
+  const u = Math.min(1, Math.max(0, Number(t) || 0));
+  return 1 - (1 - u) ** 3;
+}
+
+/**
+ * Cubic from `from` to `to` that arrives at rest.
+ * v0 ≈ 0 (a fresh press) is ease-out: the slope starts at 3× the average
+ * and ends at 0, over `duration` ms. A chain passes the current velocity
+ * so the new segment does not drop to 0 and start again.
+ */
+export function pageScrollSegment({ from, to, v0 = 0, duration = KEY_PAGE_DURATION_MS }) {
+  const dist = to - from;
+  const D = Math.max(1, Number(duration) || 1);
+  if (!dist) return { a: from, b: 0, c: 0, d: 0, D, to, from };
+  const easeV = (3 * dist) / D;
+  let b = easeV;
+  if (v0 && Math.sign(v0) === Math.sign(dist)) {
+    const mag = Math.abs(v0);
+    const easeMag = Math.abs(easeV);
+    // Keep speed only while it is still the same gesture. A near-stop uses
+    // the ease-out impulse (fast), not a crawl away from rest.
+    if (mag >= easeMag * 0.45 && mag <= easeMag * 1.02) b = Math.sign(dist) * mag;
+  }
+  const d = (b * D - 2 * dist) / (D ** 3);
+  const c = -b / (2 * D) - 1.5 * d * D;
+  return { a: from, b, c, d, D, to, from };
+}
+
+export function samplePageScroll(seg, elapsedMs) {
+  if (!seg) return { y: 0, v: 0, done: true };
+  const t = Math.min(seg.D, Math.max(0, Number(elapsedMs) || 0));
+  let y = seg.a + seg.b * t + seg.c * t * t + seg.d * t * t * t;
+  const v = seg.b + 2 * seg.c * t + 3 * seg.d * t * t;
+  if (t >= seg.D - 0.001) return { y: seg.to, v: 0, done: true };
+  const lo = Math.min(seg.a, seg.to);
+  const hi = Math.max(seg.a, seg.to);
+  if (y < lo) y = lo;
+  else if (y > hi) y = hi;
+  return { y, v, done: false };
+}
+
+/**
+ * Add `delta` px onto an in-flight page scroll. Time scales with the new
+ * distance so the pace stays one viewport-step per KEY_PAGE_DURATION_MS.
+ * The sample at `elapsedMs` is the start of the new segment — position and
+ * (when it still matters) velocity carry over.
+ */
+export function chainPageScroll(seg, elapsedMs, delta, page, duration = KEY_PAGE_DURATION_MS) {
+  const now = samplePageScroll(seg, elapsedMs);
+  const target = (seg?.to ?? now.y) + delta;
+  const dist = target - now.y;
+  const pageAbs = Math.max(1, Math.abs(page) || 1);
+  const pages = Math.max(Math.abs(dist) / pageAbs, 0.35);
+  const D = Math.max(1, duration * pages);
+  return pageScrollSegment({ from: now.y, to: target, v0: now.v, duration: D });
+}
+
+function clampScroll(v, maxY) {
+  return Math.min(Math.max(0, maxY), Math.max(0, v));
+}
+
+/** Fresh Space / PageDown. `to` may be shorter than a full page at the ends. */
+export function createPageKey({ y, to, dir, page, duration = KEY_PAGE_DURATION_MS, now = 0 }) {
+  const D = Math.max(1, duration);
+  return {
+    mode: 'ease',
+    dir,
+    page,
+    duration: D,
+    y,
+    seg: pageScrollSegment({ from: y, to, v0: 0, duration: D }),
+    segT: now,
+  };
+}
+
+/**
+ * Another Space while the first is still moving — a second tap or an OS
+ * key-repeat. Both add one page step and keep the current speed. A hold is
+ * just this, once per repeat, until the key comes up.
+ */
+export function extendPageKey(state, now, maxY) {
+  const elapsed = Math.max(0, now - state.segT);
+  const sample = samplePageScroll(state.seg, elapsed);
+  const delta = state.dir * state.page;
+  let seg = chainPageScroll(state.seg, elapsed, delta, state.page, state.duration);
+  const to = clampScroll(seg.to, maxY);
+  if (to !== seg.to) {
+    const dist = to - sample.y;
+    const pages = Math.abs(dist) / Math.max(1, state.page);
+    seg = pageScrollSegment({
+      from: sample.y,
+      to,
+      v0: sample.v,
+      duration: Math.max(1, state.duration * Math.max(pages, 0.35)),
+    });
+  }
+  return { ...state, mode: 'ease', seg, segT: now, y: sample.y };
+}
+
+/** One animation frame of the ease-out. Done when the chained target is reached. */
+export function stepPageKey(state, now, maxY) {
+  const max = Math.max(0, Number(maxY) || 0);
+  const sample = samplePageScroll(state.seg, now - state.segT);
+  const y = clampScroll(sample.y, max);
+  const atEnd = state.dir > 0 ? y >= max - 0.5 : y <= 0.5;
+  if (atEnd || sample.done) return { y, state: { ...state, y }, done: true };
+  return { y, state: { ...state, y }, done: false };
+}
+
+/**
+ * Speed during the release coast of an arrow-key nudge.
  * Full speed until the last `softPx`, then a linear ease down to 0
  * so a tap and a hold share one top speed and neither stops dead.
  */

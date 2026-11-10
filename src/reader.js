@@ -4,11 +4,12 @@
 // Objects:  Strip (DOM + layout)   ViewportTracker (scroll -> position/direction/speed)
 //           ImageWindow (IO-driven mount/unmount)   Prefetcher (-> Rust set_reading_window)
 //           ProgressSaver (debounced save)   Scrubber (bottom slider)   Reader (glue)
-import { Layout } from './layout.js';
+import { Layout, clampWidthPct } from './layout.js';
 import { applyCropStyle, cropCacheKey, detectCropFromImage, mergeCropInsets } from './reader-crop.js';
 import { rtlPageDelta } from './reader-rtl.js';
 import {
-  KEY_SOFT_LAND_PX, classifyWheel, glideChase, glideTauMs, keyReleaseSpeed, pageSeamCover,
+  KEY_PAGE_DURATION_MS, KEY_SOFT_LAND_PX, classifyWheel, createPageKey, extendPageKey,
+  glideChase, glideTauMs, keyReleaseSpeed, pageKeyDistance, pageSeamCover, stepPageKey,
 } from './reader-feel.js';
 
 const T = globalThis.window?.__TAURI__;
@@ -82,21 +83,18 @@ export function wheelScrollDelta(e, gear, page) {
   if (!dx && !dy) return null;
   return { dx: dx * mul, dy: dy * mul };
 }
-// Space / PageDown used to call scrollBy({ behavior:'smooth' }) on every keydown,
-// including OS key-repeat. A tap was one CSS smooth jump; a hold stacked many more
-// at a different cadence. One rAF velocity covers both: tap travels minTravel at
-// that speed, hold keeps the same px/s until keyup.
-export const KEY_PAGE_PX_PER_SEC = 1800;
+// Arrow up/down stay on one velocity for a tap and a hold.
+// Space / PageUp / PageDown are a browser page step (pressPageKey): about 7/8
+// of the viewport in a short ease-out, not this 1800px/s crawl.
 export const KEY_NUDGE_PX_PER_SEC = 560;
-export const KEY_PAGE_TRAVEL_VH = 0.9;
 export const KEY_NUDGE_MIN_PX = 72;
 export function keyScrollPlan(key, { shift = false, viewH = 800 } = {}) {
-  const pageTravel = Math.max(1, viewH * KEY_PAGE_TRAVEL_VH);
-  if (key === 'ArrowDown') return { dir: 1, pxPerSec: KEY_NUDGE_PX_PER_SEC, minTravel: KEY_NUDGE_MIN_PX, key };
-  if (key === 'ArrowUp') return { dir: -1, pxPerSec: KEY_NUDGE_PX_PER_SEC, minTravel: KEY_NUDGE_MIN_PX, key };
-  if (key === 'PageUp') return { dir: -1, pxPerSec: KEY_PAGE_PX_PER_SEC, minTravel: pageTravel, key };
-  if (key === 'PageDown') return { dir: 1, pxPerSec: KEY_PAGE_PX_PER_SEC, minTravel: pageTravel, key };
-  if (key === ' ') return { dir: shift ? -1 : 1, pxPerSec: KEY_PAGE_PX_PER_SEC, minTravel: pageTravel, key };
+  if (key === 'ArrowDown') return { kind: 'nudge', dir: 1, pxPerSec: KEY_NUDGE_PX_PER_SEC, minTravel: KEY_NUDGE_MIN_PX, key };
+  if (key === 'ArrowUp') return { kind: 'nudge', dir: -1, pxPerSec: KEY_NUDGE_PX_PER_SEC, minTravel: KEY_NUDGE_MIN_PX, key };
+  const distance = pageKeyDistance(viewH);
+  if (key === 'PageUp') return { kind: 'page', dir: -1, distance, duration: KEY_PAGE_DURATION_MS, key };
+  if (key === 'PageDown') return { kind: 'page', dir: 1, distance, duration: KEY_PAGE_DURATION_MS, key };
+  if (key === ' ') return { kind: 'page', dir: shift ? -1 : 1, distance, duration: KEY_PAGE_DURATION_MS, key };
   return null;
 }
 const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
@@ -552,7 +550,7 @@ export class Reader {
   async open(bookId, { perf = 'balanced', widthPct = 100, gap = 0, spread = false, startPos = null, beforeMount = null, wheelSpeed = WHEEL_GEAR_DEFAULT } = {}) {
     this.perfName = perf; this.perf = PERF[perf];
     this.wheelGear = wheelGear(wheelSpeed);
-    Object.assign(this.params, { widthPct, gap, spread: !!spread });
+    Object.assign(this.params, { widthPct: clampWidthPct(widthPct), gap, spread: !!spread });
     this.info = await api.openBook(bookId);                 // { bookId, sig, dims, src, realPages, chapters, resume, ... }
     if (beforeMount) {
       const r = await beforeMount(this.info);
@@ -730,9 +728,46 @@ export class Reader {
   }
   setWheelSpeed(gear) { this.wheelGear = wheelGear(gear); }
 
+  // Space / PageDown / PageUp. One press eases out across a browser page step
+  // in KEY_PAGE_DURATION_MS. A second press, and each OS key-repeat, adds
+  // another of those steps onto the in-flight animation. Releasing the key
+  // adds nothing: the steps already queued finish on the same curve.
+  pressPageKey(plan) {
+    const sc = this.strip.scroller;
+    const max = Math.max(0, sc.scrollHeight - sc.clientHeight);
+    const now = performance.now();
+    const cur = this._keyScroll;
+    if (cur?.kind === 'page' && cur.dir === plan.dir) {
+      cur.phys = extendPageKey(cur.phys, now, max);
+      return;
+    }
+    this.stopKeyScroll();
+    this.stopGlide();
+    const y = sc.scrollTop;
+    const to = clamp(y + plan.dir * plan.distance, 0, max);
+    if (to === y) return;
+    // A short remainder (end of the book) should not take the full 200ms.
+    const span = Math.abs(to - y);
+    const hop = Math.max(1, plan.duration * Math.max(span / Math.max(1, plan.distance), 0.4));
+    const phys = createPageKey({ y, to, dir: plan.dir, page: plan.distance, duration: hop, now });
+    phys.duration = plan.duration;
+    const hold = { kind: 'page', dir: plan.dir, key: plan.key, phys, raf: 0 };
+    this._keyScroll = hold;
+    const tick = (t) => {
+      if (this._keyScroll !== hold) return;
+      const limit = Math.max(0, this.strip.scroller.scrollHeight - this.strip.scroller.clientHeight);
+      const step = stepPageKey(hold.phys, t, limit);
+      hold.phys = step.state;
+      if (step.y !== this.strip.scroller.scrollTop) this.strip.scroller.scrollTop = step.y;
+      if (step.done) { this.stopKeyScroll(); return; }
+      hold.raf = requestAnimationFrame(tick);
+    };
+    hold.raf = requestAnimationFrame(tick);
+  }
+
   beginKeyScroll(key, shift = false) {
     const plan = keyScrollPlan(key, { shift, viewH: this.strip.viewH });
-    if (!plan) return;
+    if (!plan || plan.kind !== 'nudge') return;
     this.stopKeyScroll();
     this.stopGlide();
     const hold = {
@@ -785,7 +820,7 @@ export class Reader {
     this.params.zoom = clamp(Math.round(z * 100) / 100, 0.5, 3);
     this.strip.relayout(this.layoutParams(), anchorY);
   }
-  setWidthPct(pct) { this.params.widthPct = clamp(pct, 40, 100); this.strip.relayout(this.layoutParams()); }
+  setWidthPct(pct) { this.params.widthPct = clampWidthPct(pct); this.strip.relayout(this.layoutParams()); }
   setGap(px)       { this.params.gap = px;                       this.strip.relayout(this.layoutParams()); }
   setSpread(on, spreadGap = this.params.spreadGap) {
     this.params.spread = !!on;
@@ -818,8 +853,14 @@ export class Reader {
     if (!this.keysEnabled || document.documentElement.dataset.modal === '1') return;     // dialogs own the keyboard
     if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
 
-    // Space / Page / arrows: one constant velocity for tap and hold. Ignore OS repeat.
-    if (keyScrollPlan(e.key, { shift: e.shiftKey })) {
+    const plan = keyScrollPlan(e.key, { shift: e.shiftKey, viewH: this.strip.viewH });
+    if (plan?.kind === 'page') {
+      e.preventDefault();
+      this.pressPageKey(plan);
+      return;
+    }
+    // Arrow nudges: one velocity for tap and hold. OS repeat must not stack.
+    if (plan?.kind === 'nudge') {
       e.preventDefault();
       if (e.repeat) return;
       this.beginKeyScroll(e.key, e.shiftKey);

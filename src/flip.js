@@ -1,6 +1,6 @@
 // Lightweight page-turning view sharing Reader's backend and position contract.
 import { api, pageUrl } from './reader.js';
-import { Layout } from './layout.js';
+import { Layout, clampWidthPct } from './layout.js';
 import { applyCropStyle, cropCacheKey, detectCropFromImage, mergeCropInsets } from './reader-crop.js';
 import { flipWarmPages, flipTapZone } from './flip-adjacent.js';
 import { rtlStep, rtlTapZone } from './reader-rtl.js';
@@ -64,7 +64,7 @@ export class FlipView {
   async open(bookId, opts = {}) {
     this.info = await api.openBook(bookId);
     this.bookId = bookId;
-    this.params = { widthPct: opts.widthPct || 100, spreadGap: opts.spreadGap ?? 8 };
+    this.params = { widthPct: clampWidthPct(opts.widthPct ?? 100), spreadGap: opts.spreadGap ?? 8 };
     this.spread = !!opts.spread;
     if (opts.beforeMount) {
       const r = await opts.beforeMount(this.info);
@@ -211,7 +211,7 @@ export class FlipView {
     if (!this.info) return false;
     this._aimExtractor();
     this.viewH = this.host.clientHeight;
-    const maxW = this.spread ? '48%' : `${this.params.widthPct || 100}%`;
+    const maxW = this.spread ? '48%' : `${clampWidthPct(this.params.widthPct)}%`;
     let hot = true;
     if (this.spread) {
       hot = this._place(this.imgA, this.page, maxW) && hot;
@@ -301,8 +301,8 @@ export class FlipView {
     if (this.imgB) this.imgB.style.maxWidth = '48%';
   }
   setWidthPct(p) {
-    this.params.widthPct = p;
-    const maxW = this.spread ? '48%' : `${p}%`;
+    this.params.widthPct = clampWidthPct(p);
+    const maxW = this.spread ? '48%' : `${this.params.widthPct}%`;
     if (this.imgA) this.imgA.style.maxWidth = maxW;
   }
   setGap() {}
