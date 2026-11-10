@@ -37,6 +37,11 @@ pub fn export_library_backup(dest_path: String) -> Result<BackupResult, String> 
     let mut zw = ZipWriter::new(file);
     add_file(&mut zw, &dir.join("mh-reader.db"), "mh-reader.db")?;
     add_file(&mut zw, &dir.join("reader-config.json"), "reader-config.json")?;
+    add_file(
+        &mut zw,
+        &dir.join("metadata-network.json"),
+        "metadata-network.json",
+    )?;
     let finished = zw.finish().map_err(|e| e.to_string())?;
     let bytes = finished.metadata().map(|m| m.len()).unwrap_or(0);
     Ok(BackupResult {
@@ -54,7 +59,7 @@ pub fn import_library_backup(src_path: String) -> Result<(), String> {
     for i in 0..ar.len() {
         let mut entry = ar.by_index(i).map_err(|e| e.to_string())?;
         let name = entry.name().to_string();
-        if name != "mh-reader.db" && name != "reader-config.json" {
+        if name != "mh-reader.db" && name != "reader-config.json" && name != "metadata-network.json" {
             continue;
         }
         let out = dir.join(name);

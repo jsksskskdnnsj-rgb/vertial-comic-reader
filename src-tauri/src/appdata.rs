@@ -235,6 +235,7 @@ pub(crate) fn db_conn() -> Result<Connection, String> {
     crate::shelf_scan::ensure_scan_tables(&conn)?;
     crate::merge::ensure_tables(&conn)?;
     crate::tags::migrate(&conn)?;
+    crate::metadata::store::migrate(&conn)?;
     Ok(conn)
 }
 

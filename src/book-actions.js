@@ -3,6 +3,7 @@
 // (an error toast has already been shown).
 import { T, t, toast, confirmDialog, promptDialog } from './shell.js';
 import { lib } from './api.js';
+import { openMetadataMatch, unbindMetadata } from './metadata-match.js';
 
 const errText = (e) => String(e?.detail ?? e?.message ?? e);
 async function run(fn, okMsg) {
@@ -36,3 +37,19 @@ export async function moveBook(b, folderId) {
   return run(() => lib.moveTo(b.id, folderId), t('common.saved'));
 }
 export const revealBook = (b) => lib.revealBook(b.id).catch(() => {});
+
+export async function matchMetadata(b, { onBound } = {}) {
+  return openMetadataMatch(b, { onBound });
+}
+export async function clearMetadataBind(b, { onBound } = {}) {
+  return unbindMetadata(b, { onBound });
+}
+export async function openMetadataPage(b) {
+  try {
+    await lib.metadata.openPage(b.id);
+    return true;
+  } catch (e) {
+    toast(errText(e));
+    return false;
+  }
+}

@@ -325,6 +325,61 @@ $('backupImport').addEventListener('click', async () => {
   try { await lib.importBackup(picked); toast(t('settings.backupImportDone')); setTimeout(() => location.reload(), 800); }
   catch (e) { toast(errText(e)); }
 });
+async function loadMetaNet() {
+  const cfg = await lib.metadata.getConfig().catch(() => ({}));
+  $('metaProxy').value = cfg.proxyUrl || '';
+  $('metaBgmToken').value = cfg.bangumiToken || '';
+  $('metaSrcBgm').checked = cfg.sources?.bangumi !== false;
+  $('metaSrcMu').checked = cfg.sources?.mangaupdates !== false;
+  $('metaSrcAni').checked = cfg.sources?.anilist !== false;
+  $('metaSrcC18').checked = cfg.sources?.comic18 === true;
+  $('metaC18Domain').value = cfg.comic18Domain || '18comic.vip';
+  $('metaProxyBgm').checked = cfg.proxyPerSource?.bangumi !== false;
+  $('metaProxyMu').checked = cfg.proxyPerSource?.mangaupdates !== false;
+  $('metaProxyAni').checked = cfg.proxyPerSource?.anilist !== false;
+  $('metaProxyC18').checked = cfg.proxyPerSource?.comic18 !== false;
+  $('metaAutoBind').checked = cfg.autoBindConfident !== false;
+}
+function metaNetPayload() {
+  return {
+    bangumiToken: $('metaBgmToken').value.trim(),
+    proxyUrl: $('metaProxy').value.trim(),
+    proxyPerSource: {
+      bangumi: $('metaProxyBgm').checked,
+      mangaupdates: $('metaProxyMu').checked,
+      anilist: $('metaProxyAni').checked,
+      comic18: $('metaProxyC18').checked,
+    },
+    sources: {
+      bangumi: $('metaSrcBgm').checked,
+      mangaupdates: $('metaSrcMu').checked,
+      anilist: $('metaSrcAni').checked,
+      comic18: $('metaSrcC18').checked,
+    },
+    comic18Domain: $('metaC18Domain').value.trim() || '18comic.vip',
+    rateLimitMs: 400,
+    autoBindConfident: $('metaAutoBind').checked,
+  };
+}
+$('metaSave')?.addEventListener('click', async () => {
+  try { await lib.metadata.setConfig(metaNetPayload()); toast(t('common.saved')); }
+  catch (e) { toast(errText(e)); }
+});
+$('metaAutomatch')?.addEventListener('click', async () => {
+  if (!await confirmDialog({ title: t('meta.batchMatch'), message: t('meta.autoBindHelp'), ok: t('common.ok') })) return;
+  $('metaAutomatchOut').hidden = true;
+  try {
+    const rows = await lib.metadata.automatch(null, false);
+    const bound = rows.filter((r) => r.status === 'bound').length;
+    const pending = rows.filter((r) => r.status === 'pending').length;
+    const none = rows.filter((r) => r.status === 'none').length;
+    $('metaAutomatchOut').hidden = false;
+    $('metaAutomatchOut').textContent = t('meta.batchDone', { n: rows.length, bound, pending, none });
+    toast(t('common.saved'));
+  } catch (e) { toast(errText(e)); }
+});
+loadMetaNet();
+
 $('dupScan').addEventListener('click', async () => {
   const groups = await lib.tags.duplicates().catch(() => []);
   const n = groups.length;

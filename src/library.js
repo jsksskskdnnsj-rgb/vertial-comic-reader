@@ -233,6 +233,8 @@ function bookMenu(btn, b) {
       renderGrid();
     } },
     { a: 'details', label: t('lib.details'), fn: () => (location.href = `book.html?book=${b.id}`) },
+    { a: 'meta', label: t('meta.matchMenu'), fn: async () => act.matchMetadata(b, { onBound: () => load() }) },
+    { a: 'metaopen', label: t('meta.openInBrowser'), fn: () => act.openMetadataPage(b) },
     { a: 'rename', label: t('lib.rename'), fn: async () => reload(await act.renameBook(b)) },
     { a: 'move', label: t('lib.moveTo'), fn: () => moveMenu(b, r.left, r.bottom + 5) },
     '-',

@@ -28,6 +28,10 @@ http = "1"
 # displayed as-is by the webview (see extractor::sniff). Covers and resized
 # slices cannot decode them — do not add avif to DECODE_EXTS until this line grows `avif`.
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp", "gif", "bmp"] }
+reqwest = { version = "0.11", default-features = false, features = ["json", "rustls-tls", "socks"] }
+tokio = { version = "1", features = ["time"] }
+url = "2"
+regex = "1"
 
 [features]
 default = ["custom-protocol"]

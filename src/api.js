@@ -57,6 +57,23 @@ export const lib = {
   },
   exportBackup: (destPath) => invoke('export_library_backup', { destPath }),
   importBackup: (srcPath) => invoke('import_library_backup', { srcPath }),
+
+  metadata: {
+    getConfig: () => invoke('metadata_get_config'),
+    setConfig: (cfg) => invoke('metadata_set_config', { cfg }),
+    search: (query, providers = null, limit = 12) =>
+      invoke('metadata_search', { query, providers, limit }),
+    detail: (provider, externalId) => invoke('metadata_detail', { provider, externalId }),
+    get: (bookId) => invoke('metadata_get', { bookId }),
+    bind: (bookId, provider, externalId, matchKind, options) =>
+      invoke('metadata_bind', { bookId, provider, externalId, matchKind, options }),
+    unbind: (bookId) => invoke('metadata_unbind', { bookId }),
+    automatch: (bookIds = null, dryRun = false) =>
+      invoke('metadata_automatch', { bookIds, dryRun }),
+    listPending: () => invoke('metadata_list_pending'),
+    coverPath: (bookId) => invoke('metadata_cover_local_path', { bookId }),
+    openPage: (bookId) => invoke('metadata_open_source_page', { bookId }),
+  },
 };
 
 export { invoke };
