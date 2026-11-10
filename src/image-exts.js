@@ -7,10 +7,11 @@
 // decoder, so covers and resized/sliced AVIF pages are not produced.
 export const IMAGE_EXTS = ['jpg', 'jpeg', 'jfif', 'jpe', 'png', 'webp', 'gif', 'bmp', 'avif'];
 export const ZIP_EXTS = ['zip', 'cbz'];
+export const ARCHIVE_EXTS = ['zip', 'cbz', '7z', 'cb7', 'rar', 'cbr'];
 
 export function archiveAndImageFilters(t) {
   return [
-    { name: t('imp.zipFilter'), extensions: ZIP_EXTS },
+    { name: t('imp.archiveFilter'), extensions: ARCHIVE_EXTS },
     { name: t('imp.imageFilter'), extensions: IMAGE_EXTS },
   ];
 }

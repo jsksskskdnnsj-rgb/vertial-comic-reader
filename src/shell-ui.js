@@ -4,6 +4,7 @@
 // shell pages so the background and frame stay put.
 import { T, invoke, t, esc, toast, prefs, applyTheme, applyI18n, wireWindow, lang, setLang } from './shell.js';
 import { appearanceVars } from './appearance.js';
+import { glassVars, DEFAULT_CHROME_BLUR, DEFAULT_BG_BLUR } from './appearance-glass.js';
 import { extrasVars } from './appearance-extras.js';
 
 export const COVER_BASE = T.core?.convertFileSrc
@@ -373,7 +374,23 @@ function applyAccent() {
  *  mh-ui.css derives --panel / --panel2 and the wallpaper sizing from them. Variables only: no blur is added anywhere. */
 export function applyAppearance() {
   const { vars } = appearanceVars({ panelOpacity: prefs.get('panelOpacity', null), bgFit: prefs.get('bgFit', null) });
-  for (const [k, v] of Object.entries(vars)) document.documentElement.style.setProperty(k, v);
+  const glass = glassVars({ chromeBlur: prefs.get('chromeBlur', null), bgBlur: prefs.get('bgBlur', null) });
+  const root = document.documentElement;
+  for (const [k, v] of Object.entries(vars)) root.style.setProperty(k, v);
+  if (glass.chromeBlur !== DEFAULT_CHROME_BLUR) {
+    root.style.setProperty('--chrome-blur', `${glass.chromeBlur}px`);
+    root.dataset.chromeBlur = '1';
+  } else {
+    root.style.removeProperty('--chrome-blur');
+    delete root.dataset.chromeBlur;
+  }
+  if (glass.bgBlur > DEFAULT_BG_BLUR) {
+    root.style.setProperty('--bg-blur', `${glass.bgBlur}px`);
+    root.dataset.bgBlur = '1';
+  } else {
+    root.style.removeProperty('--bg-blur');
+    delete root.dataset.bgBlur;
+  }
 }
 
 /** Background style, background colour and border colour (prefs bgMode / bgColor / borderColor) -> CSS variables on <html>

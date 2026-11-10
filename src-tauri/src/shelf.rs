@@ -19,6 +19,7 @@ pub struct ShelfEntry {
     pub created_at: i64,
     pub updated_at: i64,
     pub folder_id: Option<i64>, // 所属目录，NULL=未分类
+    pub favorite: bool,
     /// True when this row is a folder merge that can be split back apart.
     pub merged: bool,
 }
@@ -36,12 +37,13 @@ fn row_to_entry(r: &rusqlite::Row) -> rusqlite::Result<ShelfEntry> {
         created_at: r.get(8)?,
         updated_at: r.get(9)?,
         folder_id: r.get(10)?,
-        merged: r.get::<_, i64>(11)? != 0,
+        favorite: r.get::<_, i64>(11)? != 0,
+        merged: r.get::<_, i64>(12)? != 0,
     })
 }
 
 const SHELF_COLS: &str =
-    "id,name,kind,paths,cover,page_count,total_size,last_page,created_at,updated_at,folder_id";
+    "id,name,kind,paths,cover,page_count,total_size,last_page,created_at,updated_at,folder_id,favorite";
 const SHELF_MERGED: &str =
     "EXISTS(SELECT 1 FROM book_merges m WHERE m.book_id = shelf.id AND m.undone=0)";
 

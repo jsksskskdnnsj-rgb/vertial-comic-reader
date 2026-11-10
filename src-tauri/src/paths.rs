@@ -17,7 +17,8 @@ pub(crate) const IMAGE_EXTS: &[&str] = &[
 pub(crate) const DECODE_EXTS: &[&str] = &[
     "jpg", "jpeg", "jfif", "jpe", "png", "webp", "gif", "bmp",
 ];
-const ZIP_EXTS: &[&str] = &["zip", "cbz"];
+pub(crate) const ZIP_EXTS: &[&str] = &["zip", "cbz"];
+pub(crate) const ARCHIVE_IMPORT_EXTS: &[&str] = &["zip", "cbz", "7z", "cb7", "rar", "cbr"];
 
 #[derive(Serialize, Clone)]
 pub struct PickedFile {
@@ -39,6 +40,10 @@ pub(crate) fn kind_of(p: &Path) -> Option<&'static str> {
         Some("image")
     } else if ZIP_EXTS.contains(&e.as_str()) {
         Some("zip")
+    } else if crate::archives::SEVENZ_EXTS.contains(&e.as_str())
+        || crate::archives::RAR_EXTS.contains(&e.as_str())
+    {
+        Some("archive")
     } else {
         None
     }

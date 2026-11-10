@@ -5,7 +5,9 @@
 // App shell pieces that used to live in this file are now paths / appdata /
 // config / shelf / window; main only wires plugins, protocols, and commands.
 mod adapters;
+mod archives;
 mod appdata;
+mod backup;
 mod bookmarks;
 mod cache;
 mod chapters;
@@ -17,12 +19,14 @@ mod error;
 mod extractor;
 mod library;
 mod merge;
+mod metadata;
 mod model;
 mod paths;
 mod protocol;
 mod scan;
 mod shelf;
 mod shelf_scan;
+mod tags;
 mod window;
 
 use rusqlite::Connection;
@@ -57,6 +61,7 @@ fn main() {
             conn.execute_batch(db::EDITED_DDL)?;
             conn.execute_batch(chapters::DDL)?;
             bookmarks::migrate(&conn)?;
+            metadata::store::migrate(&conn).map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
             let rdb: db::Db = std::sync::Arc::new(parking_lot::Mutex::new(conn));
             let cache =
                 std::sync::Arc::new(cache::PageCache::open(dir.join("cache"), 512 << 20)?);
@@ -187,7 +192,30 @@ fn main() {
             library::book_reset_progress,
             library::check_books_missing,
             library::import_merged,
-            library::library_stats
+            library::library_stats,
+            tags::list_tags,
+            tags::tag_create,
+            tags::tag_rename,
+            tags::tag_delete,
+            tags::book_set_tags,
+            tags::book_set_favorite,
+            tags::books_tags_bulk,
+            tags::find_duplicate_books,
+            backup::export_library_backup,
+            backup::import_library_backup,
+            metadata::commands::metadata_get_config,
+            metadata::commands::metadata_set_config,
+            metadata::commands::metadata_search,
+            metadata::commands::metadata_detail,
+            metadata::commands::metadata_get,
+            metadata::commands::metadata_list_pending,
+            metadata::commands::metadata_bind,
+            metadata::commands::metadata_unbind,
+            metadata::commands::metadata_automatch,
+            metadata::commands::metadata_refresh_cover,
+            metadata::commands::metadata_cover_local_path,
+            metadata::commands::metadata_open_source_page,
+            metadata::commands::metadata_comic18_search_url,
         ])
         .on_window_event(|window, event| match event {
             tauri::WindowEvent::DragDrop(tauri::DragDropEvent::Drop { paths, .. }) => {

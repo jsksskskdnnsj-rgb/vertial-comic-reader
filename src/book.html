@@ -44,6 +44,16 @@
           <div class="grow"><span data-i="book.edited"></span></div>
           <button class="btn btn--ghost btn--sm" id="resetEditBtn"><span data-i="lib.resetEdits"></span></button>
         </div>
+        <details class="meta-fold" id="metaFold" hidden>
+          <summary data-i="meta.onlineInfo"></summary>
+          <dl class="kv" id="metaKv"></dl>
+          <p class="hint muted" id="metaEmpty" hidden data-i="meta.notBound"></p>
+          <div class="meta-actions">
+            <button class="btn btn--ghost btn--sm" id="metaMatchBtn" type="button"><span data-i="meta.matchMenu"></span></button>
+            <button class="btn btn--ghost btn--sm" id="metaOpenBtn" type="button" hidden><span data-i="meta.openInBrowser"></span></button>
+            <button class="btn btn--ghost btn--sm" id="metaUnbindBtn" type="button" hidden><span data-i="meta.unbind"></span></button>
+          </div>
+        </details>
       </section>
       <div class="empty-state" id="notFound" hidden>
         <svg class="i"><use href="icons.svg#book-open"/></svg>

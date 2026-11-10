@@ -16,9 +16,13 @@ import { lib } from './api.js';
 import { mountShell, coverUrl, wireCoverFallback } from './shell-ui.js';
 import { fetchEpisodeInfo } from './chapters.js';
 import { sortBy, compareTitles } from './naming.js';
-import { filterBooks, countStatuses, statusOf, readLibraryState, validFolder } from './library-filters.js';
+import { filterBooks, countStatuses, statusOf, readLibraryState, validFolder, progressPct } from './library-filters.js';
+import { libraryCoversToWarm } from './library-cover-warm.js';
 import * as act from './book-actions.js';
 import { openMergeDialog } from './merge-ui.js';
+import { LIBRARY_RENDER_BATCH } from './library-render-window.js';
+import { readerOpenHref } from './reader-mode-store.js';
+import { readPresets, writePresets, snapshotPreset, applyPreset } from './library-presets.js';
 
 const params = new URLSearchParams(location.search);
 const view = params.get('view') || '';
@@ -37,15 +41,27 @@ const saved = readLibraryState((k, d) => prefs.get(k, d), location.search);
 let filter = saved.folder;          // 'all' | 'none' | folder id (remembered)
 let statusFilter = saved.status;    // 'all' | 'unread' | 'progress' | 'finished' (remembered; ?status= overrides)
 let viewMode = saved.mode;          // 'grid' | 'list' (remembered)
-let sortMode = saved.sort;          // 'recent' | 'added' | 'name' | 'title' (remembered; ?sort= overrides)
+let sortMode = saved.sort;          // 'recent' | 'added' | 'progress' | 'name' | 'title' (remembered; ?sort= overrides)
 let query = (params.get('q') || '').trim();
 let loadSeq = 0;
 let page = 0;
 let extraSeq = 0;
 let picking = false;
+const PAGE_SIZE = LIBRARY_RENDER_BATCH;
 const selected = new Set();
-const PAGE_SIZE = 48;
-
+let tags = [];
+let bookTags = new Map();
+let tagNames = new Map();
+let favoriteOnly = !!prefs.get('libFavoriteOnly', false);
+let filterTagId = prefs.get('libTagFilter', null);
+function tagLabelMap() {
+  const m = new Map(tags.map((tg) => [tg.id, tg.name]));
+  tagNames = new Map();
+  for (const b of books) {
+    const ids = bookTags.get(b.id) || [];
+    tagNames.set(b.id, ids.map((id) => m.get(id)).filter(Boolean));
+  }
+}
 mountShell(view === 'recent' ? 'recent' : view === 'marked' ? 'marked' : 'library', {
   searchValue: query,
   onSearch: (v) => {
@@ -63,11 +79,33 @@ const KIND_KEY = { zip: 'type.zip', folder: 'type.folder', images: 'type.images'
 const coverOf = (b) => coverUrl(b.id, bust.get(b.id) ?? 0);
 
 function visibleBooks() {
-  const list = filterBooks(books, { view, folder: filter, status: statusFilter, query, bmCounts });
+  const list = filterBooks(books, {
+    view, folder: filter, status: statusFilter, query, bmCounts,
+    favoriteOnly, tagId: filterTagId, bookTags, tagNames,
+  });
   if (sortMode === 'added') return list.sort((a, b) => (b.created_at || 0) - (a.created_at || 0));
+  if (sortMode === 'progress') {
+    return list.sort((a, b) => {
+      const d = progressPct(b) - progressPct(a);
+      return d || (b.updated_at || 0) - (a.updated_at || 0);
+    });
+  }
   if (sortMode === 'name') return sortBy(list, (b) => b.name);
   if (sortMode === 'title') return list.sort((a, b) => compareTitles(a.name, b.name));   // alphabetical, zh-CN collation
   return list.sort((a, b) => (b.updated_at || 0) - (a.updated_at || 0));
+}
+
+const warmCovers = new Set();
+function prefetchCoversAhead(list, mounted) {
+  const ids = libraryCoversToWarm(list, mounted);
+  const base = typeof coverUrl === 'function' ? coverUrl : () => '';
+  for (const id of ids) {
+    if (warmCovers.has(id)) continue;
+    warmCovers.add(id);
+    const img = new Image();
+    img.decoding = 'async';
+    img.src = base(id, 0);
+  }
 }
 
 function renderFolders() {
@@ -111,14 +149,14 @@ function rowHtml(b, { cnt, pct, meta, kind, st, read }) {
     <span class="lib-row__chips">
       <span class="lib-chip lib-chip--${st}">${esc(t(STATUS_KEY[st]))} · <span class="num">${pct}%</span></span>
       ${kind ? `<span class="lib-chip">${esc(t(kind))}</span>` : ''}
-      ${cnt > 0 ? `<span class="lib-chip" title="${esc(t('bookmarks.title'))}">★ <span class="num">${cnt}</span></span>` : ''}
+      ${cnt > 0 ? `<span class="lib-chip" title="${esc(t('bookmarks.title'))}">🔖 <span class="num">${cnt}</span></span>` : ''}
       ${missing.has(b.id) ? `<span class="lib-chip lib-chip--warn">${esc(t('lib.missing'))}</span>` : ''}
     </span>
     <button class="more-btn" data-more="${b.id}" aria-label="${esc(t('lib.menu'))}"><svg class="i"><use href="icons.svg#more"/></svg></button>
   </article>`;
 }
 function renderStatus() {
-  const counts = countStatuses(books, { view, folder: filter, query, bmCounts });
+  const counts = countStatuses(books, { view, folder: filter, query, bmCounts, favoriteOnly, tagId: filterTagId, bookTags, tagNames });
   document.querySelectorAll('#statusSeg button').forEach((b) => {
     b.setAttribute('aria-pressed', String(b.dataset.status === statusFilter));
     const c = b.querySelector('.cnt'); if (c) c.textContent = counts[b.dataset.status];
@@ -147,6 +185,7 @@ function renderGrid() {
   $('pager').hidden = list.length <= PAGE_SIZE;
   $('pageLabel').textContent = t('lib.page', { n: page + 1, m: win.pages });
   loadExtras(win.slice);
+  prefetchCoversAhead(list, (page + 1) * PAGE_SIZE);
 }
 function render() { renderFolders(); renderGrid(); }
 
@@ -185,8 +224,17 @@ const reload = async (ok, id, bumpCover) => { if (ok) { if (bumpCover) bust.set(
 function bookMenu(btn, b) {
   const r = btn.getBoundingClientRect();
   const items = [
-    { a: 'open', label: t('lib.open'), fn: () => (location.href = `reader.html?book=${b.id}`) },
+    { a: 'open', label: t('lib.open'), fn: () => { location.href = readerOpenHref(b.id); } },
+    { a: 'openscroll', label: t('lib.openScroll'), fn: () => { location.href = readerOpenHref(b.id, 'scroll'); } },
+    { a: 'openflip', label: t('lib.openFlip'), fn: () => { location.href = readerOpenHref(b.id, 'flip'); } },
+    { a: 'fav', label: b.favorite ? t('lib.unfavorite') : t('lib.favorite'), fn: async () => {
+      await lib.tags.setFavorite(b.id, !b.favorite).catch(() => {});
+      b.favorite = !b.favorite;
+      renderGrid();
+    } },
     { a: 'details', label: t('lib.details'), fn: () => (location.href = `book.html?book=${b.id}`) },
+    { a: 'meta', label: t('meta.matchMenu'), fn: async () => act.matchMetadata(b, { onBound: () => load() }) },
+    { a: 'metaopen', label: t('meta.openInBrowser'), fn: () => act.openMetadataPage(b) },
     { a: 'rename', label: t('lib.rename'), fn: async () => reload(await act.renameBook(b)) },
     { a: 'move', label: t('lib.moveTo'), fn: () => moveMenu(b, r.left, r.bottom + 5) },
     '-',
@@ -259,7 +307,7 @@ document.addEventListener('click', (e) => {
   const fd = e.target.closest('[data-fdel]');
   if (fd) { e.stopPropagation(); deleteFolder(+fd.dataset.fdel); return; }
   const frow = e.target.closest('[data-f]');
-  if (frow) { const v = frow.dataset.f; filter = v === 'all' || v === 'none' ? v : +v; page = 0; prefs.set('libFolder', filter); render(); return; }
+  if (frow) { const v = frow.dataset.f; filter = v === 'all' || v === 'none' ? v : +v; prefs.set('libFolder', filter); page = 0; render(); return; }
   const card = e.target.closest('.book-card, .lib-row');
   if (card && !closedMenu) {
     if (picking) {
@@ -269,7 +317,7 @@ document.addEventListener('click', (e) => {
       renderGrid();
       return;
     }
-    location.href = `reader.html?book=${card.dataset.id}`;
+    location.href = readerOpenHref(card.dataset.id);
   }
 });
 document.addEventListener('keydown', (e) => {
@@ -281,20 +329,63 @@ document.addEventListener('keydown', (e) => {
   if (card) {
     e.preventDefault();
     if (picking) { card.click(); return; }
-    location.href = `reader.html?book=${card.dataset.id}`;
+    location.href = readerOpenHref(card.dataset.id);
   }
 });
 $('sortSel').value = sortMode;
-$('sortSel').addEventListener('change', () => { sortMode = $('sortSel').value; page = 0; prefs.set('libSort', sortMode); renderGrid(); });
+$('sortSel').addEventListener('change', () => { sortMode = $('sortSel').value; prefs.set('libSort', sortMode); page = 0; renderGrid(); });
 $('newFolder').addEventListener('click', newFolder);
 $('statusSeg').addEventListener('click', (e) => {
   const b = e.target.closest('[data-status]'); if (!b) return;
-  statusFilter = b.dataset.status; page = 0; prefs.set('libStatus', statusFilter); renderGrid();
+  statusFilter = b.dataset.status; prefs.set('libStatus', statusFilter); page = 0; renderGrid();
 });
 $('modeSeg').addEventListener('click', (e) => {
   const b = e.target.closest('[data-mode]'); if (!b) return;
-  viewMode = b.dataset.mode; prefs.set('libMode', viewMode); renderGrid();
+  viewMode = b.dataset.mode; prefs.set('libMode', viewMode); page = 0; renderGrid();
 });
+function applyLibraryFilters({ fav, tagId, presetId } = {}) {
+  if (fav != null) { favoriteOnly = !!fav; prefs.set('libFavoriteOnly', favoriteOnly); }
+  if (tagId !== undefined) { filterTagId = tagId; prefs.set('libTagFilter', filterTagId); }
+  page = 0;
+  renderGrid();
+}
+function libraryFilterMenu(x, y) {
+  const items = [
+    { a: 'fav0', label: !favoriteOnly ? `${t('lib.favAll')} ✓` : t('lib.favAll'), fn: () => applyLibraryFilters({ fav: false }) },
+    { a: 'fav1', label: favoriteOnly ? `${t('lib.favOnly')} ✓` : t('lib.favOnly'), fn: () => applyLibraryFilters({ fav: true }) },
+    { a: 'tag0', label: filterTagId == null ? `${t('lib.tagAll')} ✓` : t('lib.tagAll'), fn: () => applyLibraryFilters({ tagId: null }) },
+    '-',
+    ...tags.map((tg) => ({
+      a: `tag${tg.id}`,
+      label: filterTagId === tg.id ? `${tg.name} ✓` : tg.name,
+      fn: () => applyLibraryFilters({ tagId: tg.id }),
+    })),
+    '-',
+    ...readPresets().map((p) => ({
+      a: `pre${p.id}`,
+      label: t('lib.presetApply', { name: p.name }),
+      fn: () => applyPreset(p, (st) => {
+        sortMode = st.sort; statusFilter = st.status; viewMode = st.mode; filter = st.folder;
+        favoriteOnly = !!st.favoriteOnly; filterTagId = st.tagId;
+        prefs.set('libSort', sortMode); prefs.set('libStatus', statusFilter); prefs.set('libMode', viewMode);
+        prefs.set('libFolder', filter); prefs.set('libFavoriteOnly', favoriteOnly); prefs.set('libTagFilter', filterTagId);
+        $('sortSel').value = sortMode;
+        page = 0;
+        render();
+      }),
+    })),
+    { a: 'presave', label: t('lib.presetSave'), fn: async () => {
+      const name = await promptDialog({ title: t('lib.presetSave'), placeholder: t('lib.presetName'), ok: t('common.save') });
+      if (!name) return;
+      const list = readPresets();
+      list.unshift(snapshotPreset(name, { sort: sortMode, status: statusFilter, mode: viewMode, folder: filter, favoriteOnly, tagId: filterTagId }));
+      writePresets(list);
+      toast(t('common.saved'));
+    } },
+  ];
+  showMenu(x, y, items);
+}
+$('statusSeg')?.addEventListener('contextmenu', (e) => { e.preventDefault(); libraryFilterMenu(e.clientX, e.clientY); });
 
 // ---- loading ------------------------------------------------------------------------
 async function pool(items, n, fn) {
@@ -405,17 +496,20 @@ async function load() {
   refreshMergeBanner();
   render(); // first paint: this page of covers, names, progress
 
-  const [counts, miss] = await Promise.all([
+  const [counts, miss, tagList, tagMap] = await Promise.all([
     books.length ? invoke('bookmark_counts', { bookIds: books.map((b) => b.id) }).catch(() => []) : [],
     lib.missing().catch(() => []),
+    lib.tags.list().catch(() => []),
+    lib.tags.map().catch(() => []),
   ]);
   if (my !== loadSeq) return;
   bmCounts = new Map((counts || []).map((r) => [r.bookId, r.count]));
   missing = new Set(miss || []);
+  tags = tagList || [];
+  bookTags = new Map((tagMap || []).map((r) => [r.bookId, r.tagIds || []]));
+  tagLabelMap();
   renderFolders();
-  const list = visibleBooks();
-  const win = pageWindow(list);
-  $('grid').innerHTML = win.slice.map((b) => cardHtml(b)).join('');
+  renderGrid();
 }
 $('pickMode').addEventListener('click', () => {
   picking = !picking;

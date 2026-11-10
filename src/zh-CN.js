@@ -67,12 +67,26 @@ export default {
   'lib.sort': '\u6392\u5e8f', // Sort
   'lib.sortRecent': '\u6700\u8fd1\u9605\u8bfb', // Recently read
   'lib.sortAdded': '\u6700\u8fd1\u6dfb\u52a0', // Recently added
+  'lib.sortProgress': '\u9605\u8bfb\u8fdb\u5ea6\uff08\u9ad8\u2192\u4f4e\uff09', // Reading progress (high to low)
+  'lib.preset': '\u7b5b\u9009\u9884\u8bbe',
+  'lib.presetNone': '\u65e0\u9884\u8bbe',
+  'lib.presetSave': '\u4fdd\u5b58\u9884\u8bbe',
+  'lib.presetName': '\u9884\u8bbe\u540d\u79f0',
+  'lib.favAll': '\u5168\u90e8\u56fe\u4e66',
+  'lib.filterMenuHint': '\u5728\u72b6\u6001\u7b5b\u9009\u6761\u4e0a\u53f3\u952e\uff1a\u6536\u85cf\u7b5b\u9009\u3001\u6807\u7b7e\u4e0e\u9884\u8bbe',
+  'lib.presetApply': '\u5e94\u7528\u9884\u8bbe\u300c{name}\u300d',
+  'lib.favOnly': '\u6536\u85cf',
+  'lib.favorite': '\u6536\u85cf',
+  'lib.unfavorite': '\u53d6\u6d88\u6536\u85cf',
+  'lib.tagAll': '\u5168\u90e8\u6807\u7b7e',
   'lib.sortName': '\u540d\u79f0\uff08A\u2013Z\uff09', // Name (A–Z)
   'lib.noBooks': '\u6ca1\u6709\u5339\u914d\u7684\u4e66\u3002', // No books match.
   'lib.missing': '\u6587\u4ef6\u7f3a\u5931', // Missing
   'lib.notStarted': '\u672a\u5f00\u59cb', // Not started
   'lib.menu': '\u66f4\u591a', // More
   'lib.open': '\u6253\u5f00', // Open
+  'lib.openScroll': '\u7528\u7ad6\u6ed1\u6253\u5f00',
+  'lib.openFlip': '\u7528\u7ffb\u9875\u6253\u5f00',
   'lib.details': '\u8be6\u60c5', // Details
   'lib.moveTo': '移动到分类…', // Move to category…
   'lib.moveUp': '上移', // Move up
@@ -91,6 +105,8 @@ export default {
   'lib.page': '{n} / {m}',
   'lib.pagePrev': '上一页', // Previous
   'lib.pageNext': '下一页', // Next
+  'lib.loadMore': '加载更多',
+  'lib.shownCount': '已显示 {n} / {m}',
   'book.pages': '{n} \u9875', // {n} pages
   'book.size': '\u6587\u4ef6\u5927\u5c0f', // File size
   'book.progress': '\u9605\u8bfb\u8fdb\u5ea6', // Progress
@@ -131,6 +147,7 @@ export default {
   'imp.summary': '\u65b0\u589e {a} \u672c\uff0c\u8df3\u8fc7 {s} \u672c', // Added {a}, skipped {s}
   'imp.working': '\u6b63\u5728\u5bfc\u5165\u2026', // Importing…
   'imp.zipFilter': '\u6f2b\u753b\u538b\u7f29\u5305', // Comic archives
+  'imp.archiveFilter': '\u6f2b\u753b\u538b\u7f29\u5305\uff08ZIP/CBZ/7Z/RAR\uff09',
   'settings.about': '\u5173\u4e8e', // About
   'settings.accent': '\u4e3b\u9898\u8272', // Accent color
   'settings.accentCustom': '\u81ea\u5b9a\u4e49\u989c\u8272', // Custom color
@@ -197,6 +214,11 @@ export default {
   'reader.modeFlipShort': '\u7ffb\u9875', // Flip
   'reader.modeScroll': '\u7ad6\u5411\u5377\u8f74', // Vertical scroll
   'reader.modeScrollShort': '\u5377\u8f74', // Scroll
+  'reader.viewMode': '\u9605\u8bfb\u89c6\u56fe',
+  'reader.flipDirection': '\u7ffb\u9875\u65b9\u5411',
+  'reader.dirLtr': '\u5de6\u2192\u53f3',
+  'reader.dirRtl': '\u53f3\u2192\u5de6\uff08\u65e5\u6f2b\uff09',
+  'reader.flipDirHint': '\u4ec5\u5728\u7ffb\u9875\u6a21\u5f0f\u4e0b\u751f\u6548\u3002\u5355\u9875/\u53cc\u9875\u5bf9\u5f00\u8bbe\u7f6e\u4e0d\u53d8\u3002',
   'reader.nextEp': '\u4e0b\u4e00\u8bdd', // Next episode
   'reader.nextPage': '\u4e0b\u4e00\u9875', // Next page
   'reader.prevEp': '\u4e0a\u4e00\u8bdd', // Previous episode
@@ -206,6 +228,12 @@ export default {
   'reader.tbAuto': '\u81ea\u52a8\u6eda\u52a8', // Auto-scroll
   'reader.tbBookmarks': '\u4e66\u7b7e', // Bookmarks
   'reader.tbFit': '\u9002\u5e94', // Fit
+  'reader.fit': '\u9875\u9762\u9002\u5e94',
+  'reader.fitWidth': '\u9002\u5e94\u5bbd\u5ea6',
+  'reader.fitHeight': '\u9002\u5e94\u9ad8\u5ea6',
+  'reader.fitOriginal': '\u539f\u59cb\u5c3a\u5bf8',
+  'reader.fitCustom': '\u81ea\u5b9a\u4e49\u7f29\u653e',
+  'reader.rtl': '\u53f3\u8bfb\u65e5\u6f2b\uff08\u4ece\u53f3\u5f80\u5de6\uff09',
   'reader.tbPages': '\u76ee\u5f55', // Pages
   'reader.tbSettings': '\u9605\u8bfb\u8bbe\u7f6e', // Settings
   'reader.toggleHistory': '\u663e\u793a / \u9690\u85cf\u9605\u8bfb\u5386\u53f2', // Show / hide reading history
@@ -302,6 +330,22 @@ export default {
   'settings.clearLibraryHelp': '从书架中移除所有书籍。',
   'settings.clearLibraryBtn': '清空书架',
   'settings.clearLibraryConfirm': '要从书架中移除所有书籍吗？此操作无法撤销。',
+  'settings.tags': '标签',
+  'settings.tagsHelp': '标签用于书库搜索与筛选预设。',
+  'settings.tagsEmpty': '尚无标签。',
+  'settings.tagAdd': '添加标签',
+  'settings.tagName': '标签名称',
+  'settings.tagDeleteMsg': '从所有图书上移除此标签？',
+  'settings.backup': '备份与恢复',
+  'settings.backupHelp': '将 mh-reader.db 与 reader-config.json 打包为 ZIP。导入后需重启。',
+  'settings.backupExport': '导出备份…',
+  'settings.backupImport': '导入备份…',
+  'settings.backupImportMsg': '覆盖当前数据库与阅读配置？完成后请重启 MH。',
+  'settings.backupDone': '已保存备份（{n} KB）',
+  'settings.backupImportDone': '备份已导入，请重启 MH',
+  'settings.dupScan': '查找重复书籍',
+  'settings.dupFound': '{n} 组重复，共 {books} 本',
+  'settings.dupNone': '未发现完全重复（名称+类型+路径一致）',
   'imp.scanning': '正在扫描文件夹…',
   'imp.image1': '1 张图片',
   'imp.imagesCount': '{n} 张图片',
@@ -324,6 +368,10 @@ export default {
   'lib.viewList': '列表视图',
   'settings.panelOpacity': '面板不透明度',
   'settings.panelOpacityHelp': '玻璃面板的实心程度。数值越低，越能透出壁纸。',
+  'settings.chromeBlur': '顶栏磨砂强度',
+  'settings.chromeBlurHelp': '侧栏、顶栏、浮层等的 backdrop 模糊。设为 0 可减轻低配机开销。',
+  'settings.bgBlur': '壁纸模糊',
+  'settings.bgBlurHelp': '仅模糊自定义壁纸层，配合压暗可做出更柔和的液态背景。',
   'settings.bgFit': '壁纸适应方式',
   'settings.fitHelp': '填充会铺满窗口并可能裁切；适应会完整显示图片；拉伸会铺满窗口并可能变形。',
   'settings.fitCover': '填充',
@@ -350,10 +398,14 @@ export default {
   'help.pageUp': '上一屏',
   'help.nudge': '小幅上移或下移',
   'help.page': '上一页或下一页。翻页模式下，左右方向键翻页',
+  'help.flipPage': '下一页或上一页（与方向键相同）',
+  'help.flipTap': '点击画面左缘或右缘翻页',
   'help.ends': '第一页或最后一页',
   'help.zoom': '放大、缩小，或回到 100%（竖滑模式）',
+  'help.loupe': '放大镜（移动查看）',
   'help.bookmark': '在此处添加或取消书签',
   'help.mode': '切换竖滑和翻页',
+  'help.modeToggle': '切换竖滑与翻页（保留当前页）',
   'help.auto': '开始或停止自动滚动',
   'help.dir': '打开页目录',
   'help.history': '显示或隐藏阅读记录',
@@ -429,4 +481,55 @@ export default {
   'merge.foldersOnly': '这种方式只能合并文件夹漫画',
   'lib.unmerge': '拆开合并',
   'lib.mergeSelected': '合并所选',
+  'meta.matchMenu': '匹配在线资料',
+  'meta.matchTitle': '在线资料匹配',
+  'meta.searchPrompt': '输入书名或别名（中/日/韩/英均可）',
+  'meta.search': '搜索',
+  'meta.pickOne': '点选一条结果以绑定',
+  'meta.noHits': '此源无结果',
+  'meta.noResults': '所有已启用数据源均无结果',
+  'meta.confirmBind': '确认绑定',
+  'meta.bind': '绑定',
+  'meta.bound': '已绑定在线资料',
+  'meta.unbind': '解除绑定',
+  'meta.unbindMsg': '仅从本地移除在线资料关联，不会改动书架封面与文件名。',
+  'meta.importTags': '将标签导入到本书',
+  'meta.useRemoteCover': '用匹配的封面替换书架封面',
+  'meta.onlineInfo': '在线资料',
+  'meta.notBound': '尚未绑定在线条目。',
+  'meta.rating': '评分 {n} / 10',
+  'meta.fieldSource': '数据源',
+  'meta.fieldTitle': '标题',
+  'meta.fieldTitleCn': '中文名',
+  'meta.fieldOriginal': '原名',
+  'meta.fieldAuthors': '作者',
+  'meta.fieldTags': '标签',
+  'meta.fieldRating': '评分',
+  'meta.fieldDate': '发售/年份',
+  'meta.fieldSummary': '简介',
+  'meta.fieldRemoteCover': '资料封面',
+  'meta.provider.bangumi': 'Bangumi',
+  'meta.provider.mangaupdates': 'MangaUpdates',
+  'meta.provider.anilist': 'AniList',
+  'meta.provider.comic18': '18comic',
+  'meta.openInBrowser': '在浏览器打开资料页',
+  'meta.comic18Domain': '18comic 镜像域名',
+  'meta.comic18DomainHelp': '默认 18comic.vip；若不可达会依次尝试 18comic-deadp.org、comic18j-nini.com（跟随 301）。自动抓取遇验证页会跳过。',
+  'meta.match.exact': '完全匹配',
+  'meta.match.strong': '高置信',
+  'meta.match.weak': '待确认',
+  'meta.match.none': '—',
+  'meta.settingsTitle': '在线资料与网络',
+  'meta.settingsHelp': '按 Bangumi → MangaUpdates → AniList 顺序搜索；仅拉取作品信息，不下载章节内容。',
+  'meta.proxy': 'HTTP/SOCKS 代理',
+  'meta.proxyHelp': '访问境外 API 时可填，例如 http://127.0.0.1:7890 或 socks5://127.0.0.1:1080',
+  'meta.bangumiToken': 'Bangumi 个人令牌',
+  'meta.bangumiTokenHelp': '可选；用于受限条目。仅存本地 metadata-network.json，不上传。',
+  'meta.sources': '启用数据源',
+  'meta.proxyPerSource': '各源走代理',
+  'meta.autoBind': '批量自动绑定高置信匹配',
+  'meta.autoBindHelp': '书名 exact/strong 时自动写入；较弱匹配进入待确认。',
+  'meta.batchMatch': '批量匹配未绑定书籍',
+  'meta.batchDone': '已处理 {n} 本：绑定 {bound}，待确认 {pending}，无匹配 {none}',
+  'meta.legal': 'Bangumi / MangaUpdates / AniList / 18comic 镜像数据受其各自服务条款约束；仅抓取作品资料（封面/标签/作者/简介），不下载章节内容，请遵守各站速率与用途规定。',
 };

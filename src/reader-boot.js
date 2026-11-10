@@ -10,6 +10,10 @@ import { findNearby, thumbVirtualIndex, bookmarkTicks, BookmarkPanel } from './b
 import { HistoryStack, ThumbStrip } from './reader-panels.js';
 import { AutoScroll, openPageDirectory } from './reader-tools.js';
 import { mountShell } from './shell-ui.js';
+import { shortcutHelpRows } from './reader-shortcuts.js';
+import { FIT_MODES, applyReaderFit, fitModeLabelKey } from './reader-fit.js';
+import { ReaderLoupe } from './reader-loupe.js';
+import { resolveBookViewMode, persistBookViewMode, normalizeViewMode, readerOpenHref } from './reader-mode-store.js';
 
 const $ = (id) => document.getElementById(id);
 bootPage('library');
@@ -33,8 +37,13 @@ const rp = {
   cropAuto: prefs.get('reader.cropAuto', true) !== false,
   cropTrim: Math.min(12, Math.max(0, Math.round(+prefs.get('reader.cropTrim', 0) || 0))),
   wheel: wheelGear(prefs.get('reader.wheelSpeed', 2)),
+  rtl: !!prefs.get('reader.rtl', false),
+  fitMode: FIT_MODES.includes(prefs.get('reader.fitMode')) ? prefs.get('reader.fitMode') : 'width',
 };
-let modeNow = prefs.get('mode', 'scroll');             // default reading mode (Settings); the toolbar toggles it for this session only
+const loupe = new ReaderLoupe($('host'));
+const openParams = new URLSearchParams(location.search);
+let modeNow = resolveBookViewMode(bookId, openParams.get('view'), () => prefs.get('mode', 'scroll'), prefs);
+if (openParams.get('view')) persistBookViewMode(bookId, modeNow, prefs);
 let saverNow = prefs.get('saver', false);
 let view = null, book = null, bms = [], chs = [], chMode = 'folder', chN = DEFAULT_PAGES, chDefaults = { mode: 'folder', pages: DEFAULT_PAGES };
 let shown = 0, lastPos = null, endDismissed = false, endArmAt = 0;
@@ -62,7 +71,7 @@ const pageThumb = (p) => {
 };
 
 // ---- panels ----------------------------------------------------------------------------------------------
-const history_ = new HistoryStack($('hist'), { t, esc, ago, coverUrl, onOpen: async (id) => { await leave(`reader.html?book=${id}`); } });
+const history_ = new HistoryStack($('hist'), { t, esc, ago, coverUrl, onOpen: async (id) => { await leave(readerOpenHref(id)); } });
 const strip = new ThumbStrip($('tstrip'), { thumb: pageThumb, onJump: (p) => view?.jumpTo({ page: p, frac: 0 }) });
 const auto = new AutoScroll({ getView: () => view, onChange: onAutoChange });
 
@@ -160,6 +169,8 @@ async function startView({ startPos = null } = {}) {
       beforeMount: async (info) => { book = info; return largeBookGuard(info); },
     });
     view.setCrop?.(cropOpts());
+    view.setRtl?.(rp.rtl);
+    applyReaderFit(rp.fitMode, view);
   } catch (e) { book = null; view = null; showOpening(false); return openFailed(e); }
   book = view.info; endDismissed = false; endArmAt = performance.now() + 1500;
   chMode = book.chapterMode; chN = sanePages(book.chapterPages); $('chrem').checked = !!book.chapterOverridden;
@@ -284,10 +295,14 @@ function syncControls() {
   $('wheel').value = rp.wheel; $('wheelVal').textContent = rp.wheel;
   document.querySelectorAll('#gap button').forEach(b => b.setAttribute('aria-pressed', String(+b.dataset.gap === rp.gap)));
   document.querySelectorAll('#fMode button').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.mode === modeNow)));
+  document.querySelectorAll('#fFlipDir button').forEach((b) => b.setAttribute('aria-pressed', String((b.dataset.rtl === '1') === !!rp.rtl)));
+  document.querySelectorAll('#flySettings [data-for="flip"]').forEach((r) => { r.hidden = modeNow !== 'flip'; });
   document.querySelectorAll('#fFilter button').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.filter === rp.filter)));
   document.querySelectorAll('#flySettings [data-for="scroll"]').forEach(r => { r.hidden = modeNow !== 'scroll'; });
   $('tbModeIcon').innerHTML = `<use href="icons.svg#${modeNow === 'flip' ? 'flip' : 'scroll'}"/>`; $('tbModeText').textContent = t(modeNow === 'flip' ? 'reader.modeFlipShort' : 'reader.modeScrollShort');
   $('autoSpeed').value = auto.speed; $('autoVal').textContent = auto.speed;
+  document.querySelectorAll('#fitModeSeg button').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.fit === rp.fitMode)));
+  $('tbFit').title = t(fitModeLabelKey(rp.fitMode));
 }
 $('w').addEventListener('input', (e) => { rp.widthPct = +e.target.value; prefs.set('reader.widthPct', rp.widthPct); if (view?.mode === 'scroll') view.setWidthPct(rp.widthPct); });
 $('wheel').addEventListener('input', (e) => { rp.wheel = wheelGear(+e.target.value); prefs.set('reader.wheelSpeed', rp.wheel); $('wheelVal').textContent = rp.wheel; if (view?.mode === 'scroll') view.setWheelSpeed(rp.wheel); });
@@ -313,10 +328,40 @@ $('cropAuto').addEventListener('change', (e) => { rp.cropAuto = e.target.checked
 $('cropTrim').addEventListener('input', (e) => { rp.cropTrim = +e.target.value; prefs.set('reader.cropTrim', rp.cropTrim); $('cropTrimVal').textContent = rp.cropTrim; applyViewDisplay(); });
 $('gap').addEventListener('click', (e) => { const b = e.target.closest('button'); if (!b) return; rp.gap = +b.dataset.gap; prefs.set('reader.gap', rp.gap); if (view?.mode === 'scroll') view.setGap(rp.gap); syncControls(); });
 $('saver').addEventListener('change', async (e) => { saverNow = e.target.checked; prefs.set('saver', saverNow); await startView({ startPos: view?.topPos() }); });
-const setMode = async (m) => { if (m === modeNow) return; modeNow = m; await startView({ startPos: view?.topPos() }); };
+const setMode = async (m) => {
+  m = normalizeViewMode(m);
+  if (m === modeNow) return;
+  modeNow = m;
+  persistBookViewMode(bookId, m, prefs);
+  if (helpOpen()) renderHelp();
+  syncControls();
+  await startView({ startPos: view?.topPos() });
+};
+const setFlipDir = (rtl) => {
+  rp.rtl = !!rtl;
+  prefs.set('reader.rtl', rp.rtl);
+  view?.setRtl?.(rp.rtl);
+  syncControls();
+};
 $('fMode').addEventListener('click', (e) => { const b = e.target.closest('button'); if (b) setMode(b.dataset.mode); });
+$('fFlipDir')?.addEventListener('click', (e) => { const b = e.target.closest('[data-rtl]'); if (b) setFlipDir(b.dataset.rtl === '1'); });
 $('tbMode').addEventListener('click', () => setMode(modeNow === 'scroll' ? 'flip' : 'scroll'));
-$('tbFit').addEventListener('click', () => { view?.setFit(); if (view?.mode === 'scroll') { rp.widthPct = 100; $('w').value = 100; prefs.set('reader.widthPct', 100); } });
+$('tbFit').addEventListener('click', () => {
+  const i = FIT_MODES.indexOf(rp.fitMode);
+  rp.fitMode = FIT_MODES[(i + 1) % FIT_MODES.length];
+  prefs.set('reader.fitMode', rp.fitMode);
+  applyReaderFit(rp.fitMode, view);
+  $('tbFit').title = t(fitModeLabelKey(rp.fitMode));
+});
+document.querySelectorAll('#fitModeSeg button').forEach((b) => {
+  b.setAttribute('aria-pressed', String(b.dataset.fit === rp.fitMode));
+  b.addEventListener('click', () => {
+    rp.fitMode = b.dataset.fit;
+    prefs.set('reader.fitMode', rp.fitMode);
+    document.querySelectorAll('#fitModeSeg button').forEach((x) => x.setAttribute('aria-pressed', String(x.dataset.fit === rp.fitMode)));
+    applyReaderFit(rp.fitMode, view);
+  });
+});
 
 // ---- auto-scroll -----------------------------------------------------------------------------------------------
 function onAutoChange(running) {
@@ -398,34 +443,16 @@ $('endLib').addEventListener('click', () => leave('library.html'));
 // ---- navigation, fullscreen, window -------------------------------------------------------------------------------
 $('back').addEventListener('click', () => leave()); $('errBack').addEventListener('click', () => leave()); $('errRetry').addEventListener('click', () => startView());
 $('errLocate').addEventListener('click', async () => {
-  const p = await T.dialog.open({ multiple: false, filters: [{ name: t('imp.zipFilter'), extensions: ['zip', 'cbz'] }] });
+  const p = await T.dialog.open({ multiple: false, filters: [{ name: t('imp.archiveFilter'), extensions: ['zip', 'cbz', '7z', 'cb7', 'rar', 'cbr'] }] });
   if (p) { await lib.relinkBook(bookId, p).catch(() => {}); startView(); }
 });
 const toggleFs = async () => win.setFullscreen(!(await win.isFullscreen()));
 $('fsBtn').addEventListener('click', toggleFs);
-const HELP_ROWS = [
-  ['Space  ·  PgDn', 'help.space'],
-  ['Shift+Space  ·  PgUp', 'help.pageUp'],
-  ['↑  ↓', 'help.nudge'],
-  ['←  →', 'help.page'],
-  ['Home  ·  End', 'help.ends'],
-  ['Ctrl  +  −  0', 'help.zoom'],
-  ['B', 'help.bookmark'],
-  ['M', 'help.mode'],
-  ['A', 'help.auto'],
-  ['D', 'help.dir'],
-  ['C', 'help.history'],
-  ['T', 'help.chrome'],
-  ['G', 'help.jump'],
-  ['F  ·  F11', 'help.full'],
-  ['[  ·  ]', 'help.episode'],
-  ['Esc', 'help.leave'],
-  ['?  ·  H', 'help.toggle'],
-];
 const helpOpen = () => !$('helpOverlay').hidden;
 function renderHelp() {
-  $('helpGrid').innerHTML = HELP_ROWS.map(([keys, key]) =>
-    `<div class="help-row"><kbd>${esc(keys)}</kbd><span>${esc(t(key))}</span></div>`).join('');
+  const rows = shortcutHelpRows(modeNow === 'flip' ? 'flip' : 'scroll');
+  $('helpGrid').innerHTML = rows.map(({ keys, i18n }) =>
+    `<div class="help-row"><kbd>${esc(keys)}</kbd><span>${esc(t(i18n))}</span></div>`).join('');
 }
 function setHelp(open) {
   $('helpOverlay').hidden = !open;
@@ -459,6 +486,7 @@ addEventListener('keydown', (e) => {
   if (k === 't') { if (e.repeat) return; toggleReaderChrome(); e.preventDefault(); return; }
   if (!view) return;
   if (k === 'b') toggleBookmark(); else if (k === 'm') $('tbMode').click(); else if (k === 'a') auto.toggle(); else if (k === 'd') $('tbDir').click(); else if (k === 'c') $('bpToggle').click();
+  else if (k === 'l') { loupe.toggle(); e.preventDefault(); return; }
   else if (k === 'g') $('pgCount').click(); else if (k === 'f' || k === 'f11') toggleFs(); else if (k === '[') goEpisode(prevTarget(chs, view.topPos())); else if (k === ']') goEpisode(nextTarget(chs, view.topPos())); else return;
   e.preventDefault();
 });

@@ -131,6 +131,8 @@
       the photo no longer repaints with the content. */
 .glass,.glass-strong{backdrop-filter:none;-webkit-backdrop-filter:none}
 .shell-top,.shell-rail,.flyout,.drawer,.toast,.modal,.vp__pill,.vp__auto{backdrop-filter:blur(14px) saturate(1.25);-webkit-backdrop-filter:blur(14px) saturate(1.25)}
+html[data-chrome-blur] .shell-top,html[data-chrome-blur] .shell-rail,html[data-chrome-blur] .flyout,html[data-chrome-blur] .drawer,html[data-chrome-blur] .toast,html[data-chrome-blur] .modal,html[data-chrome-blur] .vp__pill,html[data-chrome-blur] .vp__auto{backdrop-filter:blur(var(--chrome-blur,14px)) saturate(1.25);-webkit-backdrop-filter:blur(var(--chrome-blur,14px)) saturate(1.25)}
+html[data-bg-blur] .bg-layer{filter:blur(var(--bg-blur,0px))}
 .bg-layer{z-index:-1;transform:translateZ(0);will-change:transform}
 
 /* ==== v0.6 append: add at the END of src/mh-ui.css (PowerShell: Get-Content mh-ui.v06-append.css | Add-Content mh-ui.css) ====
@@ -716,4 +718,26 @@ body:has(.shell-frame) .shell-top{
 @media(prefers-reduced-motion:reduce){
   .page-main.is-swapping{opacity:1}
 }
+/* ==== v0.8.x reader loupe + settings tag admin (no library chrome changes) ==== */
+.tag-admin{display:flex;flex-direction:column;gap:8px;margin-bottom:10px}
+.tag-row{display:flex;align-items:center;justify-content:space-between;gap:12px}
+.reader-loupe{position:fixed;width:148px;height:148px;border-radius:50%;border:2px solid var(--accent);pointer-events:none;transform:translate(-50%,-50%);z-index:90;background-repeat:no-repeat;box-shadow:0 14px 42px #0007;background-color:var(--panel2)}
 /* ==== end v0.8.1 unified shell ==== */
+.meta-fold{margin-top:12px;border-top:1px solid var(--line);padding-top:8px}
+.meta-fold summary{cursor:pointer;font-weight:600;color:var(--text);list-style-position:inside}
+.meta-actions{display:flex;flex-wrap:wrap;gap:8px;margin-top:8px}
+.meta-list{display:flex;flex-direction:column;gap:12px;max-height:min(52vh,420px);overflow:auto}
+.meta-cand{display:flex;align-items:center;gap:10px;width:100%;text-align:left;padding:8px 10px}
+.meta-cover{max-width:120px;border-radius:8px;margin-top:4px}
+.meta-sum{display:block;max-height:8em;overflow:auto;font-size:12px;line-height:1.45}
+.meta-opts{display:flex;flex-wrap:wrap;gap:12px;margin-top:10px;font-size:12px}
+label.check{display:inline-flex;align-items:center;gap:6px;cursor:pointer}
+.meta-sum,.meta-list .muted{font-size:12px}
+/* Reading feel only. No color, type, or chrome change.
+   The scrollport stays on the fast path (filter lives on the strip, not the scroller).
+   Page-image fades used to leave the fill color visible on the join while moving. */
+.scroller{overflow-anchor:none}
+#host .scroller{filter:none}
+#host .sizer{filter:var(--reader-filter)}
+.page img.pg{transition:none}
+.flip-stage{touch-action:none}

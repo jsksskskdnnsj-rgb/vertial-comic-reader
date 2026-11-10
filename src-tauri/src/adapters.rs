@@ -318,12 +318,30 @@ pub fn import_paths(
             }
         } else if crate::kind_of(&p) == Some("zip") {
             import_zip(&conn, raw, folder_id, &mut res);
+        } else if crate::kind_of(&p) == Some("archive") {
+            match crate::archives::import_unpack_to_folder(raw) {
+                Ok(Some(folder)) => {
+                    if let Some(id) =
+                        import_folder(&conn, &folder.to_string_lossy(), folder_id, &mut res)
+                    {
+                        fresh_folders.push(id);
+                    }
+                }
+                Ok(None) => res.failed.push(ImportFailure {
+                    path: raw.clone(),
+                    reason: "无法识别的压缩包".into(),
+                }),
+                Err(e) => res.failed.push(ImportFailure {
+                    path: raw.clone(),
+                    reason: e,
+                }),
+            }
         } else if is_import_image(&p) {
             loose.push(raw.clone());
         } else {
             res.failed.push(ImportFailure {
                 path: raw.clone(),
-                reason: "不支持的格式（RAR / 7z 请先解压）".to_string(),
+                reason: "不支持的格式（可用：文件夹、图片、ZIP/CBZ、7Z/CB7、RAR/CBR）".to_string(),
             });
         }
     }

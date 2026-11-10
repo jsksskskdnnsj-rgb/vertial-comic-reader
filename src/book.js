@@ -2,11 +2,12 @@
 // and the same actions as the library menu (continue, start over, rename, locate, reveal, remove,
 // reset page edits, move to folder). Data: shelf_get, folder_list, episode_info (chapters.js),
 // bookmark_counts, check_books_missing, page_edit_info.
-import { invoke, t, esc, ago, fmtBytes, bootPage, lang } from './shell.js';
+import { invoke, t, esc, ago, fmtBytes, bootPage, lang, T } from './shell.js';
 import { lib } from './api.js';
 import { mountShell, coverUrl, wireCoverFallback } from './shell-ui.js';
 import { fetchEpisodeInfo } from './chapters.js';
 import * as act from './book-actions.js';
+import { readerOpenHref } from './reader-mode-store.js';
 
 const $ = (id) => document.getElementById(id);
 bootPage('book');
@@ -70,10 +71,77 @@ async function load() {
   $('folderSel').innerHTML = `<option value="">${esc(t('lib.noFolder'))}</option>` +
     folders.map((f) => `<option value="${f.id}"${f.id === book.folder_id ? ' selected' : ''}>${esc(f.name)}</option>`).join('');
   $('resetEditRow').hidden = !info?.edited;
+  await renderMetaPanel();
+}
+
+async function metaCoverUrl(bookId) {
+  const path = await lib.metadata.coverPath(bookId).catch(() => null);
+  if (!path || !T.core?.convertFileSrc) return null;
+  return T.core.convertFileSrc(path, 'mhfile').replace(/["\\\n\r]/g, '');
+}
+
+async function renderMetaPanel() {
+  $('metaFold').hidden = false;
+  const bound = await lib.metadata.get(book.id).catch(() => null);
+  const row = (k, v) => `<dt>${esc(t(k))}</dt><dd>${v}</dd>`;
+  if (!bound) {
+    $('metaKv').innerHTML = '';
+    $('metaEmpty').hidden = false;
+    $('metaUnbindBtn').hidden = true;
+    $('metaOpenBtn').hidden = false;
+    return;
+  }
+  $('metaEmpty').hidden = true;
+  $('metaUnbindBtn').hidden = false;
+  $('metaOpenBtn').hidden = false;
+  const prov = t(`meta.provider.${bound.provider}`) !== `meta.provider.${bound.provider}`
+    ? t(`meta.provider.${bound.provider}`) : bound.provider;
+  const title = esc(bound.titleDisplay || bound.titleCn || '—');
+  const authors = bound.authors?.length ? esc(bound.authors.join(' · ')) : '—';
+  const tags = bound.tags?.length ? esc(bound.tags.slice(0, 12).join(' · ')) : '—';
+  const rating = bound.rating != null ? esc(t('meta.rating', { n: Number(bound.rating).toFixed(1) })) : '—';
+  const summary = bound.summary ? esc(bound.summary.slice(0, 480)) + (bound.summary.length > 480 ? '…' : '') : '—';
+  const remoteCover = await metaCoverUrl(book.id);
+  const coverHtml = remoteCover
+    ? `<img class="meta-cover" src="${esc(remoteCover)}" alt="">`
+    : '—';
+  $('metaKv').innerHTML =
+    row('meta.fieldSource', esc(prov)) +
+    row('meta.fieldTitle', title) +
+    (bound.titleCn ? row('meta.fieldTitleCn', esc(bound.titleCn)) : '') +
+    (bound.titleOriginal ? row('meta.fieldOriginal', esc(bound.titleOriginal)) : '') +
+    row('meta.fieldAuthors', authors) +
+    row('meta.fieldTags', tags) +
+    row('meta.fieldRating', rating) +
+    (bound.releaseDate ? row('meta.fieldDate', esc(bound.releaseDate)) : '') +
+    row('meta.fieldSummary', `<span class="meta-sum">${summary}</span>`) +
+    row('meta.fieldRemoteCover', coverHtml);
 }
 
 const after = async (ok, bump) => { if (ok) { if (bump) coverBust = Date.now(); await load(); } };
-$('continueBtn').addEventListener('click', () => { location.href = `reader.html?book=${book.id}`; });
+$('continueBtn').addEventListener('click', () => { location.href = readerOpenHref(book.id); });
+$('continueBtn').addEventListener('contextmenu', (e) => {
+  if (!book) return;
+  e.preventDefault();
+  const menu = document.createElement('div');
+  menu.className = 'menu glass-strong';
+  menu.setAttribute('role', 'menu');
+  menu.style.cssText = `left:${Math.max(8, e.clientX)}px;top:${Math.max(8, e.clientY)}px`;
+  menu.innerHTML = [
+    `<button type="button" role="menuitem" data-a="scroll">${esc(t('lib.openScroll'))}</button>`,
+    `<button type="button" role="menuitem" data-a="flip">${esc(t('lib.openFlip'))}</button>`,
+  ].join('');
+  const close = () => { menu.remove(); document.removeEventListener('pointerdown', onOut, true); };
+  const onOut = (ev) => { if (!menu.contains(ev.target)) close(); };
+  menu.addEventListener('click', (ev) => {
+    const b = ev.target.closest('[data-a]');
+    if (!b) return;
+    close();
+    location.href = readerOpenHref(book.id, b.dataset.a);
+  });
+  document.body.append(menu);
+  document.addEventListener('pointerdown', onOut, true);
+});
 $('startOverBtn').addEventListener('click', async () => after(await act.startOver(book)));
 $('renameBtn').addEventListener('click', async () => after(await act.renameBook(book)));
 $('relinkBtn').addEventListener('click', async () => after(await act.relinkBook(book), true));
@@ -83,5 +151,17 @@ $('resetEditBtn').addEventListener('click', async () => after(await act.resetEdi
 $('folderSel').addEventListener('change', async () => {
   const v = $('folderSel').value;
   if (!await act.moveBook(book, v ? +v : null)) await load();
+});
+$('metaMatchBtn').addEventListener('click', async () => {
+  if (!book) return;
+  await act.matchMetadata(book, { onBound: () => load() });
+});
+$('metaUnbindBtn').addEventListener('click', async () => {
+  if (!book) return;
+  await act.clearMetadataBind(book, { onBound: () => load() });
+});
+$('metaOpenBtn').addEventListener('click', async () => {
+  if (!book) return;
+  await act.openMetadataPage(book);
 });
 load();

@@ -1,6 +1,14 @@
 // library-filters.js - pure helpers for the library page (no imports, no DOM, no Tauri; unit-tested in Node).
 // Reading status, filtering, status counts and the remembered library state (sort, status, folder, view mode).
-export const SORTS = ['recent', 'added', 'name', 'title'];
+export const SORTS = ['recent', 'added', 'progress', 'name', 'title'];
+
+/** 0–100 reading progress for sorting (same denominator as library progress chips). */
+export function progressPct(b) {
+  const n = Math.max(0, Math.floor(Number(b?.page_count) || 0));
+  if (n <= 1) return 0;
+  const p = Math.max(0, Math.min(n - 1, Math.floor(Number(b?.last_page) || 0)));
+  return Math.round((p / (n - 1)) * 100);
+}
 export const STATUSES = ['all', 'unread', 'progress', 'finished'];
 export const MODES = ['grid', 'list'];
 
@@ -14,10 +22,18 @@ export const statusOf = (b) => (isFinished(b) ? 'finished' : (b.last_page || 0) 
 export function matchesBase(b, o) {
   if (o.view === 'recent' && !(b.last_page > 0)) return false;
   if (o.view === 'marked' && !((o.bmCounts?.get(b.id) || 0) > 0)) return false;
+  if (o.favoriteOnly && !b.favorite) return false;
+  if (o.tagId != null) {
+    const tags = o.bookTags?.get(b.id) || [];
+    if (!tags.includes(o.tagId)) return false;
+  }
   if (o.folder === 'none' && b.folder_id != null) return false;
   if (typeof o.folder === 'number' && b.folder_id !== o.folder) return false;
   const q = String(o.query || '').trim().toLowerCase();
-  if (q && !String(b.name || '').toLowerCase().includes(q)) return false;
+  if (q) {
+    const hay = `${b.name || ''} ${(o.tagNames?.get(b.id) || []).join(' ')}`.toLowerCase();
+    if (!hay.includes(q)) return false;
+  }
   return true;
 }
 /** o additionally has `status` ('all' or missing = no status filter). */

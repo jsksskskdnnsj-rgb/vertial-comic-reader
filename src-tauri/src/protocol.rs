@@ -182,7 +182,14 @@ pub fn serve_theme_file(req: &http::Request<Vec<u8>>) -> http::Response<Vec<u8>>
         return theme_status(403);
     }
     let name = file.file_name().and_then(|n| n.to_str()).unwrap_or("");
-    if !(name.starts_with("hero-custom.") || name.starts_with("banner-custom.")) {
+    let allowed = name.starts_with("hero-custom.")
+        || name.starts_with("banner-custom.")
+        || file.parent()
+            .and_then(|p| p.file_name())
+            .and_then(|n| n.to_str())
+            .map(|n| n == "metadata-covers")
+            .unwrap_or(false);
+    if !allowed {
         return theme_status(403);
     }
     let Ok(meta) = std::fs::metadata(&file) else {

@@ -17,6 +17,7 @@ import { lib } from './api.js';
 import { mountShell, applyBackground, applyAppearance, applyExtras } from './shell-ui.js';
 import { BORDER_PRESETS, BG_COLOR_PRESETS, BG_COLOR_DEFAULT, isHex } from './appearance-extras.js';
 import { DEFAULTS, PANEL_MIN, PANEL_MAX } from './appearance.js';
+import { DEFAULT_CHROME_BLUR, DEFAULT_BG_BLUR, CHROME_BLUR_MAX, BG_BLUR_MAX } from './appearance-glass.js';
 import { sanePages, DEFAULT_PAGES } from './chapters.js';
 import { setBackground, resetBackground, setBanner, resetBanner } from './theme-api.js';
 import { imageFilters } from './image-exts.js';
@@ -89,7 +90,17 @@ function syncReading() {
   $('autoRange').value = prefs.get('autoSpeed', 4);
   $('autoVal').textContent = $('autoRange').value;
 }
-$('modeSeg').addEventListener('click', (e) => { const b = e.target.closest('[data-mode]'); if (b) { prefs.set('mode', b.dataset.mode); syncReading(); } });
+$('modeSeg').addEventListener('click', async (e) => {
+  const b = e.target.closest('[data-mode]');
+  if (!b) return;
+  prefs.set('mode', b.dataset.mode);
+  syncReading();
+  try {
+    const cfg = await invoke('get_reader_config').catch(() => ({}));
+    const mode = b.dataset.mode === 'flip' ? 'page' : 'scroll';
+    await invoke('set_reader_config', { cfg: { ...cfg, mode } });
+  } catch { /* optional sync */ }
+});
 $('widthRange').addEventListener('input', (e) => { prefs.set('reader.widthPct', +e.target.value); syncReading(); });
 $('gapSeg').addEventListener('click', (e) => { const b = e.target.closest('[data-gap]'); if (b) { prefs.set('reader.gap', +b.dataset.gap); syncReading(); } });
 $('dimRange').addEventListener('input', (e) => { prefs.set('reader.dim', +e.target.value); syncReading(); });
@@ -100,22 +111,34 @@ $('mergeAuto').addEventListener('change', (e) => {
 });
 $('wheelRange').addEventListener('input', (e) => { prefs.set('reader.wheelSpeed', Math.min(5, Math.max(1, Math.round(+e.target.value) || 2))); syncReading(); });
 $('autoRange').addEventListener('input', (e) => { prefs.set('autoSpeed', +e.target.value); syncReading(); });
-syncReading();
+invoke('get_reader_config').then((c) => {
+  if (c?.mode && localStorage.getItem('mh.pref.mode') === null) prefs.set('mode', c.mode === 'page' ? 'flip' : 'scroll');
+  syncReading();
+}).catch(() => syncReading());
 
 // ---- panel opacity + wallpaper fit (CSS variables only; applyAppearance writes --panel-a, --panel2-a, --bg-size) ------------
 function syncAppearance() {
   const op = Math.min(PANEL_MAX, Math.max(PANEL_MIN, +prefs.get('panelOpacity', DEFAULTS.panelOpacity) || DEFAULTS.panelOpacity));
   $('panelOpacity').value = op;
   $('panelOpacityVal').textContent = $('panelOpacity').value + '%';
+  const cb = Math.min(CHROME_BLUR_MAX, Math.max(0, Math.round(+prefs.get('chromeBlur', DEFAULT_CHROME_BLUR) || DEFAULT_CHROME_BLUR)));
+  $('chromeBlur').value = cb;
+  $('chromeBlurVal').textContent = cb + 'px';
+  const bb = Math.min(BG_BLUR_MAX, Math.max(0, Math.round(+prefs.get('bgBlur', DEFAULT_BG_BLUR) || DEFAULT_BG_BLUR)));
+  $('bgBlur').value = bb;
+  $('bgBlurVal').textContent = bb + 'px';
   pressed('#fitSeg button', 'fit', prefs.get('bgFit', DEFAULTS.bgFit));
 }
 $('panelOpacity').addEventListener('input', (e) => { prefs.set('panelOpacity', +e.target.value); syncAppearance(); applyAppearance(); });
+$('chromeBlur').addEventListener('input', (e) => { prefs.set('chromeBlur', +e.target.value); syncAppearance(); applyAppearance(); });
+$('bgBlur').addEventListener('input', (e) => { prefs.set('bgBlur', +e.target.value); syncAppearance(); applyAppearance(); });
 $('fitSeg').addEventListener('click', (e) => {
   const b = e.target.closest('[data-fit]'); if (!b) return;
   prefs.set('bgFit', b.dataset.fit); syncAppearance(); applyAppearance();
 });
 $('appearanceReset').addEventListener('click', () => {
   prefs.set('panelOpacity', DEFAULTS.panelOpacity); prefs.set('bgFit', DEFAULTS.bgFit); prefs.set('bgDim', DEFAULTS.bgDim);
+  prefs.set('chromeBlur', DEFAULT_CHROME_BLUR); prefs.set('bgBlur', DEFAULT_BG_BLUR);
   $('bgDim').value = DEFAULTS.bgDim; $('bgDimVal').textContent = DEFAULTS.bgDim + '%';
   syncAppearance(); applyAppearance(); applyBackground();
   toast(t('common.saved'));
@@ -265,6 +288,105 @@ lib.stats().then((s) => {
     cell(s.folders, t('lib.folders')) + cell(s.inProgress, t('reader.history')) +
     cell(s.finished, t('end.title')) + cell(s.bookmarkedBooks, t('bookmarks.title'));
 }).catch(() => {});
+async function refreshTags() {
+  const list = await lib.tags.list().catch(() => []);
+  $('tagList').innerHTML = list.length
+    ? list.map((tg) => `<div class="tag-row"><span class="lib-chip lib-chip--tag" style="--tag:${esc(tg.color)}">${esc(tg.name)}</span>
+      <button class="btn btn--ghost btn--sm" data-tag-del="${tg.id}" type="button">${esc(t('common.delete'))}</button></div>`).join('')
+    : `<p class="muted">${esc(t('settings.tagsEmpty'))}</p>`;
+}
+$('tagName').placeholder = t('settings.tagName');
+$('tagList').addEventListener('click', async (e) => {
+  const id = e.target.closest('[data-tag-del]')?.dataset.tagDel;
+  if (!id) return;
+  if (!await confirmDialog({ title: t('common.delete'), message: t('settings.tagDeleteMsg'), ok: t('common.delete'), danger: true })) return;
+  try { await lib.tags.delete(+id); toast(t('common.saved')); refreshTags(); } catch (err) { toast(errText(err)); }
+});
+$('tagAdd').addEventListener('click', async () => {
+  const name = $('tagName').value.trim();
+  if (!name) return;
+  try { await lib.tags.create(name); $('tagName').value = ''; toast(t('common.saved')); refreshTags(); }
+  catch (e) { toast(errText(e)); }
+});
+refreshTags();
+
+$('backupExport').addEventListener('click', async () => {
+  const picked = await T.dialog.save({ filters: [{ name: 'MH backup', extensions: ['zip'] }] }).catch(() => null);
+  if (!picked) return;
+  try {
+    const r = await lib.exportBackup(picked);
+    toast(t('settings.backupDone', { n: Math.round((r.bytes || 0) / 1024) }));
+  } catch (e) { toast(errText(e)); }
+});
+$('backupImport').addEventListener('click', async () => {
+  const picked = await T.dialog.open({ filters: [{ name: 'MH backup', extensions: ['zip'] }] }).catch(() => null);
+  if (!picked) return;
+  if (!await confirmDialog({ title: t('settings.backupImport'), message: t('settings.backupImportMsg'), ok: t('common.ok') })) return;
+  try { await lib.importBackup(picked); toast(t('settings.backupImportDone')); setTimeout(() => location.reload(), 800); }
+  catch (e) { toast(errText(e)); }
+});
+async function loadMetaNet() {
+  const cfg = await lib.metadata.getConfig().catch(() => ({}));
+  $('metaProxy').value = cfg.proxyUrl || '';
+  $('metaBgmToken').value = cfg.bangumiToken || '';
+  $('metaSrcBgm').checked = cfg.sources?.bangumi !== false;
+  $('metaSrcMu').checked = cfg.sources?.mangaupdates !== false;
+  $('metaSrcAni').checked = cfg.sources?.anilist !== false;
+  $('metaSrcC18').checked = cfg.sources?.comic18 === true;
+  $('metaC18Domain').value = cfg.comic18Domain || '18comic.vip';
+  $('metaProxyBgm').checked = cfg.proxyPerSource?.bangumi !== false;
+  $('metaProxyMu').checked = cfg.proxyPerSource?.mangaupdates !== false;
+  $('metaProxyAni').checked = cfg.proxyPerSource?.anilist !== false;
+  $('metaProxyC18').checked = cfg.proxyPerSource?.comic18 !== false;
+  $('metaAutoBind').checked = cfg.autoBindConfident !== false;
+}
+function metaNetPayload() {
+  return {
+    bangumiToken: $('metaBgmToken').value.trim(),
+    proxyUrl: $('metaProxy').value.trim(),
+    proxyPerSource: {
+      bangumi: $('metaProxyBgm').checked,
+      mangaupdates: $('metaProxyMu').checked,
+      anilist: $('metaProxyAni').checked,
+      comic18: $('metaProxyC18').checked,
+    },
+    sources: {
+      bangumi: $('metaSrcBgm').checked,
+      mangaupdates: $('metaSrcMu').checked,
+      anilist: $('metaSrcAni').checked,
+      comic18: $('metaSrcC18').checked,
+    },
+    comic18Domain: $('metaC18Domain').value.trim() || '18comic.vip',
+    rateLimitMs: 400,
+    autoBindConfident: $('metaAutoBind').checked,
+  };
+}
+$('metaSave')?.addEventListener('click', async () => {
+  try { await lib.metadata.setConfig(metaNetPayload()); toast(t('common.saved')); }
+  catch (e) { toast(errText(e)); }
+});
+$('metaAutomatch')?.addEventListener('click', async () => {
+  if (!await confirmDialog({ title: t('meta.batchMatch'), message: t('meta.autoBindHelp'), ok: t('common.ok') })) return;
+  $('metaAutomatchOut').hidden = true;
+  try {
+    const rows = await lib.metadata.automatch(null, false);
+    const bound = rows.filter((r) => r.status === 'bound').length;
+    const pending = rows.filter((r) => r.status === 'pending').length;
+    const none = rows.filter((r) => r.status === 'none').length;
+    $('metaAutomatchOut').hidden = false;
+    $('metaAutomatchOut').textContent = t('meta.batchDone', { n: rows.length, bound, pending, none });
+    toast(t('common.saved'));
+  } catch (e) { toast(errText(e)); }
+});
+loadMetaNet();
+
+$('dupScan').addEventListener('click', async () => {
+  const groups = await lib.tags.duplicates().catch(() => []);
+  const n = groups.length;
+  $('dupOut').hidden = false;
+  $('dupOut').textContent = n ? t('settings.dupFound', { n, books: groups.reduce((a, g) => a + g.length, 0) }) : t('settings.dupNone');
+});
+
 $('clearShelf').addEventListener('click', async () => {
   if (!await confirmDialog({ title: t('settings.clearLibrary'), message: t('settings.clearLibraryConfirm'), ok: t('common.delete'), danger: true })) return;
   try { await invoke('shelf_clear'); toast(t('common.saved')); setTimeout(() => location.reload(), 600); }
