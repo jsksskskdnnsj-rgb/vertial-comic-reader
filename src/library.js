@@ -21,6 +21,7 @@ import { libraryCoversToWarm } from './library-cover-warm.js';
 import * as act from './book-actions.js';
 import { openMergeDialog } from './merge-ui.js';
 import { libraryRenderCount, LIBRARY_RENDER_BATCH, libraryScopeKey } from './library-render-window.js';
+import { readerOpenHref } from './reader-mode-store.js';
 import { readPresets, writePresets, snapshotPreset, applyPreset } from './library-presets.js';
 
 const params = new URLSearchParams(location.search);
@@ -274,7 +275,9 @@ const reload = async (ok, id, bumpCover) => { if (ok) { if (bumpCover) bust.set(
 function bookMenu(btn, b) {
   const r = btn.getBoundingClientRect();
   const items = [
-    { a: 'open', label: t('lib.open'), fn: () => (location.href = `reader.html?book=${b.id}`) },
+    { a: 'open', label: t('lib.open'), fn: () => { location.href = readerOpenHref(b.id); } },
+    { a: 'openscroll', label: t('lib.openScroll'), fn: () => { location.href = readerOpenHref(b.id, 'scroll'); } },
+    { a: 'openflip', label: t('lib.openFlip'), fn: () => { location.href = readerOpenHref(b.id, 'flip'); } },
     { a: 'fav', label: b.favorite ? t('lib.unfavorite') : t('lib.favorite'), fn: async () => {
       await lib.tags.setFavorite(b.id, !b.favorite).catch(() => {});
       b.favorite = !b.favorite;
@@ -363,7 +366,7 @@ document.addEventListener('click', (e) => {
       renderGrid();
       return;
     }
-    location.href = `reader.html?book=${card.dataset.id}`;
+    location.href = readerOpenHref(card.dataset.id);
   }
 });
 document.addEventListener('keydown', (e) => {
@@ -375,7 +378,7 @@ document.addEventListener('keydown', (e) => {
   if (card) {
     e.preventDefault();
     if (picking) { card.click(); return; }
-    location.href = `reader.html?book=${card.dataset.id}`;
+    location.href = readerOpenHref(card.dataset.id);
   }
 });
 $('sortSel').value = sortMode;

@@ -83,6 +83,8 @@ export default {
   'lib.notStarted': '\u672a\u5f00\u59cb', // Not started
   'lib.menu': '\u66f4\u591a', // More
   'lib.open': '\u6253\u5f00', // Open
+  'lib.openScroll': '\u7528\u7ad6\u6ed1\u6253\u5f00',
+  'lib.openFlip': '\u7528\u7ffb\u9875\u6253\u5f00',
   'lib.details': '\u8be6\u60c5', // Details
   'lib.moveTo': '移动到分类…', // Move to category…
   'lib.moveUp': '上移', // Move up
@@ -210,6 +212,11 @@ export default {
   'reader.modeFlipShort': '\u7ffb\u9875', // Flip
   'reader.modeScroll': '\u7ad6\u5411\u5377\u8f74', // Vertical scroll
   'reader.modeScrollShort': '\u5377\u8f74', // Scroll
+  'reader.viewMode': '\u9605\u8bfb\u89c6\u56fe',
+  'reader.flipDirection': '\u7ffb\u9875\u65b9\u5411',
+  'reader.dirLtr': '\u5de6\u2192\u53f3',
+  'reader.dirRtl': '\u53f3\u2192\u5de6\uff08\u65e5\u6f2b\uff09',
+  'reader.flipDirHint': '\u4ec5\u5728\u7ffb\u9875\u6a21\u5f0f\u4e0b\u751f\u6548\u3002\u5355\u9875/\u53cc\u9875\u5bf9\u5f00\u8bbe\u7f6e\u4e0d\u53d8\u3002',
   'reader.nextEp': '\u4e0b\u4e00\u8bdd', // Next episode
   'reader.nextPage': '\u4e0b\u4e00\u9875', // Next page
   'reader.prevEp': '\u4e0a\u4e00\u8bdd', // Previous episode
@@ -396,6 +403,7 @@ export default {
   'help.loupe': '放大镜（移动查看）',
   'help.bookmark': '在此处添加或取消书签',
   'help.mode': '切换竖滑和翻页',
+  'help.modeToggle': '切换竖滑与翻页（保留当前页）',
   'help.auto': '开始或停止自动滚动',
   'help.dir': '打开页目录',
   'help.history': '显示或隐藏阅读记录',

@@ -90,7 +90,17 @@ function syncReading() {
   $('autoRange').value = prefs.get('autoSpeed', 4);
   $('autoVal').textContent = $('autoRange').value;
 }
-$('modeSeg').addEventListener('click', (e) => { const b = e.target.closest('[data-mode]'); if (b) { prefs.set('mode', b.dataset.mode); syncReading(); } });
+$('modeSeg').addEventListener('click', async (e) => {
+  const b = e.target.closest('[data-mode]');
+  if (!b) return;
+  prefs.set('mode', b.dataset.mode);
+  syncReading();
+  try {
+    const cfg = await invoke('get_reader_config').catch(() => ({}));
+    const mode = b.dataset.mode === 'flip' ? 'page' : 'scroll';
+    await invoke('set_reader_config', { cfg: { ...cfg, mode } });
+  } catch { /* optional sync */ }
+});
 $('widthRange').addEventListener('input', (e) => { prefs.set('reader.widthPct', +e.target.value); syncReading(); });
 $('gapSeg').addEventListener('click', (e) => { const b = e.target.closest('[data-gap]'); if (b) { prefs.set('reader.gap', +b.dataset.gap); syncReading(); } });
 $('dimRange').addEventListener('input', (e) => { prefs.set('reader.dim', +e.target.value); syncReading(); });
@@ -101,7 +111,10 @@ $('mergeAuto').addEventListener('change', (e) => {
 });
 $('wheelRange').addEventListener('input', (e) => { prefs.set('reader.wheelSpeed', Math.min(5, Math.max(1, Math.round(+e.target.value) || 2))); syncReading(); });
 $('autoRange').addEventListener('input', (e) => { prefs.set('autoSpeed', +e.target.value); syncReading(); });
-syncReading();
+invoke('get_reader_config').then((c) => {
+  if (c?.mode && localStorage.getItem('mh.pref.mode') === null) prefs.set('mode', c.mode === 'page' ? 'flip' : 'scroll');
+  syncReading();
+}).catch(() => syncReading());
 
 // ---- panel opacity + wallpaper fit (CSS variables only; applyAppearance writes --panel-a, --panel2-a, --bg-size) ------------
 function syncAppearance() {

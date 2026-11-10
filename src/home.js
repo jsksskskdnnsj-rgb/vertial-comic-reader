@@ -9,6 +9,7 @@ import { fetchEpisodeInfo } from './chapters.js';
 import { setBanner, resetBanner } from './theme-api.js';
 import { inspectFolder, looksLikeFile } from './folder-scan.js';
 import { archiveAndImageFilters, imageFilters } from './image-exts.js';
+import { readerOpenHref } from './reader-mode-store.js';
 
 bootPage('home');
 mountShell('home');
@@ -119,7 +120,7 @@ async function loadLists() {
   $('added').removeAttribute('aria-busy');
   $('noAdded').hidden = added.length > 0;
 }
-const open = (el) => { const c = el?.closest('[data-open]'); if (c) location.href = `reader.html?book=${c.dataset.open}`; };
+const open = (el) => { const c = el?.closest('[data-open]'); if (c) location.href = readerOpenHref(c.dataset.open); };
 document.addEventListener('click', (e) => open(e.target));
 document.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { const c = e.target.closest?.('[data-open]'); if (c) { e.preventDefault(); open(c); } } });
 loadLists();

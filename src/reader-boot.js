@@ -13,6 +13,7 @@ import { mountShell } from './shell-ui.js';
 import { shortcutHelpRows } from './reader-shortcuts.js';
 import { FIT_MODES, applyReaderFit, fitModeLabelKey } from './reader-fit.js';
 import { ReaderLoupe } from './reader-loupe.js';
+import { resolveBookViewMode, persistBookViewMode, normalizeViewMode, readerOpenHref } from './reader-mode-store.js';
 
 const $ = (id) => document.getElementById(id);
 bootPage('library');
@@ -40,7 +41,9 @@ const rp = {
   fitMode: FIT_MODES.includes(prefs.get('reader.fitMode')) ? prefs.get('reader.fitMode') : 'width',
 };
 const loupe = new ReaderLoupe($('host'));
-let modeNow = prefs.get('mode', 'scroll');             // default reading mode (Settings); the toolbar toggles it for this session only
+const openParams = new URLSearchParams(location.search);
+let modeNow = resolveBookViewMode(bookId, openParams.get('view'), () => prefs.get('mode', 'scroll'), prefs);
+if (openParams.get('view')) persistBookViewMode(bookId, modeNow, prefs);
 let saverNow = prefs.get('saver', false);
 let view = null, book = null, bms = [], chs = [], chMode = 'folder', chN = DEFAULT_PAGES, chDefaults = { mode: 'folder', pages: DEFAULT_PAGES };
 let shown = 0, lastPos = null, endDismissed = false, endArmAt = 0;
@@ -68,7 +71,7 @@ const pageThumb = (p) => {
 };
 
 // ---- panels ----------------------------------------------------------------------------------------------
-const history_ = new HistoryStack($('hist'), { t, esc, ago, coverUrl, onOpen: async (id) => { await leave(`reader.html?book=${id}`); } });
+const history_ = new HistoryStack($('hist'), { t, esc, ago, coverUrl, onOpen: async (id) => { await leave(readerOpenHref(id)); } });
 const strip = new ThumbStrip($('tstrip'), { thumb: pageThumb, onJump: (p) => view?.jumpTo({ page: p, frac: 0 }) });
 const auto = new AutoScroll({ getView: () => view, onChange: onAutoChange });
 
@@ -292,11 +295,14 @@ function syncControls() {
   $('wheel').value = rp.wheel; $('wheelVal').textContent = rp.wheel;
   document.querySelectorAll('#gap button').forEach(b => b.setAttribute('aria-pressed', String(+b.dataset.gap === rp.gap)));
   document.querySelectorAll('#fMode button').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.mode === modeNow)));
+  document.querySelectorAll('#mpModeSeg button').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.mode === modeNow)));
+  const flipDirBar = $('mpFlipDir');
+  if (flipDirBar) flipDirBar.hidden = modeNow !== 'flip';
+  document.querySelectorAll('#mpFlipDir button').forEach((b) => b.setAttribute('aria-pressed', String((b.dataset.rtl === '1') === !!rp.rtl)));
   document.querySelectorAll('#fFilter button').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.filter === rp.filter)));
   document.querySelectorAll('#flySettings [data-for="scroll"]').forEach(r => { r.hidden = modeNow !== 'scroll'; });
   $('tbModeIcon').innerHTML = `<use href="icons.svg#${modeNow === 'flip' ? 'flip' : 'scroll'}"/>`; $('tbModeText').textContent = t(modeNow === 'flip' ? 'reader.modeFlipShort' : 'reader.modeScrollShort');
   $('autoSpeed').value = auto.speed; $('autoVal').textContent = auto.speed;
-  if ($('rtl')) $('rtl').checked = rp.rtl;
   document.querySelectorAll('#fitModeSeg button').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.fit === rp.fitMode)));
   $('tbFit').title = t(fitModeLabelKey(rp.fitMode));
 }
@@ -325,12 +331,23 @@ $('cropTrim').addEventListener('input', (e) => { rp.cropTrim = +e.target.value; 
 $('gap').addEventListener('click', (e) => { const b = e.target.closest('button'); if (!b) return; rp.gap = +b.dataset.gap; prefs.set('reader.gap', rp.gap); if (view?.mode === 'scroll') view.setGap(rp.gap); syncControls(); });
 $('saver').addEventListener('change', async (e) => { saverNow = e.target.checked; prefs.set('saver', saverNow); await startView({ startPos: view?.topPos() }); });
 const setMode = async (m) => {
+  m = normalizeViewMode(m);
   if (m === modeNow) return;
   modeNow = m;
+  persistBookViewMode(bookId, m, prefs);
   if (helpOpen()) renderHelp();
+  syncControls();
   await startView({ startPos: view?.topPos() });
 };
+const setFlipDir = (rtl) => {
+  rp.rtl = !!rtl;
+  prefs.set('reader.rtl', rp.rtl);
+  view?.setRtl?.(rp.rtl);
+  syncControls();
+};
 $('fMode').addEventListener('click', (e) => { const b = e.target.closest('button'); if (b) setMode(b.dataset.mode); });
+$('mpModeSeg')?.addEventListener('click', (e) => { const b = e.target.closest('[data-mode]'); if (b) setMode(b.dataset.mode); });
+$('mpFlipDir')?.addEventListener('click', (e) => { const b = e.target.closest('[data-rtl]'); if (b) setFlipDir(b.dataset.rtl === '1'); });
 $('tbMode').addEventListener('click', () => setMode(modeNow === 'scroll' ? 'flip' : 'scroll'));
 $('tbFit').addEventListener('click', () => {
   const i = FIT_MODES.indexOf(rp.fitMode);
@@ -338,12 +355,6 @@ $('tbFit').addEventListener('click', () => {
   prefs.set('reader.fitMode', rp.fitMode);
   applyReaderFit(rp.fitMode, view);
   $('tbFit').title = t(fitModeLabelKey(rp.fitMode));
-});
-$('rtl').checked = rp.rtl;
-$('rtl').addEventListener('change', (e) => {
-  rp.rtl = e.target.checked;
-  prefs.set('reader.rtl', rp.rtl);
-  view?.setRtl?.(rp.rtl);
 });
 document.querySelectorAll('#fitModeSeg button').forEach((b) => {
   b.setAttribute('aria-pressed', String(b.dataset.fit === rp.fitMode));

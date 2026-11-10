@@ -725,4 +725,12 @@ body:has(.shell-frame) .shell-top{
 .tag-admin{display:flex;flex-direction:column;gap:8px;margin-bottom:10px}
 .tag-row{display:flex;align-items:center;justify-content:space-between;gap:12px}
 .reader-loupe{position:fixed;width:148px;height:148px;border-radius:50%;border:2px solid var(--accent);pointer-events:none;transform:translate(-50%,-50%);z-index:90;background-repeat:no-repeat;box-shadow:0 14px 42px #0007;background-color:var(--panel2)}
+.mp-mode{display:inline-flex;align-items:center;gap:6px;padding:3px 6px;border-radius:14px;border:1px solid var(--line);background:rgba(255,255,255,.08);max-width:min(52vw,420px);flex-shrink:1}
+.mp-mode__seg{display:inline-flex;flex-shrink:0}
+.mp-mode__seg button{white-space:nowrap;padding:4px 9px;font-size:11px}
+.mp__head .mp-mode{margin:0 6px}
+@media(max-width:900px){
+  .mp-mode{max-width:min(70vw,360px);gap:4px;padding:2px 4px}
+  .mp-mode__seg button{padding:3px 7px;font-size:10px}
+}
 /* ==== end v0.8.1 unified shell ==== */

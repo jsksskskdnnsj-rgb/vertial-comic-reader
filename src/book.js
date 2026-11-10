@@ -7,6 +7,7 @@ import { lib } from './api.js';
 import { mountShell, coverUrl, wireCoverFallback } from './shell-ui.js';
 import { fetchEpisodeInfo } from './chapters.js';
 import * as act from './book-actions.js';
+import { readerOpenHref } from './reader-mode-store.js';
 
 const $ = (id) => document.getElementById(id);
 bootPage('book');
@@ -73,7 +74,9 @@ async function load() {
 }
 
 const after = async (ok, bump) => { if (ok) { if (bump) coverBust = Date.now(); await load(); } };
-$('continueBtn').addEventListener('click', () => { location.href = `reader.html?book=${book.id}`; });
+$('continueBtn').addEventListener('click', () => { location.href = readerOpenHref(book.id); });
+$('openScrollBtn').addEventListener('click', () => { location.href = readerOpenHref(book.id, 'scroll'); });
+$('openFlipBtn').addEventListener('click', () => { location.href = readerOpenHref(book.id, 'flip'); });
 $('startOverBtn').addEventListener('click', async () => after(await act.startOver(book)));
 $('renameBtn').addEventListener('click', async () => after(await act.renameBook(book)));
 $('relinkBtn').addEventListener('click', async () => after(await act.relinkBook(book), true));

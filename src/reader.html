@@ -30,6 +30,16 @@
           <button class="ibtn" id="back" data-i-label="common.back"><svg class="i"><use href="icons.svg#back"/></svg></button>
           <nav class="crumb"><b id="bcBook"></b><span class="sep">/</span><span id="bcEp"></span></nav>
           <span class="spacer"></span>
+          <div class="mp-mode glass" id="mpModeBar">
+            <span class="seg mp-mode__seg" id="mpModeSeg" role="group" data-i-label="reader.viewMode">
+              <button type="button" data-mode="scroll" data-i="reader.modeScrollShort"></button>
+              <button type="button" data-mode="flip" data-i="reader.modeFlipShort"></button>
+            </span>
+            <span class="seg mp-mode__seg" id="mpFlipDir" hidden role="group" data-i-label="reader.flipDirection">
+              <button type="button" data-rtl="0" data-i="reader.dirLtr"></button>
+              <button type="button" data-rtl="1" data-i="reader.dirRtl"></button>
+            </span>
+          </div>
           <button class="pgcount num" id="pgCount" data-i-label="reader.jump">- / -</button>
           <button class="ibtn" id="helpBtn" type="button" data-i-label="help.title"><svg class="i"><use href="icons.svg#info"/></svg></button>
           <button class="ibtn" id="bpToggle" data-i-label="reader.toggleHistory"><svg class="i"><use href="icons.svg#list"/></svg></button>
@@ -109,7 +119,7 @@
       <section class="glass-strong flyout" id="flySettings" hidden>
         <div class="row"><span data-i="reader.mode"></span><span class="seg" id="fMode"><button data-mode="scroll" data-i="reader.modeScroll"></button><button data-mode="flip" data-i="reader.modeFlip"></button></span></div>
         <div class="row"><span data-i="reader.fit"></span><span class="seg" id="fitModeSeg"><button data-fit="width" data-i="reader.fitWidth"></button><button data-fit="height" data-i="reader.fitHeight"></button><button data-fit="original" data-i="reader.fitOriginal"></button></span></div>
-        <div class="row"><span data-i="reader.rtl"></span><input id="rtl" type="checkbox"></div>
+        <p class="hint" data-i="reader.flipDirHint"></p>
         <div class="row" data-for="scroll"><span data-i="reader.width"></span><input id="w" type="range" min="40" max="100" step="5" style="width:150px"></div>
         <div class="row" data-for="scroll"><span data-i="reader.wheel"></span><input id="wheel" type="range" min="1" max="5" step="1" style="width:120px"><span class="num" id="wheelVal"></span></div>
         <div class="row" data-for="scroll"><span data-i="reader.gap"></span><span class="seg" id="gap"><button data-gap="0">0</button><button data-gap="8">8</button><button data-gap="16">16</button></span></div>

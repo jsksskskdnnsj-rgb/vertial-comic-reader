@@ -16,7 +16,7 @@ const ROWS = [
   { keys: 'Ctrl  +  −  0', i18n: 'help.zoom', modes: ['scroll'] },
   { keys: 'L', i18n: 'help.loupe', modes: ['both'] },
   { keys: 'B', i18n: 'help.bookmark', modes: ['both'] },
-  { keys: 'M', i18n: 'help.mode', modes: ['both'] },
+  { keys: 'M', i18n: 'help.modeToggle', modes: ['both'] },
   { keys: 'A', i18n: 'help.auto', modes: ['both'] },
   { keys: 'D', i18n: 'help.dir', modes: ['scroll'] },
   { keys: 'C', i18n: 'help.history', modes: ['both'] },
