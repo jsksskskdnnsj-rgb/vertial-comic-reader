@@ -5,7 +5,9 @@
 // App shell pieces that used to live in this file are now paths / appdata /
 // config / shelf / window; main only wires plugins, protocols, and commands.
 mod adapters;
+mod archives;
 mod appdata;
+mod backup;
 mod bookmarks;
 mod cache;
 mod chapters;
@@ -23,6 +25,7 @@ mod protocol;
 mod scan;
 mod shelf;
 mod shelf_scan;
+mod tags;
 mod window;
 
 use rusqlite::Connection;
@@ -187,7 +190,17 @@ fn main() {
             library::book_reset_progress,
             library::check_books_missing,
             library::import_merged,
-            library::library_stats
+            library::library_stats,
+            tags::list_tags,
+            tags::tag_create,
+            tags::tag_rename,
+            tags::tag_delete,
+            tags::book_set_tags,
+            tags::book_set_favorite,
+            tags::books_tags_bulk,
+            tags::find_duplicate_books,
+            backup::export_library_backup,
+            backup::import_library_backup,
         ])
         .on_window_event(|window, event| match event {
             tauri::WindowEvent::DragDrop(tauri::DragDropEvent::Drop { paths, .. }) => {

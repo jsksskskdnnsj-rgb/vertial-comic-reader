@@ -234,6 +234,7 @@ pub(crate) fn db_conn() -> Result<Connection, String> {
     .map_err(|e| e.to_string())?;
     crate::shelf_scan::ensure_scan_tables(&conn)?;
     crate::merge::ensure_tables(&conn)?;
+    crate::tags::migrate(&conn)?;
     Ok(conn)
 }
 

@@ -192,6 +192,27 @@
         <p class="hint"><span data-i="settings.version"></span> <span class="num" id="ver">—</span></p>
       </section>
 
+      <section class="panel glass" id="tagsPanel">
+        <h2><svg class="i"><use href="icons.svg#bookmark"/></svg><span data-i="settings.tags"></span></h2>
+        <p class="hint" data-i="settings.tagsHelp"></p>
+        <div class="tag-admin" id="tagList"></div>
+        <div class="set-row">
+          <input class="field" id="tagName" type="text" maxlength="32" placeholder="">
+          <button class="btn btn--ghost btn--sm" id="tagAdd" type="button" data-i="settings.tagAdd"></button>
+        </div>
+      </section>
+
+      <section class="panel glass">
+        <h2><svg class="i"><use href="icons.svg#db"/></svg><span data-i="settings.backup"></span></h2>
+        <p class="hint" data-i="settings.backupHelp"></p>
+        <div class="set-row">
+          <button class="btn btn--ghost btn--sm" id="backupExport" type="button" data-i="settings.backupExport"></button>
+          <button class="btn btn--ghost btn--sm" id="backupImport" type="button" data-i="settings.backupImport"></button>
+          <button class="btn btn--ghost btn--sm" id="dupScan" type="button" data-i="settings.dupScan"></button>
+        </div>
+        <p class="hint muted num" id="dupOut" hidden></p>
+      </section>
+
       <section class="panel glass danger-zone">
         <h2><svg class="i"><use href="icons.svg#trash"/></svg><span data-i="settings.clearLibrary"></span></h2>
         <div class="set-row">

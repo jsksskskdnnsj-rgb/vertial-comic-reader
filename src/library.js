@@ -21,6 +21,7 @@ import { libraryCoversToWarm } from './library-cover-warm.js';
 import * as act from './book-actions.js';
 import { openMergeDialog } from './merge-ui.js';
 import { libraryRenderCount, LIBRARY_RENDER_BATCH, libraryScopeKey } from './library-render-window.js';
+import { readPresets, writePresets, snapshotPreset, applyPreset } from './library-presets.js';
 
 const params = new URLSearchParams(location.search);
 const view = params.get('view') || '';
@@ -47,10 +48,26 @@ let activeScope = '';
 let renderCount = LIBRARY_RENDER_BATCH;
 let picking = false;
 const selected = new Set();
+let tags = [];
+let bookTags = new Map();
+let tagNames = new Map();
+let favoriteOnly = !!prefs.get('libFavoriteOnly', false);
+let filterTagId = prefs.get('libTagFilter', null);
+function tagLabelMap() {
+  const m = new Map(tags.map((tg) => [tg.id, tg.name]));
+  tagNames = new Map();
+  for (const b of books) {
+    const ids = bookTags.get(b.id) || [];
+    tagNames.set(b.id, ids.map((id) => m.get(id)).filter(Boolean));
+  }
+}
 const countStoreKey = (scope) => `mh.lib.count.${scope}`;
 const scrollStoreKey = (scope) => `mh.lib.scroll.${scope}`;
 function filterScope() {
-  return libraryScopeKey({ view, filter: String(filter), status: statusFilter, sort: sortMode, query, mode: viewMode });
+  return libraryScopeKey({
+    view, filter: String(filter), status: statusFilter, sort: sortMode, query, mode: viewMode,
+    fav: favoriteOnly ? '1' : '0', tag: filterTagId ?? '',
+  });
 }
 function rememberScroll() {
   const main = document.querySelector('.page-main');
@@ -99,7 +116,10 @@ const KIND_KEY = { zip: 'type.zip', folder: 'type.folder', images: 'type.images'
 const coverOf = (b) => coverUrl(b.id, bust.get(b.id) ?? 0);
 
 function visibleBooks() {
-  const list = filterBooks(books, { view, folder: filter, status: statusFilter, query, bmCounts });
+  const list = filterBooks(books, {
+    view, folder: filter, status: statusFilter, query, bmCounts,
+    favoriteOnly, tagId: filterTagId, bookTags, tagNames,
+  });
   if (sortMode === 'added') return list.sort((a, b) => (b.created_at || 0) - (a.created_at || 0));
   if (sortMode === 'progress') {
     return list.sort((a, b) => {
@@ -166,14 +186,19 @@ function rowHtml(b, { cnt, pct, meta, kind, st, read }) {
     <span class="lib-row__chips">
       <span class="lib-chip lib-chip--${st}">${esc(t(STATUS_KEY[st]))} · <span class="num">${pct}%</span></span>
       ${kind ? `<span class="lib-chip">${esc(t(kind))}</span>` : ''}
-      ${cnt > 0 ? `<span class="lib-chip" title="${esc(t('bookmarks.title'))}">★ <span class="num">${cnt}</span></span>` : ''}
+      ${b.favorite ? `<span class="lib-chip lib-chip--fav" title="${esc(t('lib.favorite'))}">★</span>` : ''}
+      ${(bookTags.get(b.id) || []).slice(0, 3).map((id) => {
+        const tg = tags.find((x) => x.id === id);
+        return tg ? `<span class="lib-chip lib-chip--tag" style="--tag:${esc(tg.color)}">${esc(tg.name)}</span>` : '';
+      }).join('')}
+      ${cnt > 0 ? `<span class="lib-chip" title="${esc(t('bookmarks.title'))}">🔖 <span class="num">${cnt}</span></span>` : ''}
       ${missing.has(b.id) ? `<span class="lib-chip lib-chip--warn">${esc(t('lib.missing'))}</span>` : ''}
     </span>
     <button class="more-btn" data-more="${b.id}" aria-label="${esc(t('lib.menu'))}"><svg class="i"><use href="icons.svg#more"/></svg></button>
   </article>`;
 }
 function renderStatus() {
-  const counts = countStatuses(books, { view, folder: filter, query, bmCounts });
+  const counts = countStatuses(books, { view, folder: filter, query, bmCounts, favoriteOnly, tagId: filterTagId, bookTags, tagNames });
   document.querySelectorAll('#statusSeg button').forEach((b) => {
     b.setAttribute('aria-pressed', String(b.dataset.status === statusFilter));
     const c = b.querySelector('.cnt'); if (c) c.textContent = counts[b.dataset.status];
@@ -250,6 +275,11 @@ function bookMenu(btn, b) {
   const r = btn.getBoundingClientRect();
   const items = [
     { a: 'open', label: t('lib.open'), fn: () => (location.href = `reader.html?book=${b.id}`) },
+    { a: 'fav', label: b.favorite ? t('lib.unfavorite') : t('lib.favorite'), fn: async () => {
+      await lib.tags.setFavorite(b.id, !b.favorite).catch(() => {});
+      b.favorite = !b.favorite;
+      renderGrid({ keepScroll: true });
+    } },
     { a: 'details', label: t('lib.details'), fn: () => (location.href = `book.html?book=${b.id}`) },
     { a: 'rename', label: t('lib.rename'), fn: async () => reload(await act.renameBook(b)) },
     { a: 'move', label: t('lib.moveTo'), fn: () => moveMenu(b, r.left, r.bottom + 5) },
@@ -385,8 +415,30 @@ async function loadExtras(slice) {
   for (const id of found) edited.add(id);
   renderFolders();
   const list = visibleBooks();
-  const slice = list.slice(0, libraryRenderCount(list.length, renderCount));
-  $('grid').innerHTML = slice.map((b) => cardHtml(b)).join('');
+  const slice2 = list.slice(0, libraryRenderCount(list.length, renderCount));
+  $('grid').innerHTML = slice2.map((b) => cardHtml(b)).join('');
+}
+function renderTagFilter() {
+  const sel = $('tagFilter');
+  if (!sel) return;
+  const opts = [`<option value="">${esc(t('lib.tagAll'))}</option>`]
+    .concat(tags.map((tg) => `<option value="${tg.id}">${esc(tg.name)}</option>`));
+  sel.innerHTML = opts.join('');
+  sel.hidden = tags.length === 0;
+  sel.value = filterTagId != null ? String(filterTagId) : '';
+}
+function renderPresets() {
+  const sel = $('presetSel');
+  if (!sel) return;
+  const list = readPresets();
+  const cur = sel.value;
+  sel.innerHTML = `<option value="">${esc(t('lib.presetNone'))}</option>` + list.map((p) => `<option value="${esc(p.id)}">${esc(p.name)}</option>`).join('');
+  if (cur && list.some((p) => p.id === cur)) sel.value = cur;
+}
+function renderFavSeg() {
+  document.querySelectorAll('#favSeg button').forEach((b) => {
+    b.setAttribute('aria-pressed', String(+(b.dataset.fav || 0) === (favoriteOnly ? 1 : 0)));
+  });
 }
 function firstPath(b) {
   try {
@@ -447,6 +499,7 @@ function cardHtml(b) {
       <div class="cover-wrap">
         ${picking ? '<span class="pick-mark" aria-hidden="true"></span>' : ''}
         <img class="cover" alt="" loading="lazy" data-cover="${b.id}" src="${coverOf(b)}">
+        ${b.favorite ? `<i class="ribbon ribbon--fav" title="${esc(t('lib.favorite'))}">★</i>` : ''}
         ${cnt > 0 ? `<i class="ribbon" title="${esc(t('bookmarks.title'))}">${cnt}</i>` : ''}
         ${kind ? `<span class="kind-badge">${esc(t(kind))}</span>` : ''}
         ${missing.has(b.id) ? `<span class="missing-badge">${esc(t('lib.missing'))}</span>` : `<span class="prog-badge prog-badge--${st}">${esc(badgeText(st, pct))}</span>`}
@@ -469,16 +522,60 @@ async function load() {
   refreshMergeBanner();
   render(); // first paint: this page of covers, names, progress
 
-  const [counts, miss] = await Promise.all([
+  const [counts, miss, tagList, tagMap] = await Promise.all([
     books.length ? invoke('bookmark_counts', { bookIds: books.map((b) => b.id) }).catch(() => []) : [],
     lib.missing().catch(() => []),
+    lib.tags.list().catch(() => []),
+    lib.tags.map().catch(() => []),
   ]);
   if (my !== loadSeq) return;
   bmCounts = new Map((counts || []).map((r) => [r.bookId, r.count]));
   missing = new Set(miss || []);
+  tags = tagList || [];
+  bookTags = new Map((tagMap || []).map((r) => [r.bookId, r.tagIds || []]));
+  tagLabelMap();
+  renderTagFilter();
+  renderPresets();
+  renderFavSeg();
   renderFolders();
   renderGrid({ keepScroll: true });
 }
+$('favSeg')?.addEventListener('click', (e) => {
+  const b = e.target.closest('[data-fav]'); if (!b) return;
+  favoriteOnly = b.dataset.fav === '1';
+  prefs.set('libFavoriteOnly', favoriteOnly);
+  renderFavSeg();
+  renderGrid();
+});
+$('tagFilter')?.addEventListener('change', () => {
+  const v = $('tagFilter').value;
+  filterTagId = v ? +v : null;
+  prefs.set('libTagFilter', filterTagId);
+  renderGrid();
+});
+$('presetSel')?.addEventListener('change', () => {
+  const id = $('presetSel').value;
+  const p = readPresets().find((x) => x.id === id);
+  if (!p) return;
+  applyPreset(p, (st) => {
+    sortMode = st.sort; statusFilter = st.status; viewMode = st.mode; filter = st.folder;
+    favoriteOnly = !!st.favoriteOnly; filterTagId = st.tagId;
+    prefs.set('libSort', sortMode); prefs.set('libStatus', statusFilter); prefs.set('libMode', viewMode);
+    prefs.set('libFolder', filter); prefs.set('libFavoriteOnly', favoriteOnly); prefs.set('libTagFilter', filterTagId);
+    $('sortSel').value = sortMode;
+    renderFavSeg(); renderTagFilter();
+    renderGrid();
+  });
+});
+$('presetSave')?.addEventListener('click', async () => {
+  const name = await promptDialog({ title: t('lib.presetSave'), placeholder: t('lib.presetName'), ok: t('common.save') });
+  if (!name) return;
+  const list = readPresets();
+  list.unshift(snapshotPreset(name, { sort: sortMode, status: statusFilter, mode: viewMode, folder: filter, favoriteOnly, tagId: filterTagId }));
+  writePresets(list);
+  renderPresets();
+  toast(t('common.saved'));
+});
 $('pickMode').addEventListener('click', () => {
   picking = !picking;
   if (!picking) selected.clear();

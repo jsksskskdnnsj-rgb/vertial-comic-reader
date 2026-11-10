@@ -3,6 +3,7 @@ import { api, pageUrl } from './reader.js';
 import { Layout } from './layout.js';
 import { applyCropStyle, cropCacheKey, detectCropFromImage, mergeCropInsets } from './reader-crop.js';
 import { flipWarmPages, flipTapZone } from './flip-adjacent.js';
+import { rtlStep, rtlTapZone } from './reader-rtl.js';
 
 export class FlipView {
   constructor(host, { onPosition = () => {}, scrubber = null } = {}) {
@@ -13,6 +14,7 @@ export class FlipView {
     this.page = 0;
     this.spread = false;
     this.crop = { enabled: false, auto: true, manualTrim: 0, cache: new Map(), detectOpts: {} };
+    this.rtl = false;
     this.info = null;
     this.layout = new Layout();
     this.params = { widthPct: 100, spreadGap: 8 };
@@ -25,7 +27,7 @@ export class FlipView {
     };
     this._tap = (e) => {
       const stage = e.currentTarget;
-      const z = flipTapZone(e.clientX - stage.getBoundingClientRect().left, stage.clientWidth);
+      const z = rtlTapZone(flipTapZone(e.clientX - stage.getBoundingClientRect().left, stage.clientWidth), this.rtl);
       if (z < 0) this.prev();
       else if (z > 0) this.next();
     };
@@ -148,8 +150,9 @@ export class FlipView {
     }
     this.render();
   }
-  prev() { this.stepPage(-1); }
-  next() { this.stepPage(1); }
+  setRtl(on) { this.rtl = !!on; }
+  prev() { this.stepPage(rtlStep(-1, this.rtl)); }
+  next() { this.stepPage(rtlStep(1, this.rtl)); }
   scrollable() { return false; }
   setFit() {
     this.params.widthPct = 100;

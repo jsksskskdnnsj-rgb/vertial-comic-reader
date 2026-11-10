@@ -275,6 +275,50 @@ lib.stats().then((s) => {
     cell(s.folders, t('lib.folders')) + cell(s.inProgress, t('reader.history')) +
     cell(s.finished, t('end.title')) + cell(s.bookmarkedBooks, t('bookmarks.title'));
 }).catch(() => {});
+async function refreshTags() {
+  const list = await lib.tags.list().catch(() => []);
+  $('tagList').innerHTML = list.length
+    ? list.map((tg) => `<div class="tag-row"><span class="lib-chip lib-chip--tag" style="--tag:${esc(tg.color)}">${esc(tg.name)}</span>
+      <button class="btn btn--ghost btn--sm" data-tag-del="${tg.id}" type="button">${esc(t('common.delete'))}</button></div>`).join('')
+    : `<p class="muted">${esc(t('settings.tagsEmpty'))}</p>`;
+}
+$('tagName').placeholder = t('settings.tagName');
+$('tagList').addEventListener('click', async (e) => {
+  const id = e.target.closest('[data-tag-del]')?.dataset.tagDel;
+  if (!id) return;
+  if (!await confirmDialog({ title: t('common.delete'), message: t('settings.tagDeleteMsg'), ok: t('common.delete'), danger: true })) return;
+  try { await lib.tags.delete(+id); toast(t('common.saved')); refreshTags(); } catch (err) { toast(errText(err)); }
+});
+$('tagAdd').addEventListener('click', async () => {
+  const name = $('tagName').value.trim();
+  if (!name) return;
+  try { await lib.tags.create(name); $('tagName').value = ''; toast(t('common.saved')); refreshTags(); }
+  catch (e) { toast(errText(e)); }
+});
+refreshTags();
+
+$('backupExport').addEventListener('click', async () => {
+  const picked = await T.dialog.save({ filters: [{ name: 'MH backup', extensions: ['zip'] }] }).catch(() => null);
+  if (!picked) return;
+  try {
+    const r = await lib.exportBackup(picked);
+    toast(t('settings.backupDone', { n: Math.round((r.bytes || 0) / 1024) }));
+  } catch (e) { toast(errText(e)); }
+});
+$('backupImport').addEventListener('click', async () => {
+  const picked = await T.dialog.open({ filters: [{ name: 'MH backup', extensions: ['zip'] }] }).catch(() => null);
+  if (!picked) return;
+  if (!await confirmDialog({ title: t('settings.backupImport'), message: t('settings.backupImportMsg'), ok: t('common.ok') })) return;
+  try { await lib.importBackup(picked); toast(t('settings.backupImportDone')); setTimeout(() => location.reload(), 800); }
+  catch (e) { toast(errText(e)); }
+});
+$('dupScan').addEventListener('click', async () => {
+  const groups = await lib.tags.duplicates().catch(() => []);
+  const n = groups.length;
+  $('dupOut').hidden = false;
+  $('dupOut').textContent = n ? t('settings.dupFound', { n, books: groups.reduce((a, g) => a + g.length, 0) }) : t('settings.dupNone');
+});
+
 $('clearShelf').addEventListener('click', async () => {
   if (!await confirmDialog({ title: t('settings.clearLibrary'), message: t('settings.clearLibraryConfirm'), ok: t('common.delete'), danger: true })) return;
   try { await invoke('shelf_clear'); toast(t('common.saved')); setTimeout(() => location.reload(), 600); }

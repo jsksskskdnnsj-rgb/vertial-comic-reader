@@ -22,10 +22,18 @@ export const statusOf = (b) => (isFinished(b) ? 'finished' : (b.last_page || 0) 
 export function matchesBase(b, o) {
   if (o.view === 'recent' && !(b.last_page > 0)) return false;
   if (o.view === 'marked' && !((o.bmCounts?.get(b.id) || 0) > 0)) return false;
+  if (o.favoriteOnly && !b.favorite) return false;
+  if (o.tagId != null) {
+    const tags = o.bookTags?.get(b.id) || [];
+    if (!tags.includes(o.tagId)) return false;
+  }
   if (o.folder === 'none' && b.folder_id != null) return false;
   if (typeof o.folder === 'number' && b.folder_id !== o.folder) return false;
   const q = String(o.query || '').trim().toLowerCase();
-  if (q && !String(b.name || '').toLowerCase().includes(q)) return false;
+  if (q) {
+    const hay = `${b.name || ''} ${(o.tagNames?.get(b.id) || []).join(' ')}`.toLowerCase();
+    if (!hay.includes(q)) return false;
+  }
   return true;
 }
 /** o additionally has `status` ('all' or missing = no status filter). */

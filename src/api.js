@@ -44,6 +44,19 @@ export const lib = {
   importPaths: (paths, folderId = null) => invoke('import_paths', { paths, folderId }),
   importMerged: (paths, name = null, folderId = null) =>
     invoke('import_merged', { paths, name, folderId }),
+
+  tags: {
+    list: () => invoke('list_tags'),
+    create: (name, color) => invoke('tag_create', { name, color }),
+    rename: (id, name) => invoke('tag_rename', { id, name }),
+    delete: (id) => invoke('tag_delete', { id }),
+    map: () => invoke('books_tags_bulk'),
+    setOnBook: (bookId, tagIds) => invoke('book_set_tags', { bookId, tagIds }),
+    setFavorite: (bookId, favorite) => invoke('book_set_favorite', { bookId, favorite }),
+    duplicates: () => invoke('find_duplicate_books'),
+  },
+  exportBackup: (destPath) => invoke('export_library_backup', { destPath }),
+  importBackup: (srcPath) => invoke('import_library_backup', { srcPath }),
 };
 
 export { invoke };

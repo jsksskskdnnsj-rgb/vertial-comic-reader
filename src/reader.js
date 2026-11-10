@@ -6,6 +6,7 @@
 //           ProgressSaver (debounced save)   Scrubber (bottom slider)   Reader (glue)
 import { Layout } from './layout.js';
 import { applyCropStyle, cropCacheKey, detectCropFromImage, mergeCropInsets } from './reader-crop.js';
+import { rtlPageDelta } from './reader-rtl.js';
 
 const T = globalThis.window?.__TAURI__;
 const invoke = (cmd, args) => (T?.core?.invoke ? T.core.invoke(cmd, args) : Promise.reject(new Error('no backend')));
@@ -517,6 +518,7 @@ export class Reader {
   constructor(host, { onPosition = () => {}, scrubber = null } = {}) {
     this.host = host; this.onPosition = onPosition; this.scrubberEls = scrubber;
     this.strip = new Strip(host);
+    this.rtl = false;
     this.params = { widthPct: 100, maxW: Infinity, zoom: 1, gap: 0, endPad: CFG.endPad, spread: false, spreadGap: 8 };
     this.crop = { enabled: false, auto: true, manualTrim: 0, cache: new Map(), detectOpts: {} };
     this.wheelGear = WHEEL_GEAR_DEFAULT;
@@ -588,6 +590,7 @@ export class Reader {
   centerPos() { return this.strip.layout.getPosition(this.strip.scroller.scrollTop + this.strip.viewH / 2); }   // what B bookmarks
   stepPage(dir) { const p = this.topPos(); const to = clamp(p.page + dir, 0, this.strip.layout.realPages - 1); this.jumpTo({ page: to, frac: 0 }, { smooth: true }); }
   refresh() { this.tracker?.tick(); }
+  setRtl(on) { this.rtl = !!on; }
   setFit() { this.params.zoom = 1; this.params.widthPct = 100; this.strip.relayout(this.layoutParams()); }   // "fit to panel"
   keysEnabled = true;
 
@@ -716,8 +719,12 @@ export class Reader {
     if (e.repeat) return;                                      // don't stack Home/End/side jumps
     const page = this.strip.layout.getPosition(this.strip.scroller.scrollTop).page;
     switch (e.key) {
-      case 'ArrowRight': this.jumpTo({ page: page + 1, frac: 0 }, { smooth: true }); break;
-      case 'ArrowLeft':  this.jumpTo({ page: Math.max(0, page - 1), frac: 0 }, { smooth: true }); break;
+      case 'ArrowRight':
+      case 'ArrowLeft': {
+        const d = rtlPageDelta(e.key, this.rtl);
+        if (d) this.jumpTo({ page: page + d, frac: 0 }, { smooth: true });
+        break;
+      }
       case 'Home': this.jumpTo({ page: 0, frac: 0 }); break;
       case 'End':  this.jumpTo({ page: this.strip.layout.realPages - 1, frac: 0.9999 }); break;
       default:

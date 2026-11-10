@@ -68,6 +68,15 @@ export default {
   'lib.sortRecent': '\u6700\u8fd1\u9605\u8bfb', // Recently read
   'lib.sortAdded': '\u6700\u8fd1\u6dfb\u52a0', // Recently added
   'lib.sortProgress': '\u9605\u8bfb\u8fdb\u5ea6\uff08\u9ad8\u2192\u4f4e\uff09', // Reading progress (high to low)
+  'lib.preset': '\u7b5b\u9009\u9884\u8bbe',
+  'lib.presetNone': '\u65e0\u9884\u8bbe',
+  'lib.presetSave': '\u4fdd\u5b58\u9884\u8bbe',
+  'lib.presetName': '\u9884\u8bbe\u540d\u79f0',
+  'lib.favAll': '\u5168\u90e8\u56fe\u4e66',
+  'lib.favOnly': '\u6536\u85cf',
+  'lib.favorite': '\u6536\u85cf',
+  'lib.unfavorite': '\u53d6\u6d88\u6536\u85cf',
+  'lib.tagAll': '\u5168\u90e8\u6807\u7b7e',
   'lib.sortName': '\u540d\u79f0\uff08A\u2013Z\uff09', // Name (A–Z)
   'lib.noBooks': '\u6ca1\u6709\u5339\u914d\u7684\u4e66\u3002', // No books match.
   'lib.missing': '\u6587\u4ef6\u7f3a\u5931', // Missing
@@ -134,6 +143,7 @@ export default {
   'imp.summary': '\u65b0\u589e {a} \u672c\uff0c\u8df3\u8fc7 {s} \u672c', // Added {a}, skipped {s}
   'imp.working': '\u6b63\u5728\u5bfc\u5165\u2026', // Importing…
   'imp.zipFilter': '\u6f2b\u753b\u538b\u7f29\u5305', // Comic archives
+  'imp.archiveFilter': '\u6f2b\u753b\u538b\u7f29\u5305\uff08ZIP/CBZ/7Z/RAR\uff09',
   'settings.about': '\u5173\u4e8e', // About
   'settings.accent': '\u4e3b\u9898\u8272', // Accent color
   'settings.accentCustom': '\u81ea\u5b9a\u4e49\u989c\u8272', // Custom color
@@ -209,6 +219,12 @@ export default {
   'reader.tbAuto': '\u81ea\u52a8\u6eda\u52a8', // Auto-scroll
   'reader.tbBookmarks': '\u4e66\u7b7e', // Bookmarks
   'reader.tbFit': '\u9002\u5e94', // Fit
+  'reader.fit': '\u9875\u9762\u9002\u5e94',
+  'reader.fitWidth': '\u9002\u5e94\u5bbd\u5ea6',
+  'reader.fitHeight': '\u9002\u5e94\u9ad8\u5ea6',
+  'reader.fitOriginal': '\u539f\u59cb\u5c3a\u5bf8',
+  'reader.fitCustom': '\u81ea\u5b9a\u4e49\u7f29\u653e',
+  'reader.rtl': '\u53f3\u8bfb\u65e5\u6f2b\uff08\u4ece\u53f3\u5f80\u5de6\uff09',
   'reader.tbPages': '\u76ee\u5f55', // Pages
   'reader.tbSettings': '\u9605\u8bfb\u8bbe\u7f6e', // Settings
   'reader.toggleHistory': '\u663e\u793a / \u9690\u85cf\u9605\u8bfb\u5386\u53f2', // Show / hide reading history
@@ -305,6 +321,22 @@ export default {
   'settings.clearLibraryHelp': '从书架中移除所有书籍。',
   'settings.clearLibraryBtn': '清空书架',
   'settings.clearLibraryConfirm': '要从书架中移除所有书籍吗？此操作无法撤销。',
+  'settings.tags': '标签',
+  'settings.tagsHelp': '标签用于书库搜索与筛选预设。',
+  'settings.tagsEmpty': '尚无标签。',
+  'settings.tagAdd': '添加标签',
+  'settings.tagName': '标签名称',
+  'settings.tagDeleteMsg': '从所有图书上移除此标签？',
+  'settings.backup': '备份与恢复',
+  'settings.backupHelp': '将 mh-reader.db 与 reader-config.json 打包为 ZIP。导入后需重启。',
+  'settings.backupExport': '导出备份…',
+  'settings.backupImport': '导入备份…',
+  'settings.backupImportMsg': '覆盖当前数据库与阅读配置？完成后请重启 MH。',
+  'settings.backupDone': '已保存备份（{n} KB）',
+  'settings.backupImportDone': '备份已导入，请重启 MH',
+  'settings.dupScan': '查找重复书籍',
+  'settings.dupFound': '{n} 组重复，共 {books} 本',
+  'settings.dupNone': '未发现完全重复（名称+类型+路径一致）',
   'imp.scanning': '正在扫描文件夹…',
   'imp.image1': '1 张图片',
   'imp.imagesCount': '{n} 张图片',
@@ -361,6 +393,7 @@ export default {
   'help.flipTap': '点击画面左缘或右缘翻页',
   'help.ends': '第一页或最后一页',
   'help.zoom': '放大、缩小，或回到 100%（竖滑模式）',
+  'help.loupe': '放大镜（移动查看）',
   'help.bookmark': '在此处添加或取消书签',
   'help.mode': '切换竖滑和翻页',
   'help.auto': '开始或停止自动滚动',

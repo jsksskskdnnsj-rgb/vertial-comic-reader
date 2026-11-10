@@ -35,6 +35,17 @@
               </select>
             </label>
           </div>
+          <div class="lib-toolbar preset-bar">
+            <label class="preset-label muted"><span data-i="lib.preset"></span>
+              <select class="select" id="presetSel"><option value="" data-i="lib.presetNone"></option></select>
+            </label>
+            <button class="btn btn--ghost btn--sm" id="presetSave" type="button" data-i="lib.presetSave"></button>
+            <span class="seg" id="favSeg" role="group">
+              <button data-fav="0" data-i="lib.favAll"></button>
+              <button data-fav="1" data-i="lib.favOnly"></button>
+            </span>
+            <select class="select" id="tagFilter" hidden></select>
+          </div>
           <div class="lib-toolbar">
             <span class="seg" id="statusSeg" role="group" data-i-label="lib.statusFilter">
               <button data-status="all"><span data-i="lib.statusAll"></span> <span class="cnt num"></span></button>

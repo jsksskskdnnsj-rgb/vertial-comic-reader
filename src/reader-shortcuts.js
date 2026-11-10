@@ -14,6 +14,7 @@ const ROWS = [
   { keys: 'L / R edge click', i18n: 'help.flipTap', modes: ['flip'] },
   { keys: 'Home  ·  End', i18n: 'help.ends', modes: ['scroll'] },
   { keys: 'Ctrl  +  −  0', i18n: 'help.zoom', modes: ['scroll'] },
+  { keys: 'L', i18n: 'help.loupe', modes: ['both'] },
   { keys: 'B', i18n: 'help.bookmark', modes: ['both'] },
   { keys: 'M', i18n: 'help.mode', modes: ['both'] },
   { keys: 'A', i18n: 'help.auto', modes: ['both'] },

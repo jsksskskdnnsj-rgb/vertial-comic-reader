@@ -21,5 +21,7 @@ export function libraryScopeKey(parts) {
     o.sort ?? '',
     o.query ?? '',
     o.mode ?? '',
+    o.fav ?? '',
+    o.tag ?? '',
   ]);
 }

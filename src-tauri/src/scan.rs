@@ -103,6 +103,10 @@ pub fn scan_zip(path: &Path) -> Result<Vec<RealPage>, ReaderError> {
     Ok(out)
 }
 
+pub fn count_images_recursive(root: &Path) -> usize {
+    scan_folder(root).len()
+}
+
 pub fn scan_folder(root: &Path) -> Vec<RealPage> {
     let mut files: Vec<(String, u64)> = walkdir::WalkDir::new(root)
         .follow_links(false)
