@@ -7,7 +7,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { Layout } from '../src/layout.js';
+import { COL_MIN_PX, Layout, WIDTH_PCT_MAX, WIDTH_PCT_MIN, clampWidthPct } from '../src/layout.js';
 import {
   PERF, WHEEL_GEAR_DEFAULT, virtualsNear, wheelGear, wheelMultiplier, wheelScrollDelta,
 } from '../src/reader.js';
@@ -28,17 +28,21 @@ function book(n, w = 1000, h = 1400) {
 }
 
 // Scroll mode passes Infinity: 100% fills the pane, the slider still scales it,
-// and a narrow pane is not forced wider than itself (except the 120px floor).
+// and a narrow pane is not forced wider than itself (except the column floor).
 {
   const L = book(4);
   L.compute({ viewW: 1800, widthPct: 100, maxW: Infinity });
   assert.equal(L.colW, 1800);
   L.compute({ viewW: 1800, widthPct: 70, maxW: Infinity });
   assert.equal(L.colW, 1260);
+  L.compute({ viewW: 1800, widthPct: WIDTH_PCT_MIN, maxW: Infinity });
+  assert.equal(L.colW, Math.round(1800 * WIDTH_PCT_MIN / 100));
   L.compute({ viewW: 360, widthPct: 100, maxW: Infinity });
   assert.equal(L.colW, 360);
   L.compute({ viewW: 200, widthPct: 40, maxW: Infinity });
-  assert.equal(L.colW, 120);
+  assert.equal(L.colW, 80);
+  L.compute({ viewW: 200, widthPct: WIDTH_PCT_MIN, maxW: Infinity });
+  assert.equal(L.colW, COL_MIN_PX);
 }
 
 // Width changes keep {page, frac}. That is the saved reading position.
@@ -85,6 +89,22 @@ assert.deepEqual(
   assert.equal(PERF.saver.variant, 1600);
   assert.equal(PERF.balanced.variant, 0);
 }
+
+// Saved widths inside the old 40–100 range still load. Outsiders clamp.
+assert.equal(WIDTH_PCT_MIN, 20);
+assert.equal(WIDTH_PCT_MAX, 100);
+assert.equal(clampWidthPct(40), 40);
+assert.equal(clampWidthPct(55), 55);
+assert.equal(clampWidthPct(100), 100);
+assert.equal(clampWidthPct(10), 20);
+assert.equal(clampWidthPct(150), 100);
+assert.equal(clampWidthPct('80'), 80);
+assert.equal(clampWidthPct('nope'), 100);
+
+const readerHtml = fs.readFileSync(path.join(root, 'src/reader.html'), 'utf8');
+const settingsHtml = fs.readFileSync(path.join(root, 'src/settings.html'), 'utf8');
+assert.match(readerHtml, /id="w"[^>]*min="20"[^>]*max="100"[^>]*step="5"/);
+assert.match(settingsHtml, /id="widthRange"[^>]*min="20"[^>]*max="100"[^>]*step="5"/);
 
 const src = fs.readFileSync(path.join(root, 'src/reader.js'), 'utf8');
 assert.match(src, /maxW: Infinity/);

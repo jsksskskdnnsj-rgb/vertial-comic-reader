@@ -14,6 +14,7 @@ import { shortcutHelpRows } from './reader-shortcuts.js';
 import { FIT_MODES, applyReaderFit, fitModeLabelKey } from './reader-fit.js';
 import { ReaderLoupe } from './reader-loupe.js';
 import { resolveBookViewMode, persistBookViewMode, normalizeViewMode, readerOpenHref } from './reader-mode-store.js';
+import { WIDTH_PCT_MAX, WIDTH_PCT_MIN, clampWidthPct } from './layout.js';
 
 const $ = (id) => document.getElementById(id);
 bootPage('library');
@@ -25,8 +26,11 @@ const coverUrl = (id, v = 0) => `${COVER_BASE}/${id}?v=${v ?? 0}`;
 const LARGE_BOOK_PAGES = 1200;                         // above this the large-book warning appears (once per book per session)
 
 // ---- state -----------------------------------------------------------------------------------------------
+const storedWidthPct = prefs.get('reader.widthPct', 100);
+const widthPctNow = clampWidthPct(storedWidthPct);
+if (Number(storedWidthPct) !== widthPctNow) prefs.set('reader.widthPct', widthPctNow);
 const rp = {
-  widthPct: prefs.get('reader.widthPct', 100),
+  widthPct: widthPctNow,
   gap: prefs.get('reader.gap', 0),
   dim: prefs.get('reader.dim', 100),
   contrast: prefs.get('reader.contrast', 100),
@@ -279,6 +283,9 @@ addEventListener('pointerdown', (e) => {
 });
 
 function syncControls() {
+  $('w').min = String(WIDTH_PCT_MIN);
+  $('w').max = String(WIDTH_PCT_MAX);
+  $('w').step = '5';
   $('w').value = rp.widthPct;
   $('dim').value = rp.dim;
   $('contrast').value = rp.contrast;
@@ -304,7 +311,11 @@ function syncControls() {
   document.querySelectorAll('#fitModeSeg button').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.fit === rp.fitMode)));
   $('tbFit').title = t(fitModeLabelKey(rp.fitMode));
 }
-$('w').addEventListener('input', (e) => { rp.widthPct = +e.target.value; prefs.set('reader.widthPct', rp.widthPct); if (view?.mode === 'scroll') view.setWidthPct(rp.widthPct); });
+$('w').addEventListener('input', (e) => {
+  rp.widthPct = clampWidthPct(+e.target.value);
+  prefs.set('reader.widthPct', rp.widthPct);
+  view?.setWidthPct?.(rp.widthPct);
+});
 $('wheel').addEventListener('input', (e) => { rp.wheel = wheelGear(+e.target.value); prefs.set('reader.wheelSpeed', rp.wheel); $('wheelVal').textContent = rp.wheel; if (view?.mode === 'scroll') view.setWheelSpeed(rp.wheel); });
 $('dim').addEventListener('input', (e) => { rp.dim = +e.target.value; prefs.set('reader.dim', rp.dim); applyViewDisplay(); });
 $('contrast').addEventListener('input', (e) => { rp.contrast = +e.target.value; prefs.set('reader.contrast', rp.contrast); applyViewDisplay(); });

@@ -4,7 +4,7 @@
 // Objects:  Strip (DOM + layout)   ViewportTracker (scroll -> position/direction/speed)
 //           ImageWindow (IO-driven mount/unmount)   Prefetcher (-> Rust set_reading_window)
 //           ProgressSaver (debounced save)   Scrubber (bottom slider)   Reader (glue)
-import { Layout } from './layout.js';
+import { Layout, clampWidthPct } from './layout.js';
 import { applyCropStyle, cropCacheKey, detectCropFromImage, mergeCropInsets } from './reader-crop.js';
 import { rtlPageDelta } from './reader-rtl.js';
 import {
@@ -550,7 +550,7 @@ export class Reader {
   async open(bookId, { perf = 'balanced', widthPct = 100, gap = 0, spread = false, startPos = null, beforeMount = null, wheelSpeed = WHEEL_GEAR_DEFAULT } = {}) {
     this.perfName = perf; this.perf = PERF[perf];
     this.wheelGear = wheelGear(wheelSpeed);
-    Object.assign(this.params, { widthPct, gap, spread: !!spread });
+    Object.assign(this.params, { widthPct: clampWidthPct(widthPct), gap, spread: !!spread });
     this.info = await api.openBook(bookId);                 // { bookId, sig, dims, src, realPages, chapters, resume, ... }
     if (beforeMount) {
       const r = await beforeMount(this.info);
@@ -820,7 +820,7 @@ export class Reader {
     this.params.zoom = clamp(Math.round(z * 100) / 100, 0.5, 3);
     this.strip.relayout(this.layoutParams(), anchorY);
   }
-  setWidthPct(pct) { this.params.widthPct = clamp(pct, 40, 100); this.strip.relayout(this.layoutParams()); }
+  setWidthPct(pct) { this.params.widthPct = clampWidthPct(pct); this.strip.relayout(this.layoutParams()); }
   setGap(px)       { this.params.gap = px;                       this.strip.relayout(this.layoutParams()); }
   setSpread(on, spreadGap = this.params.spreadGap) {
     this.params.spread = !!on;

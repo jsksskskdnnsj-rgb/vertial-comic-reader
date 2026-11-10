@@ -10,6 +10,19 @@
 
 const FALLBACK_AR = 1.5; // h/w used while a page's true size is unknown (dims 0,0)
 
+/** Page-width slider. 100% is the full pane. 20% is a narrow strip. */
+export const WIDTH_PCT_MIN = 20;
+export const WIDTH_PCT_MAX = 100;
+/** Smallest column, so a tiny window cannot collapse the page to a sliver. */
+export const COL_MIN_PX = 48;
+
+/** Persisted width. Values already inside the range (including old 40–100 saves) pass through. */
+export function clampWidthPct(pct, fallback = WIDTH_PCT_MAX) {
+  const n = Math.round(Number(pct));
+  if (!Number.isFinite(n)) return fallback;
+  return Math.min(WIDTH_PCT_MAX, Math.max(WIDTH_PCT_MIN, n));
+}
+
 export class Layout {
   constructor() {
     this.n = 0;
@@ -78,12 +91,12 @@ export class Layout {
   // exactly these numbers (absolute positioning), so JS math and the browser never disagree.
   // maxW defaults to 1000 so flip mode (which omits it) stays as before.
   // Scroll mode passes Infinity and the column tracks the pane, including after
-  // the side bars tuck away. widthPct still scales that pane (the 40–100 slider).
+  // the side bars tuck away. widthPct still scales that pane (the 20–100 slider).
   // spread: pairs of real pages side by side (vertical scroll only).
   compute({ viewW, widthPct = 100, maxW = 1000, zoom = 1, gap = 0, endPad = 0, spread = false, spreadGap = 8 }) {
     const scaled = Math.round(viewW * widthPct / 100);
     const base = Number.isFinite(maxW) ? Math.min(scaled, maxW) : scaled;
-    this.colW = Math.max(120, Math.round(base * zoom));
+    this.colW = Math.max(COL_MIN_PX, Math.round(base * zoom));
     this.gap = gap;
     this.spread = !!spread;
     this.spreadGap = Math.max(0, Math.round(spreadGap));
@@ -106,7 +119,7 @@ export class Layout {
     }
 
     const pairW = this.colW;
-    const halfW = Math.max(60, Math.floor((pairW - this.spreadGap) / 2));
+    const halfW = Math.max(1, Math.floor((pairW - this.spreadGap) / 2));
     this.sizerW = Math.max(pairW, viewW);
     this.left = Math.round((this.sizerW - pairW) / 2);
     const xL = this.left;

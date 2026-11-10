@@ -21,6 +21,7 @@ import { DEFAULT_CHROME_BLUR, DEFAULT_BG_BLUR, CHROME_BLUR_MAX, BG_BLUR_MAX } fr
 import { sanePages, DEFAULT_PAGES } from './chapters.js';
 import { setBackground, resetBackground, setBanner, resetBanner } from './theme-api.js';
 import { imageFilters } from './image-exts.js';
+import { WIDTH_PCT_MAX, WIDTH_PCT_MIN, clampWidthPct } from './layout.js';
 
 bootPage('settings');
 mountShell('settings');
@@ -79,8 +80,13 @@ const pressed = (sel, attr, val) =>
   document.querySelectorAll(sel).forEach((b) => b.setAttribute('aria-pressed', String(b.dataset[attr] == val)));
 function syncReading() {
   pressed('#modeSeg button', 'mode', prefs.get('mode', 'scroll'));
-  $('widthRange').value = prefs.get('reader.widthPct', 100);
-  $('widthVal').textContent = $('widthRange').value + '%';
+  const widthPct = clampWidthPct(prefs.get('reader.widthPct', 100));
+  if (Number(prefs.get('reader.widthPct', 100)) !== widthPct) prefs.set('reader.widthPct', widthPct);
+  $('widthRange').min = String(WIDTH_PCT_MIN);
+  $('widthRange').max = String(WIDTH_PCT_MAX);
+  $('widthRange').step = '5';
+  $('widthRange').value = widthPct;
+  $('widthVal').textContent = widthPct + '%';
   pressed('#gapSeg button', 'gap', prefs.get('reader.gap', 0));
   $('dimRange').value = prefs.get('reader.dim', 100);
   $('dimVal').textContent = $('dimRange').value + '%';
@@ -101,7 +107,7 @@ $('modeSeg').addEventListener('click', async (e) => {
     await invoke('set_reader_config', { cfg: { ...cfg, mode } });
   } catch { /* optional sync */ }
 });
-$('widthRange').addEventListener('input', (e) => { prefs.set('reader.widthPct', +e.target.value); syncReading(); });
+$('widthRange').addEventListener('input', (e) => { prefs.set('reader.widthPct', clampWidthPct(+e.target.value)); syncReading(); });
 $('gapSeg').addEventListener('click', (e) => { const b = e.target.closest('[data-gap]'); if (b) { prefs.set('reader.gap', +b.dataset.gap); syncReading(); } });
 $('dimRange').addEventListener('input', (e) => { prefs.set('reader.dim', +e.target.value); syncReading(); });
 $('saverChk').addEventListener('change', (e) => prefs.set('saver', e.target.checked));
