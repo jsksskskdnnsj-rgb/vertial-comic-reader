@@ -12,8 +12,7 @@ import {
   KEY_PAGE_OVERLAP_PX,
   chainPageScroll, classifyWheel, createFlipWheelState, createPageKey, extendPageKey,
   flipSwipeDir, flipVisualSign, flipWheelAdvance, glideChase, glideTauMs, keyReleaseSpeed,
-  pageKeyDistance, pageScrollSegment, pageSeamCover, releasePageKeyHold, samplePageScroll,
-  stepPageKey,
+  pageKeyDistance, pageScrollSegment, pageSeamCover, samplePageScroll, stepPageKey,
 } from '../src/reader-feel.js';
 import { keyScrollPlan } from '../src/reader.js';
 
@@ -96,10 +95,10 @@ function book(n, w = 800, h = 1200) {
   assert.equal(end.v, 0);
   assert.ok(Math.abs(end.y - dist) < 0.5);
 
-  // A tap released immediately still completes the page inside the duration.
-  let st = releasePageKeyHold(createPageKey({
+  // A tap still completes the page inside the duration.
+  let st = createPageKey({
     y: 0, to: dist, dir: 1, page: dist, duration: KEY_PAGE_DURATION_MS, now: 0,
-  }));
+  });
   let y = 0;
   let doneAt = 0;
   for (let t = 16; t <= KEY_PAGE_DURATION_MS + 32; t += 16) {
@@ -120,48 +119,40 @@ function book(n, w = 800, h = 1200) {
   assert.equal(chainedEnd.done, true);
   assert.ok(Math.abs(chainedEnd.y - chained.to) < 1);
 
-  // A held key cruises instead of stopping between repeats, then eases out.
+  // A hold is repeated presses: each repeat adds one page step on the same
+  // ease-out a second tap would, and the run finishes on that target.
+  const repeats = 3;
   st = createPageKey({ y: 0, to: dist, dir: 1, page: dist, duration: KEY_PAGE_DURATION_MS, now: 0 });
-  st = extendPageKey(st, 32, 50000, { repeat: true });
-  let now = 32;
-  let sawCruise = false;
-  for (let i = 0; i < 40; i++) {
+  let taps = createPageKey({ y: 0, to: dist, dir: 1, page: dist, duration: KEY_PAGE_DURATION_MS, now: 0 });
+  let now = 0;
+  for (let r = 0; r < repeats; r++) {
+    now += 48;
+    const before = samplePageScroll(st.seg, now - st.segT);
+    st = extendPageKey(st, now, 50000);
+    taps = extendPageKey(taps, now, 50000);
+    const at = samplePageScroll(st.seg, 0);
+    assert.equal(st.mode, 'ease');
+    assert.ok(Math.abs(at.y - before.y) < 1, 'repeat restarted the position');
+    assert.ok(at.v > before.v * 0.5, `repeat dropped speed to ${at.v} from ${before.v}`);
+    assert.ok(Math.abs(st.seg.to - dist * (r + 2)) < 1, `target ${st.seg.to}`);
+    assert.equal(st.seg.to, taps.seg.to);
+    assert.equal(st.seg.D, taps.seg.D);
+  }
+  let prevY = samplePageScroll(st.seg, 0).y;
+  let done = false;
+  const started = now;
+  for (let i = 0; i < 80; i++) {
     now += 16;
     const step = stepPageKey(st, now, 50000);
     st = step.state;
-    y = step.y;
-    if (st.mode === 'cruise') sawCruise = true;
-    if (sawCruise && i > 6) break;
+    assert.equal(st.mode, 'ease');
+    assert.ok(step.y + 0.5 >= prevY, 'held Space went backwards');
+    prevY = step.y;
+    if (step.done) { done = true; y = step.y; break; }
   }
-  assert.ok(sawCruise, 'repeat should cruise, not stop-start');
-  let cruisePrev = y;
-  let cruiseSteps = 0;
-  const cruisePace = dist / KEY_PAGE_DURATION_MS;
-  for (let i = 0; i < 8; i++) {
-    now += 16;
-    const step = stepPageKey(st, now, 50000);
-    st = step.state;
-    const dy = step.y - cruisePrev;
-    assert.equal(st.mode, 'cruise');
-    assert.ok(dy > cruisePace * 16 * 0.7 && dy < cruisePace * 16 * 1.35, `cruise stutter ${dy}`);
-    cruisePrev = step.y;
-    y = step.y;
-    cruiseSteps++;
-  }
-  assert.equal(cruiseSteps, 8);
-  const atCruise = y;
-  st = releasePageKeyHold(st);
-  let settled = false;
-  for (let i = 0; i < 40; i++) {
-    now += 16;
-    const step = stepPageKey(st, now, 50000);
-    st = step.state;
-    y = step.y;
-    assert.ok(y + 0.5 >= atCruise - dist, 'release should not jump backward');
-    if (step.done) { settled = true; break; }
-  }
-  assert.ok(settled, 'release eases to a stop');
-  assert.ok(y > atCruise);
+  assert.ok(done, 'held Space never settled');
+  assert.ok(Math.abs(y - dist * (repeats + 1)) < 2, `held travel ${y}`);
+  assert.ok(now - started <= KEY_PAGE_DURATION_MS * (repeats + 1) + 32, `held duration ${now - started}`);
 }
 
 // Release coast keeps full speed until the last stretch, then eases to zero.
@@ -235,6 +226,8 @@ const reader = fs.readFileSync(path.join(root, 'src/reader.js'), 'utf8');
 const flip = fs.readFileSync(path.join(root, 'src/flip.js'), 'utf8');
 const css = fs.readFileSync(path.join(root, 'src/mh-ui.css'), 'utf8');
 
+assert.equal(/cruise/.test(reader), false);
+assert.equal(/cruise/.test(fs.readFileSync(path.join(root, 'src/reader-feel.js'), 'utf8')), false);
 assert.match(reader, /classifyWheel/);
 assert.match(reader, /glideBy/);
 assert.match(reader, /pageSeamCover/);
@@ -337,21 +330,22 @@ sc.scrollTop = 0;
 window.__frames.length = 0;
 spaceDown();
 t = performance.now();
-for (let i = 0; i < 3 && window.__frames.length; i++) {
-  const batch = window.__frames.splice(0);
-  t += 16;
-  for (const fn of batch) fn(t);
-}
-reader.onKey(new KeyboardEvent('keydown', { key: ' ', repeat: true, cancelable: true }));
 const hold = [];
-for (let i = 0; i < 24 && window.__frames.length; i++) {
+const holdRepeats = 3;
+let repeatsSent = 0;
+for (let i = 0; i < 80; i++) {
+  if (repeatsSent < holdRepeats && i > 0 && i % 3 === 0) {
+    reader.onKey(new KeyboardEvent('keydown', { key: ' ', repeat: true, cancelable: true }));
+    repeatsSent++;
+  }
+  if (!window.__frames.length) break;
   const batch = window.__frames.splice(0);
   t += 16;
   for (const fn of batch) fn(t);
   hold.push({ y: sc.scrollTop, mode: reader._keyScroll?.phys?.mode || 'done' });
-  if (!reader._keyScroll) break;
+  if (!reader._keyScroll && repeatsSent >= holdRepeats) break;
 }
-window.dispatchEvent(new KeyboardEvent('keyup', { key: ' ' }));
+const holdY = sc.scrollTop;
 reader.strip.build([[800, 1200], [800, 1200], [800, 1200]], [0, 1, 2]);
 reader.params.gap = 0;
 reader.params.maxW = Infinity;
@@ -368,6 +362,8 @@ document.getElementById('out').textContent = JSON.stringify({
   chained,
   chainY,
   hold,
+  holdY,
+  holdRepeats,
   notchPrevented: notch.defaultPrevented,
   trackPrevented: track.defaultPrevented,
   scrollerFilter: getComputedStyle(sc).filter,
@@ -402,10 +398,12 @@ if (feel) {
   assert.equal(feel.backward, 0);
   assert.ok(feel.chained + 0.5 >= feel.mid, 'a second Space restarted from zero');
   assert.ok(feel.chainY > page * 1.7, `chained travel ${feel.chainY}`);
-  const cruise = (feel.hold || []).filter((s) => s.mode === 'cruise');
-  assert.ok(cruise.length >= 4, 'held Space never reached a steady scroll');
-  for (let i = 1; i < cruise.length; i++) {
-    assert.ok(cruise[i].y > cruise[i - 1].y + 8, 'held Space stalled between repeats');
+  assert.equal(feel.holdRepeats, 3);
+  assert.ok(Math.abs(feel.holdY - page * (feel.holdRepeats + 1)) <= 2, `held ${feel.holdY} vs ${page * 4}`);
+  assert.ok((feel.hold || []).length > 0);
+  for (const sample of feel.hold) assert.equal(sample.mode === 'cruise', false);
+  for (let i = 1; i < feel.hold.length; i++) {
+    assert.ok(feel.hold[i].y + 0.5 >= feel.hold[i - 1].y, 'held Space went backwards');
   }
   assert.equal(feel.scrollerFilter, 'none');
   assert.equal(feel.anchor, 'none');

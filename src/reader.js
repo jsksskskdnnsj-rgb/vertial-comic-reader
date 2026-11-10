@@ -9,8 +9,7 @@ import { applyCropStyle, cropCacheKey, detectCropFromImage, mergeCropInsets } fr
 import { rtlPageDelta } from './reader-rtl.js';
 import {
   KEY_PAGE_DURATION_MS, KEY_SOFT_LAND_PX, classifyWheel, createPageKey, extendPageKey,
-  glideChase, glideTauMs, keyReleaseSpeed, pageKeyDistance, pageSeamCover,
-  releasePageKeyHold, stepPageKey,
+  glideChase, glideTauMs, keyReleaseSpeed, pageKeyDistance, pageSeamCover, stepPageKey,
 } from './reader-feel.js';
 
 const T = globalThis.window?.__TAURI__;
@@ -729,17 +728,17 @@ export class Reader {
   }
   setWheelSpeed(gear) { this.wheelGear = wheelGear(gear); }
 
-  // Space / PageDown / PageUp. A tap eases out across ~7/8 of the viewport in
-  // KEY_PAGE_DURATION_MS. The old path integrated a flat 1800px/s and ignored
-  // key-repeat, so a press took about twice as long and a hold never chained:
-  // each new press cancelled the glide and started again from rest.
-  pressPageKey(plan, repeat) {
+  // Space / PageDown / PageUp. One press eases out across a browser page step
+  // in KEY_PAGE_DURATION_MS. A second press, and each OS key-repeat, adds
+  // another of those steps onto the in-flight animation. Releasing the key
+  // adds nothing: the steps already queued finish on the same curve.
+  pressPageKey(plan) {
     const sc = this.strip.scroller;
     const max = Math.max(0, sc.scrollHeight - sc.clientHeight);
     const now = performance.now();
     const cur = this._keyScroll;
     if (cur?.kind === 'page' && cur.dir === plan.dir) {
-      cur.phys = extendPageKey(cur.phys, now, max, { repeat });
+      cur.phys = extendPageKey(cur.phys, now, max);
       return;
     }
     this.stopKeyScroll();
@@ -747,26 +746,13 @@ export class Reader {
     const y = sc.scrollTop;
     const to = clamp(y + plan.dir * plan.distance, 0, max);
     if (to === y) return;
-    const cruiseV = plan.dir * (plan.distance / Math.max(1, plan.duration));
     // A short remainder (end of the book) should not take the full 200ms.
     const span = Math.abs(to - y);
     const hop = Math.max(1, plan.duration * Math.max(span / Math.max(1, plan.distance), 0.4));
-    // A repeat that arrives after the previous page already stopped starts
-    // another ease-out with cruise armed, so speed comes up on the curve
-    // and then holds. It does not step from rest to full speed.
     const phys = createPageKey({ y, to, dir: plan.dir, page: plan.distance, duration: hop, now });
     phys.duration = plan.duration;
-    phys.cruiseV = cruiseV;
-    if (repeat) phys.wantCruise = true;
-    const hold = { kind: 'page', dir: plan.dir, key: plan.key, phys, raf: 0, onUp: null };
+    const hold = { kind: 'page', dir: plan.dir, key: plan.key, phys, raf: 0 };
     this._keyScroll = hold;
-    hold.onUp = (ev) => {
-      if (ev.key !== hold.key || this._keyScroll !== hold) return;
-      hold.phys = releasePageKeyHold(hold.phys);
-      window.removeEventListener('keyup', hold.onUp);
-      hold.onUp = null;
-    };
-    window.addEventListener('keyup', hold.onUp);
     const tick = (t) => {
       if (this._keyScroll !== hold) return;
       const limit = Math.max(0, this.strip.scroller.scrollHeight - this.strip.scroller.clientHeight);
@@ -870,7 +856,7 @@ export class Reader {
     const plan = keyScrollPlan(e.key, { shift: e.shiftKey, viewH: this.strip.viewH });
     if (plan?.kind === 'page') {
       e.preventDefault();
-      this.pressPageKey(plan, e.repeat);
+      this.pressPageKey(plan);
       return;
     }
     // Arrow nudges: one velocity for tap and hold. OS repeat must not stack.

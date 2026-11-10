@@ -141,13 +141,6 @@ export function chainPageScroll(seg, elapsedMs, delta, page, duration = KEY_PAGE
   return pageScrollSegment({ from: now.y, to: target, v0: now.v, duration: D });
 }
 
-/** Ease out of a held scroll. Start speed matches `v0`, end speed is 0. */
-export function releasePageScroll(from, v0, duration = KEY_PAGE_DURATION_MS) {
-  const D = Math.max(1, duration);
-  const dist = v0 * D / 3;
-  return pageScrollSegment({ from, to: from + dist, v0, duration: D });
-}
-
 function clampScroll(v, maxY) {
   return Math.min(Math.max(0, maxY), Math.max(0, v));
 }
@@ -163,26 +156,17 @@ export function createPageKey({ y, to, dir, page, duration = KEY_PAGE_DURATION_M
     y,
     seg: pageScrollSegment({ from: y, to, v0: 0, duration: D }),
     segT: now,
-    holding: true,
-    wantCruise: false,
-    cruiseV: dir * (page / D),
-    lastT: now,
   };
 }
 
 /**
- * Another Space while the first is still moving. Repeats arm a cruise so a
- * held key does not ease to a stop between OS repeats. A second tap (not a
- * repeat) lengthens the target and keeps the current speed.
+ * Another Space while the first is still moving — a second tap or an OS
+ * key-repeat. Both add one page step and keep the current speed. A hold is
+ * just this, once per repeat, until the key comes up.
  */
-export function extendPageKey(state, now, maxY, { repeat = false } = {}) {
-  const next = { ...state, holding: true };
-  if (repeat) next.wantCruise = true;
-  if (next.mode === 'cruise') return next;
+export function extendPageKey(state, now, maxY) {
   const elapsed = Math.max(0, now - state.segT);
   const sample = samplePageScroll(state.seg, elapsed);
-  const runway = (state.seg.to - sample.y) * state.dir;
-  if (repeat && runway > state.page * 0.4) return next;
   const delta = state.dir * state.page;
   let seg = chainPageScroll(state.seg, elapsed, delta, state.page, state.duration);
   const to = clampScroll(seg.to, maxY);
@@ -196,57 +180,17 @@ export function extendPageKey(state, now, maxY, { repeat = false } = {}) {
       duration: Math.max(1, state.duration * Math.max(pages, 0.35)),
     });
   }
-  next.seg = seg;
-  next.segT = now;
-  next.y = sample.y;
-  return next;
+  return { ...state, mode: 'ease', seg, segT: now, y: sample.y };
 }
 
-export function releasePageKeyHold(state) {
-  return { ...state, holding: false };
-}
-
-/**
- * One animation frame. Ease-out for a tap. A held key, once it repeats,
- * cruises at one page per KEY_PAGE_DURATION_MS and eases out on release
- * instead of stopping dead between repeats.
- */
+/** One animation frame of the ease-out. Done when the chained target is reached. */
 export function stepPageKey(state, now, maxY) {
   const max = Math.max(0, Number(maxY) || 0);
-  const dir = state.dir;
-  if (state.mode === 'cruise') {
-    // A late frame catches up (the old 50ms cap is what made a hitch fall
-    // behind and look choppy). A backgrounded tab still cannot fly.
-    const dt = Math.min(80, Math.max(0, now - state.lastT));
-    const y = clampScroll(state.y + state.cruiseV * dt, max);
-    const atEnd = dir > 0 ? y >= max - 0.5 : y <= 0.5;
-    if (atEnd) return { y, state: { ...state, y, lastT: now }, done: true };
-    if (!state.holding) {
-      let seg = releasePageScroll(y, state.cruiseV, state.duration);
-      const to = clampScroll(seg.to, max);
-      if (to !== seg.to) {
-        seg = pageScrollSegment({ from: y, to, v0: state.cruiseV, duration: state.duration });
-      }
-      return {
-        y,
-        state: { ...state, y, mode: 'ease', seg, segT: now, lastT: now, wantCruise: false },
-        done: false,
-      };
-    }
-    return { y, state: { ...state, y, lastT: now }, done: false };
-  }
-
   const sample = samplePageScroll(state.seg, now - state.segT);
   const y = clampScroll(sample.y, max);
-  const atEnd = dir > 0 ? y >= max - 0.5 : y <= 0.5;
-  if (atEnd) return { y, state: { ...state, y }, done: true };
-  const cruise = state.cruiseV;
-  const slowEnough = Math.abs(sample.v) <= Math.abs(cruise) + 1e-4;
-  if (state.holding && state.wantCruise && (sample.done || slowEnough)) {
-    return { y, state: { ...state, y, mode: 'cruise', lastT: now }, done: false };
-  }
-  if (sample.done) return { y, state: { ...state, y }, done: true };
-  return { y, state: { ...state, y, lastT: now }, done: false };
+  const atEnd = state.dir > 0 ? y >= max - 0.5 : y <= 0.5;
+  if (atEnd || sample.done) return { y, state: { ...state, y }, done: true };
+  return { y, state: { ...state, y }, done: false };
 }
 
 /**
