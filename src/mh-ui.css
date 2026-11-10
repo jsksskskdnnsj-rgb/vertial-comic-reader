@@ -8,7 +8,7 @@
 .tick--bm{height:7px;background:var(--bookmark,#f0b35a)}
 
 /* ==== v0.5 shell + pages (home / library / import / settings) ==== */
-.bg-layer{position:fixed;inset:0;z-index:0;background-size:cover;background-position:center;pointer-events:none;filter:blur(var(--bg-blur,0px))}
+.bg-layer{position:fixed;inset:0;z-index:0;background-size:cover;background-position:center;pointer-events:none}
 .app{position:relative;z-index:1}
 .shell-top{display:flex;align-items:center;gap:16px;padding:10px 16px 2px;min-height:58px}
 .brand{display:flex;align-items:center;gap:11px;text-decoration:none;color:var(--text);flex-shrink:0}
@@ -130,7 +130,9 @@
       (z-index:-1 still paints above the html/body canvas background), so
       the photo no longer repaints with the content. */
 .glass,.glass-strong{backdrop-filter:none;-webkit-backdrop-filter:none}
-.shell-top,.shell-rail,.flyout,.drawer,.toast,.modal,.vp__pill,.vp__auto{backdrop-filter:blur(var(--chrome-blur,14px)) saturate(1.25);-webkit-backdrop-filter:blur(var(--chrome-blur,14px)) saturate(1.25)}
+.shell-top,.shell-rail,.flyout,.drawer,.toast,.modal,.vp__pill,.vp__auto{backdrop-filter:blur(14px) saturate(1.25);-webkit-backdrop-filter:blur(14px) saturate(1.25)}
+html[data-chrome-blur] .shell-top,html[data-chrome-blur] .shell-rail,html[data-chrome-blur] .flyout,html[data-chrome-blur] .drawer,html[data-chrome-blur] .toast,html[data-chrome-blur] .modal,html[data-chrome-blur] .vp__pill,html[data-chrome-blur] .vp__auto{backdrop-filter:blur(var(--chrome-blur,14px)) saturate(1.25);-webkit-backdrop-filter:blur(var(--chrome-blur,14px)) saturate(1.25)}
+html[data-bg-blur] .bg-layer{filter:blur(var(--bg-blur,0px))}
 .bg-layer{z-index:-1;transform:translateZ(0);will-change:transform}
 
 /* ==== v0.6 append: add at the END of src/mh-ui.css (PowerShell: Get-Content mh-ui.v06-append.css | Add-Content mh-ui.css) ====
@@ -503,7 +505,7 @@ button:focus-visible,a.btn:focus-visible{outline:2px solid var(--accent-ink);out
 .lib-main{display:flex;flex-direction:column;min-height:100%;padding:16px 18px 18px}
 .lib-toolbar{margin:0 0 16px;gap:8px}
 .lib-main>.empty-state{flex:1;min-height:200px}
-.lib-more{display:flex;flex-wrap:wrap;gap:10px 14px;align-items:center;justify-content:center;margin-top:16px;padding-top:12px;border-top:1px solid var(--line)}
+.lib-pager{display:flex;gap:8px;align-items:center;justify-content:flex-end;margin-top:16px;padding-top:12px;border-top:1px solid var(--line)}
 .prog-badge{left:8px;bottom:10px;max-width:calc(100% - 78px);padding:2px 8px;font-size:11px;font-weight:650}
 .prog-badge--finished{color:#143f37}
 .book-card b{margin-top:8px;font-weight:650}
@@ -659,7 +661,7 @@ body.reader-chrome-away .work{padding:0;gap:0}
 }
 .flip-view--spread .flip-stage{display:flex;flex:1;min-width:0;gap:8px;align-items:center;justify-content:center;height:100%}
 .flip-view--spread .flip-image{flex:1;min-width:0;max-height:100%;object-fit:contain}
-.flip-view .flip-stage{display:flex;flex:1;align-items:center;justify-content:center;min-width:0;height:100%;cursor:pointer}
+.flip-view .flip-stage{display:flex;flex:1;align-items:center;justify-content:center;min-width:0;height:100%}
 .flip-image.pg-crop{object-fit:fill}
 .flip-image.flip-image--b[hidden]{display:none!important}
 
@@ -716,21 +718,8 @@ body:has(.shell-frame) .shell-top{
 @media(prefers-reduced-motion:reduce){
   .page-main.is-swapping{opacity:1}
 }
-/* ==== v0.8.x library tags / loupe / presets (glass shell) ==== */
-.preset-bar{gap:10px;margin-bottom:10px;flex-wrap:wrap}
-.preset-label{display:inline-flex;align-items:center;gap:8px;font-size:13px}
-.lib-chip--tag{border-color:color-mix(in srgb,var(--tag,#80e5b6) 55%,transparent);color:color-mix(in srgb,var(--tag,#80e5b6) 80%,var(--text))}
-.lib-chip--fav{border-color:#f5d56599;color:#ffe9a8}
-.ribbon--fav{background:#3d3214d9;border-color:#f5d56599;color:#ffe9a8}
+/* ==== v0.8.x reader loupe + settings tag admin (no library chrome changes) ==== */
 .tag-admin{display:flex;flex-direction:column;gap:8px;margin-bottom:10px}
 .tag-row{display:flex;align-items:center;justify-content:space-between;gap:12px}
 .reader-loupe{position:fixed;width:148px;height:148px;border-radius:50%;border:2px solid var(--accent);pointer-events:none;transform:translate(-50%,-50%);z-index:90;background-repeat:no-repeat;box-shadow:0 14px 42px #0007;background-color:var(--panel2)}
-.mp-mode{display:inline-flex;align-items:center;gap:6px;padding:3px 6px;border-radius:14px;border:1px solid var(--line);background:rgba(255,255,255,.08);max-width:min(52vw,420px);flex-shrink:1}
-.mp-mode__seg{display:inline-flex;flex-shrink:0}
-.mp-mode__seg button{white-space:nowrap;padding:4px 9px;font-size:11px}
-.mp__head .mp-mode{margin:0 6px}
-@media(max-width:900px){
-  .mp-mode{max-width:min(70vw,360px);gap:4px;padding:2px 4px}
-  .mp-mode__seg button{padding:3px 7px;font-size:10px}
-}
 /* ==== end v0.8.1 unified shell ==== */

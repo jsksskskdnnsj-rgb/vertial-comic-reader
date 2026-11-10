@@ -39,8 +39,7 @@ export class ThumbStrip {
   update(page, realPages) {
     if (page === this.cur) return; this.cur = page;
     if (!(realPages > 0)) { this.host.innerHTML = ''; return; }   // not ready / empty book: skip thumbs, don't throw
-    const win = 10;
-    const from = Math.max(0, Math.min(page - 3, realPages - win)), to = Math.min(realPages - 1, from + win - 1), out = [];
+    const from = Math.max(0, Math.min(page - 2, realPages - 7)), to = Math.min(realPages - 1, from + 6), out = [];
     for (let p = from; p <= to; p++) {
       const src = this.d.thumb(p) || '';
       out.push(`<button data-page="${p}" class="${p === page ? 'is-active' : ''}" aria-label="${p + 1}"><img alt="" loading="lazy" src="${src}"></button>`);

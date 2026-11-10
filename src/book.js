@@ -75,8 +75,28 @@ async function load() {
 
 const after = async (ok, bump) => { if (ok) { if (bump) coverBust = Date.now(); await load(); } };
 $('continueBtn').addEventListener('click', () => { location.href = readerOpenHref(book.id); });
-$('openScrollBtn').addEventListener('click', () => { location.href = readerOpenHref(book.id, 'scroll'); });
-$('openFlipBtn').addEventListener('click', () => { location.href = readerOpenHref(book.id, 'flip'); });
+$('continueBtn').addEventListener('contextmenu', (e) => {
+  if (!book) return;
+  e.preventDefault();
+  const menu = document.createElement('div');
+  menu.className = 'menu glass-strong';
+  menu.setAttribute('role', 'menu');
+  menu.style.cssText = `left:${Math.max(8, e.clientX)}px;top:${Math.max(8, e.clientY)}px`;
+  menu.innerHTML = [
+    `<button type="button" role="menuitem" data-a="scroll">${esc(t('lib.openScroll'))}</button>`,
+    `<button type="button" role="menuitem" data-a="flip">${esc(t('lib.openFlip'))}</button>`,
+  ].join('');
+  const close = () => { menu.remove(); document.removeEventListener('pointerdown', onOut, true); };
+  const onOut = (ev) => { if (!menu.contains(ev.target)) close(); };
+  menu.addEventListener('click', (ev) => {
+    const b = ev.target.closest('[data-a]');
+    if (!b) return;
+    close();
+    location.href = readerOpenHref(book.id, b.dataset.a);
+  });
+  document.body.append(menu);
+  document.addEventListener('pointerdown', onOut, true);
+});
 $('startOverBtn').addEventListener('click', async () => after(await act.startOver(book)));
 $('renameBtn').addEventListener('click', async () => after(await act.renameBook(book)));
 $('relinkBtn').addEventListener('click', async () => after(await act.relinkBook(book), true));

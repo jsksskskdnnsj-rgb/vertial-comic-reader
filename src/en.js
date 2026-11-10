@@ -72,6 +72,8 @@ export default {
   'lib.presetSave': 'Save preset',
   'lib.presetName': 'Preset name',
   'lib.favAll': 'All books',
+  'lib.filterMenuHint': 'Right‑click status filters for favorites, tags, and presets',
+  'lib.presetApply': 'Apply preset “{name}”',
   'lib.favOnly': 'Favorites',
   'lib.favorite': 'Favorite',
   'lib.unfavorite': 'Remove favorite',

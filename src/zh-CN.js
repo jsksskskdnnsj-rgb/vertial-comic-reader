@@ -73,6 +73,8 @@ export default {
   'lib.presetSave': '\u4fdd\u5b58\u9884\u8bbe',
   'lib.presetName': '\u9884\u8bbe\u540d\u79f0',
   'lib.favAll': '\u5168\u90e8\u56fe\u4e66',
+  'lib.filterMenuHint': '\u5728\u72b6\u6001\u7b5b\u9009\u6761\u4e0a\u53f3\u952e\uff1a\u6536\u85cf\u7b5b\u9009\u3001\u6807\u7b7e\u4e0e\u9884\u8bbe',
+  'lib.presetApply': '\u5e94\u7528\u9884\u8bbe\u300c{name}\u300d',
   'lib.favOnly': '\u6536\u85cf',
   'lib.favorite': '\u6536\u85cf',
   'lib.unfavorite': '\u53d6\u6d88\u6536\u85cf',

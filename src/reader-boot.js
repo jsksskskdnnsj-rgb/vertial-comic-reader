@@ -295,10 +295,8 @@ function syncControls() {
   $('wheel').value = rp.wheel; $('wheelVal').textContent = rp.wheel;
   document.querySelectorAll('#gap button').forEach(b => b.setAttribute('aria-pressed', String(+b.dataset.gap === rp.gap)));
   document.querySelectorAll('#fMode button').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.mode === modeNow)));
-  document.querySelectorAll('#mpModeSeg button').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.mode === modeNow)));
-  const flipDirBar = $('mpFlipDir');
-  if (flipDirBar) flipDirBar.hidden = modeNow !== 'flip';
-  document.querySelectorAll('#mpFlipDir button').forEach((b) => b.setAttribute('aria-pressed', String((b.dataset.rtl === '1') === !!rp.rtl)));
+  document.querySelectorAll('#fFlipDir button').forEach((b) => b.setAttribute('aria-pressed', String((b.dataset.rtl === '1') === !!rp.rtl)));
+  document.querySelectorAll('#flySettings [data-for="flip"]').forEach((r) => { r.hidden = modeNow !== 'flip'; });
   document.querySelectorAll('#fFilter button').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.filter === rp.filter)));
   document.querySelectorAll('#flySettings [data-for="scroll"]').forEach(r => { r.hidden = modeNow !== 'scroll'; });
   $('tbModeIcon').innerHTML = `<use href="icons.svg#${modeNow === 'flip' ? 'flip' : 'scroll'}"/>`; $('tbModeText').textContent = t(modeNow === 'flip' ? 'reader.modeFlipShort' : 'reader.modeScrollShort');
@@ -346,8 +344,7 @@ const setFlipDir = (rtl) => {
   syncControls();
 };
 $('fMode').addEventListener('click', (e) => { const b = e.target.closest('button'); if (b) setMode(b.dataset.mode); });
-$('mpModeSeg')?.addEventListener('click', (e) => { const b = e.target.closest('[data-mode]'); if (b) setMode(b.dataset.mode); });
-$('mpFlipDir')?.addEventListener('click', (e) => { const b = e.target.closest('[data-rtl]'); if (b) setFlipDir(b.dataset.rtl === '1'); });
+$('fFlipDir')?.addEventListener('click', (e) => { const b = e.target.closest('[data-rtl]'); if (b) setFlipDir(b.dataset.rtl === '1'); });
 $('tbMode').addEventListener('click', () => setMode(modeNow === 'scroll' ? 'flip' : 'scroll'));
 $('tbFit').addEventListener('click', () => {
   const i = FIT_MODES.indexOf(rp.fitMode);
