@@ -18,6 +18,7 @@ import { fetchEpisodeInfo } from './chapters.js';
 import { sortBy, compareTitles } from './naming.js';
 import { filterBooks, countStatuses, statusOf, readLibraryState, validFolder, progressPct } from './library-filters.js';
 import { libraryCoversToWarm } from './library-cover-warm.js';
+import { coverWarmBatch } from './decode-budget.js';
 import * as act from './book-actions.js';
 import { openMergeDialog } from './merge-ui.js';
 import { LIBRARY_RENDER_BATCH } from './library-render-window.js';
@@ -97,7 +98,7 @@ function visibleBooks() {
 
 const warmCovers = new Set();
 function prefetchCoversAhead(list, mounted) {
-  const ids = libraryCoversToWarm(list, mounted);
+  const ids = libraryCoversToWarm(list, mounted, coverWarmBatch(books.length));
   const base = typeof coverUrl === 'function' ? coverUrl : () => '';
   for (const id of ids) {
     if (warmCovers.has(id)) continue;

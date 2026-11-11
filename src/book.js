@@ -89,11 +89,13 @@ async function renderMetaPanel() {
     $('metaEmpty').hidden = false;
     $('metaUnbindBtn').hidden = true;
     $('metaOpenBtn').hidden = false;
+    $('metaRefreshBtn').hidden = true;
     return;
   }
   $('metaEmpty').hidden = true;
   $('metaUnbindBtn').hidden = false;
   $('metaOpenBtn').hidden = false;
+  $('metaRefreshBtn').hidden = false;
   const prov = t(`meta.provider.${bound.provider}`) !== `meta.provider.${bound.provider}`
     ? t(`meta.provider.${bound.provider}`) : bound.provider;
   const title = esc(bound.titleDisplay || bound.titleCn || '—');
@@ -101,12 +103,13 @@ async function renderMetaPanel() {
   const tags = bound.tags?.length ? esc(bound.tags.slice(0, 12).join(' · ')) : '—';
   const rating = bound.rating != null ? esc(t('meta.rating', { n: Number(bound.rating).toFixed(1) })) : '—';
   const summary = bound.summary ? esc(bound.summary.slice(0, 480)) + (bound.summary.length > 480 ? '…' : '') : '—';
+  const aliases = bound.aliases?.length ? esc(bound.aliases.slice(0, 8).join(' · ')) : '';
   const remoteCover = await metaCoverUrl(book.id);
   const coverHtml = remoteCover
     ? `<img class="meta-cover" src="${esc(remoteCover)}" alt="">`
     : '—';
   $('metaKv').innerHTML =
-    row('meta.fieldSource', esc(prov)) +
+    row('meta.fieldSource', esc(prov) + (bound.locked ? ` · <span class="meta-locked">${esc(t('meta.locked'))}</span>` : '')) +
     row('meta.fieldTitle', title) +
     (bound.titleCn ? row('meta.fieldTitleCn', esc(bound.titleCn)) : '') +
     (bound.titleOriginal ? row('meta.fieldOriginal', esc(bound.titleOriginal)) : '') +
@@ -114,6 +117,11 @@ async function renderMetaPanel() {
     row('meta.fieldTags', tags) +
     row('meta.fieldRating', rating) +
     (bound.releaseDate ? row('meta.fieldDate', esc(bound.releaseDate)) : '') +
+    (bound.year ? row('meta.fieldYear', esc(String(bound.year))) : '') +
+    (bound.status ? row('meta.fieldStatus', esc(bound.status)) : '') +
+    (bound.chapterCount != null ? row('meta.fieldChapters', esc(String(bound.chapterCount))) : '') +
+    (bound.volumeCount != null ? row('meta.fieldVolumes', esc(String(bound.volumeCount))) : '') +
+    (aliases ? row('meta.fieldAliases', aliases) : '') +
     row('meta.fieldSummary', `<span class="meta-sum">${summary}</span>`) +
     row('meta.fieldRemoteCover', coverHtml);
 }
@@ -163,5 +171,15 @@ $('metaUnbindBtn').addEventListener('click', async () => {
 $('metaOpenBtn').addEventListener('click', async () => {
   if (!book) return;
   await act.openMetadataPage(book);
+});
+$('metaEditBtn').addEventListener('click', async () => {
+  if (!book) return;
+  const { openMetadataEditor } = await import('./metadata-match.js');
+  await openMetadataEditor(book, { onBound: () => load() });
+});
+$('metaRefreshBtn').addEventListener('click', async () => {
+  if (!book) return;
+  const { refreshMetadata } = await import('./metadata-match.js');
+  await refreshMetadata(book, { onBound: () => load() });
 });
 load();

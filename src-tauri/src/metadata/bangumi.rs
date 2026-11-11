@@ -2,7 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::client::{build_client, offline_message, throttle};
+use super::client::{build_client, send_retry};
 use super::config::MetadataNetworkConfig;
 use super::{MetadataCandidate, MetadataDetail, Provider};
 
@@ -26,6 +26,10 @@ struct Subject {
     name: Option<String>,
     name_cn: Option<String>,
     date: Option<String>,
+    #[serde(default)]
+    volumes: Option<i64>,
+    #[serde(default)]
+    eps: Option<i64>,
     images: Option<Images>,
     summary: Option<String>,
     rating: Option<Rating>,
@@ -212,19 +216,17 @@ pub async fn search(
     query: &str,
     limit: u32,
 ) -> Result<Vec<MetadataCandidate>, String> {
-    throttle(cfg, HOST).await;
     let url = format!("{SEARCH}?limit={}", limit.clamp(1, 25));
-    let response = request(cfg, reqwest::Method::POST, &url)?
-        .json(&SearchBody {
+    let response = send_retry(cfg, HOST, 100, || {
+        Ok(request(cfg, reqwest::Method::POST, &url)?.json(&SearchBody {
             keyword: query,
             filter: SearchFilter {
                 kind: vec![TYPE_MANGA],
                 nsfw: None,
             },
-        })
-        .send()
-        .await
-        .map_err(|e| offline_message(&e))?;
+        }))
+    })
+    .await?;
     if !response.status().is_success() {
         return Err(http_status_message(response.status()));
     }
@@ -255,18 +257,15 @@ pub async fn search(
                 source_label: "Bangumi".into(),
                 match_kind: None,
                 page_url: Some(format!("https://bgm.tv/subject/{}", subject.id)),
+                confidence: None,
             }
         })
         .collect())
 }
 
 pub async fn detail(cfg: &MetadataNetworkConfig, id: &str) -> Result<MetadataDetail, String> {
-    throttle(cfg, HOST).await;
     let url = format!("{SUBJECT}/{}", id.trim());
-    let response = request(cfg, reqwest::Method::GET, &url)?
-        .send()
-        .await
-        .map_err(|e| offline_message(&e))?;
+    let response = send_retry(cfg, HOST, 100, || request(cfg, reqwest::Method::GET, &url)).await?;
     if !response.status().is_success() {
         return Err(http_status_message(response.status()));
     }
@@ -301,5 +300,11 @@ pub async fn detail(cfg: &MetadataNetworkConfig, id: &str) -> Result<MetadataDet
         cover_url: subject.images.as_ref().and_then(Images::best),
         aliases,
         page_url: Some(format!("https://bgm.tv/subject/{}", subject.id)),
+        facts: super::WorkFacts {
+            status: None,
+            chapter_count: subject.eps.filter(|n| *n > 0),
+            volume_count: subject.volumes.filter(|n| *n > 0),
+            year: subject.date.as_deref().and_then(super::year_prefix),
+        },
     })
 }

@@ -7,7 +7,7 @@
 // starting with 一/二/三/十 was mangled. New: compareTitles / sortByTitle, an alphabetical A-Z order with zh-CN
 // collation (Chinese by reading) for the library's "Title A-Z" sort; it never converts numerals.
 const cnDigits={'零':0,'〇':0,'一':1,'二':2,'两':2,'三':3,'四':4,'五':5,'六':6,'七':7,'八':8,'九':9};
-function chineseNumber(s){
+export function chineseNumber(s){
  if(/^\d+$/.test(s))return Number(s);
  if(!/[零〇一二两三四五六七八九十百千]/.test(s))return null;
  let total=0,section=0,num=0;for(const c of s){if(c in cnDigits)num=cnDigits[c];else if(c==='十'){section+=(num||1)*10;num=0}else if(c==='百'){section+=(num||1)*100;num=0}else if(c==='千'){section+=(num||1)*1000;num=0}else return null;}return total+section+num;
@@ -17,8 +17,17 @@ const CN_COUNTED=/第([零〇一二两三四五六七八九十百千]+)(?=[话�
 export function numeralsToDigits(s){return String(s??'').normalize('NFKC').replace(CN_COUNTED,(m,n)=>{const v=chineseNumber(n);return v===null?m:'第'+v});}
 function normalize(s){return numeralsToDigits(s).toLocaleLowerCase().replace(/\d+/g,m=>m.padStart(12,'0'));}
 export function compareNames(a,b){return normalize(a).localeCompare(normalize(b),undefined,{numeric:true,sensitivity:'base'})||String(a).localeCompare(String(b));}
-export function sortSources(paths){return [...(paths||[])].sort(compareNames);}
-export function sortBy(list,get){return [...(list||[])].sort((a,b)=>compareNames(get(a),get(b)));}
+function sortKeyed(list, get) {
+  const src = [...(list || [])];
+  const rows = src.map((item, i) => {
+    const raw = String(get(item) ?? '');
+    return { item, i, k: normalize(raw), raw };
+  });
+  rows.sort((a, b) => a.k.localeCompare(b.k, undefined, { numeric: true, sensitivity: 'base' }) || a.raw.localeCompare(b.raw) || a.i - b.i);
+  return rows.map((row) => row.item);
+}
+export function sortSources(paths) { return sortKeyed(paths, (x) => x); }
+export function sortBy(list, get) { return sortKeyed(list, get); }
 
 // ---- Title A-Z (library sort) ------------------------------------------------------------------------------
 // Intl.Collator('zh-CN'): Latin before Han, Han by pinyin reading, case-insensitive, digit runs by value ("Vol 2" < "Vol 10").

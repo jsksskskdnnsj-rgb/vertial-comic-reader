@@ -5,6 +5,7 @@
 //           ImageWindow (IO-driven mount/unmount)   Prefetcher (-> Rust set_reading_window)
 //           ProgressSaver (debounced save)   Scrubber (bottom slider)   Reader (glue)
 import { Layout, clampWidthPct } from './layout.js';
+import { tunePerf } from './decode-budget.js';
 import { applyCropStyle, cropCacheKey, detectCropFromImage, mergeCropInsets } from './reader-crop.js';
 import { rtlPageDelta } from './reader-rtl.js';
 import {
@@ -379,6 +380,7 @@ class ImageWindow {
     let base = crop.cache.get(key);
     if (base === undefined && crop.auto) {
       base = detectCropFromImage(img, crop.detectOpts);
+      if (crop.cache.size > 480) crop.cache.delete(crop.cache.keys().next().value);
       crop.cache.set(key, base);
     }
     base = base || { top: 0, right: 0, bottom: 0, left: 0 };
@@ -557,6 +559,7 @@ export class Reader {
       if (r === false) { await api.closeBook(bookId).catch(() => {}); throw { code: 'cancelled' }; }
       if (r?.perf) { this.perfName = r.perf; this.perf = PERF[r.perf]; }
     }
+    this.perf = tunePerf(this.perf, this.info?.realPages);
     const { dims, src } = this.info, resume = startPos ?? this.info.resume;
 
     this.strip.build(dims, src);

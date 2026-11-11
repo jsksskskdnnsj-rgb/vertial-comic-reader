@@ -494,12 +494,45 @@ fn is_generic_char(c: char) -> bool {
     c.is_ascii_digit() || c == '第' || is_counter(c) || is_cn_numeral(c)
 }
 
+fn starts_with_token(chars: &[char], i: usize, tok: &str) -> bool {
+    let bytes = tok.as_bytes();
+    if i + bytes.len() > chars.len() {
+        return false;
+    }
+    chars[i..i + bytes.len()]
+        .iter()
+        .zip(bytes)
+        .all(|(c, b)| *c as u32 == u32::from(*b))
+}
+
 /// True when `s` is covered entirely by generic tokens and generic characters.
 fn is_only_generic(s: &str) -> bool {
     let chars: Vec<char> = s.chars().collect();
     if chars.is_empty() {
         return true;
     }
+    if chars.len() > 96 {
+        return is_only_generic_heap(&chars);
+    }
+    let mut reach = [false; 97];
+    reach[0] = true;
+    for i in 0..chars.len() {
+        if !reach[i] {
+            continue;
+        }
+        if is_generic_char(chars[i]) {
+            reach[i + 1] = true;
+        }
+        for tok in GENERIC_TOKENS {
+            if starts_with_token(&chars, i, tok) {
+                reach[i + tok.len()] = true;
+            }
+        }
+    }
+    reach[chars.len()]
+}
+
+fn is_only_generic_heap(chars: &[char]) -> bool {
     let mut reach = vec![false; chars.len() + 1];
     reach[0] = true;
     for i in 0..chars.len() {
@@ -509,17 +542,20 @@ fn is_only_generic(s: &str) -> bool {
         if is_generic_char(chars[i]) {
             reach[i + 1] = true;
         }
-        let rest: String = chars[i..].iter().collect();
         for tok in GENERIC_TOKENS {
-            if rest.starts_with(tok) {
-                reach[i + tok.chars().count()] = true;
+            if starts_with_token(chars, i, tok) {
+                reach[i + tok.len()] = true;
             }
         }
     }
     reach[chars.len()]
 }
 
-fn char_grams(s: &str) -> Vec<String> {
+fn pack_gram(a: char, b: char, c: char) -> u64 {
+    ((a as u64) << 42) | ((b as u64) << 21) | (c as u64)
+}
+
+fn char_grams(s: &str) -> Vec<u64> {
     let chars: Vec<char> = s.chars().take(96).collect();
     if chars.len() < 3 {
         return Vec::new();
@@ -527,11 +563,14 @@ fn char_grams(s: &str) -> Vec<String> {
     let mut seen = HashSet::new();
     let mut out = Vec::new();
     for i in 0..=chars.len() - 3 {
-        let g: String = chars[i..i + 3].iter().collect();
-        if is_only_generic(&g) || !seen.insert(g.clone()) {
+        let gram: String = chars[i..i + 3].iter().collect();
+        if is_only_generic(&gram) {
             continue;
         }
-        out.push(g);
+        let key = pack_gram(chars[i], chars[i + 1], chars[i + 2]);
+        if seen.insert(key) {
+            out.push(key);
+        }
     }
     out
 }
@@ -573,7 +612,7 @@ fn has_meaningful_common(a: &str, b: &str) -> bool {
 }
 
 fn loose_substring_groups(pool: &[Member], used: &mut [bool]) -> Vec<Group> {
-    let mut buckets: HashMap<String, Vec<usize>> = HashMap::new();
+    let mut buckets: HashMap<u64, Vec<usize>> = HashMap::new();
     let mut any_free = false;
     for (i, m) in pool.iter().enumerate() {
         if char_len(&m.parsed.base) < 3 {
@@ -614,14 +653,15 @@ fn loose_substring_groups(pool: &[Member], used: &mut [bool]) -> Vec<Group> {
                 if !seen.insert((lo, hi)) {
                     continue;
                 }
+                let pa = find(&mut parent, ia);
+                let pb = find(&mut parent, ib);
+                if pa == pb {
+                    continue;
+                }
                 if !has_meaningful_common(&pool[ia].parsed.base, &pool[ib].parsed.base) {
                     continue;
                 }
-                let pa = find(&mut parent, ia);
-                let pb = find(&mut parent, ib);
-                if pa != pb {
-                    parent[pb] = pa;
-                }
+                parent[pb] = pa;
                 linked[ia] = true;
                 linked[ib] = true;
             }
@@ -742,6 +782,38 @@ fn prefix2(base: &str) -> String {
     base.chars().take(2).collect()
 }
 
+fn longest_common_substr(a: &str, b: &str) -> String {
+    let av: Vec<char> = a.chars().collect();
+    let bv: Vec<char> = b.chars().collect();
+    if av.is_empty() || bv.is_empty() {
+        return String::new();
+    }
+    let mut best_len = 0usize;
+    let mut best_end = 0usize;
+    let mut prev = vec![0u16; bv.len() + 1];
+    let mut cur = vec![0u16; bv.len() + 1];
+    for i in 0..av.len() {
+        for j in 0..bv.len() {
+            if av[i] == bv[j] {
+                let len = prev[j] as usize + 1;
+                cur[j + 1] = len as u16;
+                if len > best_len {
+                    best_len = len;
+                    best_end = i + 1;
+                }
+            } else {
+                cur[j + 1] = 0;
+            }
+        }
+        std::mem::swap(&mut prev, &mut cur);
+        cur.fill(0);
+    }
+    if best_len < 3 {
+        return String::new();
+    }
+    av[best_end - best_len..best_end].iter().collect()
+}
+
 fn suggest_title(members: &[Member]) -> String {
     let mut best = String::new();
     for m in members {
@@ -751,6 +823,27 @@ fn suggest_title(members: &[Member]) -> String {
         }
         if best.is_empty() || char_len(d) < char_len(&best) {
             best = d.to_string();
+        }
+    }
+    let displays: Vec<&str> = members
+        .iter()
+        .map(|m| m.parsed.display.trim())
+        .filter(|d| !d.is_empty())
+        .collect();
+    if displays.len() >= 2 {
+        let mut common = displays[0].to_string();
+        for other in displays.iter().skip(1) {
+            common = longest_common_substr(&common, other);
+            if char_len(&common) < 3 {
+                break;
+            }
+        }
+        let common = common.trim().to_string();
+        if char_len(&common) >= 3
+            && !is_only_generic(&common.to_lowercase())
+            && displays.iter().any(|d| char_len(d) > char_len(&common))
+        {
+            return common;
         }
     }
     if best.is_empty() {
@@ -878,7 +971,7 @@ fn group_relevant(fresh: &[Member], library: &[Member]) -> Vec<Group> {
         return Vec::new();
     }
     let mut by_prefix: HashMap<String, Vec<usize>> = HashMap::new();
-    let mut by_gram: HashMap<String, Vec<usize>> = HashMap::new();
+    let mut by_gram: HashMap<u64, Vec<usize>> = HashMap::new();
     for (i, m) in fresh_kept.iter().enumerate() {
         by_prefix.entry(prefix2(&m.parsed.base)).or_default().push(i);
         for g in char_grams(&m.parsed.base) {
@@ -1932,6 +2025,7 @@ mod tests {
         assert_eq!(g.len(), 1);
         assert!(!g[0].confident);
         assert_eq!(g[0].members.len(), 2);
+        assert_eq!(g[0].title, "海贼王");
 
         let wide = grouped(&["ＮＡＲＵＴＯ movie", "naruto special edition"]);
         assert_eq!(wide.len(), 1);
@@ -2023,6 +2117,29 @@ mod tests {
         assert_eq!(g.len(), 1);
         assert!(!g[0].confident);
         assert_eq!(g[0].members.len(), 3);
+    }
+
+    #[test]
+    fn loose_index_stays_within_a_couple_of_seconds() {
+        let mut names: Vec<String> = (0..300).map(|i| format!("书{i:04}甲")).collect();
+        for i in 0..40 {
+            names.push(format!("共享标题{i:02}号"));
+        }
+        names.push("海贼王外传".into());
+        names.push("海贼王特别篇".into());
+        let refs: Vec<&str> = names.iter().map(|s| s.as_str()).collect();
+        let start = std::time::Instant::now();
+        let g = grouped(&refs);
+        let elapsed = start.elapsed();
+        assert!(elapsed.as_secs() < 2, "{elapsed:?}");
+        assert!(g.iter().any(|x| x.members.iter().any(|m| m.name.contains("海贼王"))));
+        assert_eq!(
+            g.iter()
+                .find(|x| x.members.iter().any(|m| m.name.contains("海贼王")))
+                .unwrap()
+                .title,
+            "海贼王"
+        );
     }
 
     #[test]

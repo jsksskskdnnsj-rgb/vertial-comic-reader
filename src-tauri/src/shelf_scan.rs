@@ -248,6 +248,17 @@ pub fn sort_comic_names(names: &mut [String]) {
     names.sort_by(|a, b| compare_comic_names(a, b));
 }
 
+/// Same order as `compare_comic_names`, with the sort key computed once per item.
+pub fn sort_by_comic_name<T, F>(items: &mut [T], name_of: F)
+where
+    F: Fn(&T) -> &str,
+{
+    items.sort_by_cached_key(|item| {
+        let name = name_of(item);
+        (sort_key(name), name.to_string())
+    });
+}
+
 // ---- path identity -------------------------------------------------------------------
 
 /// Compare folder paths the way Windows users type them: slashes and case don't matter.
@@ -680,7 +691,7 @@ fn book_from_tally(title: &str, path: &str, tally: Tally) -> Option<ScanBook> {
         .into_iter()
         .map(|(title, pages)| ScanChapter { title, pages })
         .collect();
-    chapters.sort_by(|a, b| compare_comic_names(&a.title, &b.title));
+    crate::shelf_scan::sort_by_comic_name(&mut chapters, |c| c.title.as_str());
     if chapters.len() < 2 {
         chapters.clear();
     }
@@ -780,7 +791,7 @@ fn scan_walk(
                 }
             }
         }
-        dirs.sort_by(|a, b| compare_comic_names(&a.0, &b.0));
+        crate::shelf_scan::sort_by_comic_name(&mut dirs, |d| d.0.as_str());
         let names: Vec<String> = dirs.iter().map(|(n, _)| n.clone()).collect();
         emit(&snap, &mut pending, on_flush, "running", 0, Some(names.clone()), None);
         hook(&snap);

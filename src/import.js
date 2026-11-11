@@ -11,6 +11,7 @@ import { lib } from './api.js';
 import { mountShell, watchDrops } from './shell-ui.js';
 import { sortSources } from './naming.js';
 import { orderByRange, suggestName, compareSources, baseName } from './merge-order.js';
+import { reviewGroups } from './same-book.js';
 import { inspectFolder, looksLikeFile } from './folder-scan.js';
 import { IMAGE_EXTS, ZIP_EXTS, archiveAndImageFilters } from './image-exts.js';
 
@@ -67,13 +68,23 @@ function chipFor(p) {
   const parts = [plural(r.images, 'imp.image1', 'imp.imagesCount')];
   if (r.subfolders > 0) parts.push(plural(r.subfolders, 'imp.subfolder1', 'imp.subfoldersCount'));
   const names = [...r.subfolderNames].sort(compareSources);
-  const tip = names.slice(0, 12).join('\n') + (names.length > 12 ? '\n' + t('imp.andMore', { n: names.length - 12 }) : '');
+  const shown = names.slice(0, 12);
+  const tip = shown.join('\n') + (r.subfolders > shown.length ? '\n' + t('imp.andMore', { n: r.subfolders - shown.length }) : '');
   return `<span class="scan-chip${r.subfolders ? ' has-sub' : ''}" title="${esc(tip)}">${esc(parts.join(' · '))}</span>`;
 }
 function noteFor(p) {            // picking a folder AND one of its subfolders would import those images twice
   if (looksLikeFile(p)) return '';
   const parent = sources.find((q) => q !== p && !looksLikeFile(q) && pkey(p).startsWith(pkey(q) + '\\'));
   return parent ? `<div class="src-note">${esc(t('imp.overlap', { a: baseName(p), b: baseName(parent) }))}</div>` : '';
+}
+function renderSameBook() {
+  const el = $('sameBookHint');
+  if (!el) return;
+  const groups = reviewGroups(sources.map(baseName)).filter((g) => g.members.length >= 2);
+  if (!groups.length) { el.hidden = true; el.textContent = ''; return; }
+  const title = [...(groups[0].title || '')].slice(0, 16).join('');
+  el.hidden = false;
+  el.textContent = t('imp.sameBook', { n: groups.length, title });
 }
 function renderScan() {
   let images = 0, nested = 0;
@@ -96,6 +107,7 @@ function render() {
       <button data-rm="${i}" aria-label="${esc(t('common.remove'))}"><svg class="i"><use href="icons.svg#trash"/></svg></button>
     </div>${noteFor(p)}</div>`).join('');
   renderScan();
+  renderSameBook();
   document.querySelectorAll('#mergeSeg button').forEach((b) => {
     b.setAttribute('aria-pressed', String((b.dataset.merge === 'on') === merge));
     // imp.goMerge / imp.goSeparate contain {n}; applyI18n cannot fill it in, so the live source count goes in here

@@ -30,9 +30,9 @@ static RE_COVER: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r#"data-original="(https?://[^"]+/media/albums/[^"]+)""#).unwrap()
 });
 static RE_TAG_BLOCK: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r#"標籤[：:][\s\S]*?</span>\s*</div>"#).unwrap());
+    LazyLock::new(|| Regex::new(r#"標籤[：:][\s\S]*?</div>"#).unwrap());
 static RE_AUTHOR_BLOCK: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r#"作者[：:][\s\S]*?</span>\s*</div>"#).unwrap());
+    LazyLock::new(|| Regex::new(r#"作者[：:][\s\S]*?</div>"#).unwrap());
 static RE_TAG_A: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r#"<a[^>]*>\s*([^<]+?)\s*</a>"#).unwrap());
 
@@ -191,6 +191,7 @@ pub fn parse_search_html(html: &str, origin: &str, limit: usize) -> Vec<Metadata
             source_label: "18comic".into(),
             match_kind: None,
             page_url: Some(page),
+            confidence: None,
         });
         if out.len() >= limit {
             break;
@@ -214,6 +215,7 @@ pub fn parse_search_html(html: &str, origin: &str, limit: usize) -> Vec<Metadata
                 source_label: "18comic".into(),
                 match_kind: None,
                 page_url: Some(album_url(origin, id)),
+                confidence: None,
             });
             if out.len() >= limit {
                 break;
@@ -263,6 +265,7 @@ pub fn parse_album_html(html: &str, origin: &str, id: &str) -> MetadataDetail {
         cover_url,
         aliases: Vec::new(),
         page_url: Some(page_url),
+        facts: super::WorkFacts::default(),
     }
 }
 

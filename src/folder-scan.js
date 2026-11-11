@@ -21,7 +21,12 @@ export function summarizeFolder(files) {
     if (i < 0) top++;
     else { const d = rel.slice(0, i); dirs.set(d, (dirs.get(d) || 0) + 1); depth = Math.max(depth, d.split('/').length); }
   }
-  return { images, archives, top, nested: images - top, bytes, depth, subfolders: dirs.size, subfolderNames: [...dirs.keys()], empty: images === 0 };
+  const subfolderNames = [];
+  for (const name of dirs.keys()) {
+    subfolderNames.push(name);
+    if (subfolderNames.length >= 24) break;
+  }
+  return { images, archives, top, nested: images - top, bytes, depth, subfolders: dirs.size, subfolderNames, empty: images === 0 };
 }
 
 /** listImages(path) -> Promise<files>. Never throws: { ok:false } when the path cannot be read as a folder. */

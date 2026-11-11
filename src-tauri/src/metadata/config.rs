@@ -14,6 +14,12 @@ pub struct PerSourceProxy {
     pub anilist: bool,
     #[serde(default = "default_true")]
     pub comic18: bool,
+    #[serde(default = "default_true")]
+    pub mangadex: bool,
+    #[serde(default = "default_true")]
+    pub jikan: bool,
+    #[serde(default = "default_true")]
+    pub moegirl: bool,
 }
 
 impl Default for PerSourceProxy {
@@ -23,6 +29,9 @@ impl Default for PerSourceProxy {
             mangaupdates: true,
             anilist: true,
             comic18: true,
+            mangadex: true,
+            jikan: true,
+            moegirl: true,
         }
     }
 }
@@ -46,6 +55,12 @@ pub struct SourceToggles {
     pub anilist: bool,
     #[serde(default = "default_false")]
     pub comic18: bool,
+    #[serde(default = "default_true")]
+    pub mangadex: bool,
+    #[serde(default = "default_true")]
+    pub jikan: bool,
+    #[serde(default = "default_true")]
+    pub moegirl: bool,
 }
 
 impl Default for SourceToggles {
@@ -55,6 +70,9 @@ impl Default for SourceToggles {
             mangaupdates: true,
             anilist: true,
             comic18: false,
+            mangadex: true,
+            jikan: true,
+            moegirl: true,
         }
     }
 }
@@ -96,18 +114,8 @@ impl Default for MetadataNetworkConfig {
         Self {
             bangumi_token: String::new(),
             proxy_url: String::new(),
-            proxy_per_source: PerSourceProxy {
-                bangumi: true,
-                mangaupdates: true,
-                anilist: true,
-                comic18: true,
-            },
-            sources: SourceToggles {
-                bangumi: true,
-                mangaupdates: true,
-                anilist: true,
-                comic18: false,
-            },
+            proxy_per_source: PerSourceProxy::default(),
+            sources: SourceToggles::default(),
             comic18_domain: default_comic18_domain(),
             rate_limit_ms: default_rate_ms(),
             auto_bind_confident: true,
@@ -142,6 +150,15 @@ impl MetadataNetworkConfig {
         if self.sources.bangumi {
             out.push(super::Provider::Bangumi);
         }
+        if self.sources.moegirl {
+            out.push(super::Provider::Moegirl);
+        }
+        if self.sources.mangadex {
+            out.push(super::Provider::Mangadex);
+        }
+        if self.sources.jikan {
+            out.push(super::Provider::Jikan);
+        }
         if self.sources.mangaupdates {
             out.push(super::Provider::Mangaupdates);
         }
@@ -154,6 +171,19 @@ impl MetadataNetworkConfig {
         out
     }
 
+    pub fn enabled(&self, provider: super::Provider) -> bool {
+        match provider {
+            super::Provider::Bangumi => self.sources.bangumi,
+            super::Provider::Mangaupdates => self.sources.mangaupdates,
+            super::Provider::Anilist => self.sources.anilist,
+            super::Provider::Comic18 => self.sources.comic18,
+            super::Provider::Mangadex => self.sources.mangadex,
+            super::Provider::Jikan => self.sources.jikan,
+            super::Provider::Moegirl => self.sources.moegirl,
+            super::Provider::Manual => false,
+        }
+    }
+
     pub fn use_proxy_for(&self, provider: super::Provider) -> bool {
         if self.proxy_url.trim().is_empty() {
             return false;
@@ -163,6 +193,10 @@ impl MetadataNetworkConfig {
             super::Provider::Mangaupdates => self.proxy_per_source.mangaupdates,
             super::Provider::Anilist => self.proxy_per_source.anilist,
             super::Provider::Comic18 => self.proxy_per_source.comic18,
+            super::Provider::Mangadex => self.proxy_per_source.mangadex,
+            super::Provider::Jikan => self.proxy_per_source.jikan,
+            super::Provider::Moegirl => self.proxy_per_source.moegirl,
+            super::Provider::Manual => false,
         }
     }
 }
