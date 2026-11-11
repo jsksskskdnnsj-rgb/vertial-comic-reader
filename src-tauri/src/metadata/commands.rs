@@ -9,9 +9,12 @@ use super::bangumi;
 use super::client::{build_client, offline_message};
 use super::config::{self, MetadataNetworkConfig};
 use super::comic18;
+use super::jikan;
+use super::mangadex;
 use super::mangaupdates;
 use super::matching::{self, Match};
-use super::store::{self, BoundMetadata, PendingMatch};
+use super::moegirl;
+use super::store::{self, BoundMetadata, ManualPatch, PendingMatch};
 use super::{MetadataCandidate, MetadataDetail, Provider, USER_AGENT};
 use crate::appdata::data_dir;
 use crate::cover_protocol::CoversDir;
@@ -47,26 +50,58 @@ fn metadata_covers_dir() -> Result<PathBuf, String> {
     Ok(dir)
 }
 
-async fn search_provider(
+fn require_shelf_book(book_id: i64) -> Result<(), String> {
+    store::book_title(book_id).map(|_| ()).map_err(|_| "只能为书架中已有的书查询在线资料".into())
+}
+
+fn search_cache_key(provider: Provider, query: &str, limit: u32) -> String {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+    let mut hasher = DefaultHasher::new();
+    query.hash(&mut hasher);
+    format!("s:{}:{limit}:{:x}", provider.as_str(), hasher.finish())
+}
+
+fn detail_cache_key(provider: Provider, id: &str) -> String {
+    format!("d:{}:{id}", provider.as_str())
+}
+
+fn annotate(query: &str, list: &mut [MetadataCandidate]) {
+    for c in list.iter_mut() {
+        let (kind, conf) = matching::score_parts(query, c);
+        c.confidence = Some(conf);
+        if kind != Match::None {
+            c.match_kind = Some(kind.as_str().into());
+        }
+    }
+}
+
+async fn search_provider_net(
     cfg: &MetadataNetworkConfig,
     provider: Provider,
     query: &str,
     limit: u32,
 ) -> SearchResult {
+    if provider == Provider::Manual {
+        return SearchResult {
+            provider,
+            error: Some("手改不是检索源".into()),
+            candidates: Vec::new(),
+        };
+    }
     let candidates = match provider {
         Provider::Bangumi => bangumi::search(cfg, query, limit).await,
         Provider::Mangaupdates => mangaupdates::search(cfg, query, limit).await,
         Provider::Anilist => anilist::search(cfg, query, limit).await,
         Provider::Comic18 => comic18::search(cfg, query, limit).await,
+        Provider::Mangadex => mangadex::search(cfg, query, limit).await,
+        Provider::Jikan => jikan::search(cfg, query, limit).await,
+        Provider::Moegirl => moegirl::search(cfg, query, limit).await,
+        Provider::Manual => Ok(Vec::new()),
     };
     match candidates {
         Ok(mut list) => {
-            for c in &mut list {
-                let m = matching::score(query, c);
-                if m != Match::None {
-                    c.match_kind = Some(m.as_str().into());
-                }
-            }
+            annotate(query, &mut list);
             SearchResult {
                 provider,
                 error: None,
@@ -79,6 +114,35 @@ async fn search_provider(
             candidates: Vec::new(),
         },
     }
+}
+
+async fn search_provider(
+    cfg: &MetadataNetworkConfig,
+    provider: Provider,
+    query: &str,
+    limit: u32,
+) -> SearchResult {
+    let key = search_cache_key(provider, query, limit);
+    if let Some(body) = store::cache_fresh(&key) {
+        if let Ok(hit) = serde_json::from_str::<SearchResult>(&body) {
+            return hit;
+        }
+    }
+    let hit = search_provider_net(cfg, provider, query, limit).await;
+    if hit.error.is_none() {
+        if let Ok(body) = serde_json::to_string(&hit) {
+            store::cache_put(&key, &body, 6 * 3600);
+        }
+        return hit;
+    }
+    if let Some(body) = store::cache_stale(&key) {
+        if let Ok(mut cached) = serde_json::from_str::<SearchResult>(&body) {
+            let note = hit.error.clone().unwrap_or_default();
+            cached.error = Some(format!("离线缓存：{note}"));
+            return cached;
+        }
+    }
+    hit
 }
 
 async fn search_fallback_chain(
@@ -95,12 +159,41 @@ async fn search_fallback_chain(
     Vec::new()
 }
 
-pub(crate) async fn fetch_detail(cfg: &MetadataNetworkConfig, provider: Provider, id: &str) -> Result<MetadataDetail, String> {
+async fn fetch_detail_net(cfg: &MetadataNetworkConfig, provider: Provider, id: &str) -> Result<MetadataDetail, String> {
     match provider {
         Provider::Bangumi => bangumi::detail(cfg, id).await,
         Provider::Mangaupdates => mangaupdates::detail(cfg, id).await,
         Provider::Anilist => anilist::detail(cfg, id).await,
         Provider::Comic18 => comic18::detail(cfg, id).await,
+        Provider::Mangadex => mangadex::detail(cfg, id).await,
+        Provider::Jikan => jikan::detail(cfg, id).await,
+        Provider::Moegirl => moegirl::detail(cfg, id).await,
+        Provider::Manual => Err("手改条目没有远程详情".into()),
+    }
+}
+
+pub(crate) async fn fetch_detail(cfg: &MetadataNetworkConfig, provider: Provider, id: &str) -> Result<MetadataDetail, String> {
+    let key = detail_cache_key(provider, id);
+    if let Some(body) = store::cache_fresh(&key) {
+        if let Ok(detail) = serde_json::from_str::<MetadataDetail>(&body) {
+            return Ok(detail);
+        }
+    }
+    match fetch_detail_net(cfg, provider, id).await {
+        Ok(detail) => {
+            if let Ok(body) = serde_json::to_string(&detail) {
+                store::cache_put(&key, &body, 7 * 24 * 3600);
+            }
+            Ok(detail)
+        }
+        Err(err) => {
+            if let Some(body) = store::cache_stale(&key) {
+                if let Ok(detail) = serde_json::from_str::<MetadataDetail>(&body) {
+                    return Ok(detail);
+                }
+            }
+            Err(err)
+        }
     }
 }
 
@@ -155,16 +248,13 @@ async fn cache_cover_file(book_id: i64, url: &str, cfg: &MetadataNetworkConfig, 
     if bytes.len() > 8 * 1024 * 1024 {
         return Err("封面文件过大".into());
     }
-    let ext = if bytes.starts_with(b"\x89PNG") {
-        "png"
-    } else if bytes.starts_with(b"RIFF") && bytes.len() > 12 && &bytes[8..12] == b"WEBP" {
-        "webp"
-    } else {
-        "jpg"
-    };
-    let name = format!("book-{book_id}.{ext}");
+    let img = image::load_from_memory(&bytes).map_err(|_| "封面无法解码".to_string())?;
+    let thumb = img.thumbnail(480, 480);
+    let name = format!("book-{book_id}.jpg");
     let path = metadata_covers_dir()?.join(&name);
-    std::fs::write(&path, &bytes).map_err(|e| e.to_string())?;
+    thumb
+        .save_with_format(&path, image::ImageFormat::Jpeg)
+        .map_err(|e| e.to_string())?;
     store::set_cover_cache(book_id, &name)?;
     Ok(name)
 }
@@ -240,11 +330,13 @@ pub fn metadata_set_config(cfg: MetadataNetworkConfig) -> Result<(), String> {
 
 #[tauri::command]
 pub async fn metadata_search(
+    book_id: i64,
     query: String,
     limit: Option<u32>,
     providers: Option<Vec<String>>,
     fallback_chain: Option<bool>,
 ) -> Result<Vec<SearchResult>, String> {
+    require_shelf_book(book_id)?;
     let query = query.trim();
     if query.is_empty() {
         return Err("搜索词不能为空".into());
@@ -271,16 +363,7 @@ pub async fn metadata_search(
     };
     let mut out = Vec::new();
     for p in order {
-        if !cfg.sources.bangumi && p == Provider::Bangumi {
-            continue;
-        }
-        if !cfg.sources.mangaupdates && p == Provider::Mangaupdates {
-            continue;
-        }
-        if !cfg.sources.anilist && p == Provider::Anilist {
-            continue;
-        }
-        if !cfg.sources.comic18 && p == Provider::Comic18 {
+        if !cfg.enabled(p) {
             continue;
         }
         out.push(search_provider(&cfg, p, query, limit).await);
@@ -289,7 +372,8 @@ pub async fn metadata_search(
 }
 
 #[tauri::command]
-pub async fn metadata_detail(provider: String, external_id: String) -> Result<MetadataDetail, String> {
+pub async fn metadata_detail(book_id: i64, provider: String, external_id: String) -> Result<MetadataDetail, String> {
+    require_shelf_book(book_id)?;
     let provider = Provider::parse(&provider).ok_or_else(|| "未知数据源".to_string())?;
     let cfg = config::load();
     fetch_detail(&cfg, provider, &external_id).await
@@ -366,6 +450,18 @@ pub async fn metadata_automatch(
     let dry = dry_run.unwrap_or(false);
     let mut out = Vec::new();
     for book_id in ids {
+        if let Ok(Some(bound)) = store::get_bound(book_id) {
+            if bound.locked || bound.provider == Provider::Manual {
+                out.push(AutoMatchItem {
+                    book_id,
+                    status: "locked".into(),
+                    provider: Some(bound.provider.as_str().into()),
+                    match_kind: Some(bound.match_kind),
+                    message: Some("已锁定，跳过自动匹配".into()),
+                });
+                continue;
+            }
+        }
         let title = match store::book_title(book_id) {
             Ok(t) => t,
             Err(e) => {
@@ -528,6 +624,16 @@ fn fallback_page_url(
             Provider::Comic18 => {
                 return Some(comic18::search_url_for_title(cfg, book_title));
             }
+            Provider::Mangadex => {
+                return Some(format!("https://mangadex.org/title/{}", b.external_id));
+            }
+            Provider::Jikan => {
+                return Some(format!("https://myanimelist.net/manga/{}", b.external_id));
+            }
+            Provider::Moegirl => {
+                return Some(format!("https://zh.moegirl.org.cn/?curid={}", b.external_id));
+            }
+            Provider::Manual => {}
         }
     }
     Some(comic18::search_url_for_title(cfg, book_title))
@@ -549,4 +655,50 @@ pub fn metadata_comic18_search_url(book_id: i64) -> Result<String, String> {
     let cfg = config::load();
     let title = store::book_title(book_id)?;
     Ok(comic18::search_url_for_title(&cfg, &title))
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RefreshOutcome {
+    pub refreshed: bool,
+    pub message: Option<String>,
+}
+
+#[tauri::command]
+pub fn metadata_save_manual(book_id: i64, patch: ManualPatch) -> Result<BoundMetadata, String> {
+    require_shelf_book(book_id)?;
+    store::save_manual(book_id, &patch)?;
+    store::get_bound(book_id)?.ok_or_else(|| "保存失败".into())
+}
+
+#[tauri::command]
+pub async fn metadata_refresh(book_id: i64) -> Result<RefreshOutcome, String> {
+    require_shelf_book(book_id)?;
+    let bound = store::get_bound(book_id)?.ok_or_else(|| "尚未绑定在线资料".to_string())?;
+    if bound.locked || bound.provider == Provider::Manual {
+        return Ok(RefreshOutcome {
+            refreshed: false,
+            message: Some("资料已锁定，未访问网络".into()),
+        });
+    }
+    let cfg = config::load();
+    let detail = fetch_detail(&cfg, bound.provider, &bound.external_id).await?;
+    let mut cover_cache = bound.cover_cache.clone();
+    if let Some(url) = detail.cover_url.as_deref() {
+        if let Ok(name) = cache_cover_file(book_id, url, &cfg, bound.provider).await {
+            cover_cache = Some(name);
+        }
+    }
+    let page = detail.infer_page_url();
+    store::write_bound(
+        book_id,
+        &detail,
+        bound.match_kind.as_str(),
+        cover_cache.as_deref(),
+        page.as_deref(),
+    )?;
+    Ok(RefreshOutcome {
+        refreshed: true,
+        message: None,
+    })
 }

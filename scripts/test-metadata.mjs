@@ -22,6 +22,7 @@ if (missingEn.length) {
 const commands = [
   'metadata_get_config', 'metadata_set_config', 'metadata_search', 'metadata_detail', 'metadata_get',
   'metadata_bind', 'metadata_unbind', 'metadata_automatch', 'metadata_list_pending', 'metadata_cover_local_path',
+  'metadata_save_manual', 'metadata_refresh',
 ];
 for (const c of commands) {
   if (!api.includes(`'${c}'`)) {

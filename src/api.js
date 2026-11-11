@@ -61,9 +61,9 @@ export const lib = {
   metadata: {
     getConfig: () => invoke('metadata_get_config'),
     setConfig: (cfg) => invoke('metadata_set_config', { cfg }),
-    search: (query, providers = null, limit = 12) =>
-      invoke('metadata_search', { query, providers, limit }),
-    detail: (provider, externalId) => invoke('metadata_detail', { provider, externalId }),
+    search: (bookId, query, providers = null, limit = 12) =>
+      invoke('metadata_search', { bookId, query, providers, limit }),
+    detail: (bookId, provider, externalId) => invoke('metadata_detail', { bookId, provider, externalId }),
     get: (bookId) => invoke('metadata_get', { bookId }),
     bind: (bookId, provider, externalId, matchKind, options) =>
       invoke('metadata_bind', { bookId, provider, externalId, matchKind, options }),
@@ -73,6 +73,8 @@ export const lib = {
     listPending: () => invoke('metadata_list_pending'),
     coverPath: (bookId) => invoke('metadata_cover_local_path', { bookId }),
     openPage: (bookId) => invoke('metadata_open_source_page', { bookId }),
+    saveManual: (bookId, patch) => invoke('metadata_save_manual', { bookId, patch }),
+    refresh: (bookId) => invoke('metadata_refresh', { bookId }),
   },
 };
 

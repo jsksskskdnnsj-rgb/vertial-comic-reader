@@ -62,7 +62,7 @@ pub fn scan_zip(path: &Path) -> Result<Vec<RealPage>, ReaderError> {
         .filter(|(_, n)| !n.ends_with('/') && is_image(n))
         .map(|(i, n)| (i as u32, n.replace('\\', "/")))
         .collect();
-    cands.sort_by(|a, b| crate::shelf_scan::compare_comic_names(&a.1, &b.1)); // 2.jpg before 10.jpg, 第一话 before 第2话
+    crate::shelf_scan::sort_by_comic_name(&mut cands, |c| c.1.as_str()); // 2.jpg before 10.jpg, 第一话 before 第2话
 
     let mut out = Vec::with_capacity(cands.len());
     for (entry, name) in cands {
@@ -127,7 +127,7 @@ pub fn scan_folder(root: &Path) -> Vec<RealPage> {
             }
         })
         .collect();
-    files.sort_by(|a, b| crate::shelf_scan::compare_comic_names(&a.0, &b.0));
+    crate::shelf_scan::sort_by_comic_name(&mut files, |f| f.0.as_str());
     files
         .into_iter()
         .map(|(name, bytes)| {

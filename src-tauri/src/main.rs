@@ -216,6 +216,8 @@ fn main() {
             metadata::commands::metadata_cover_local_path,
             metadata::commands::metadata_open_source_page,
             metadata::commands::metadata_comic18_search_url,
+            metadata::commands::metadata_save_manual,
+            metadata::commands::metadata_refresh,
         ])
         .on_window_event(|window, event| match event {
             tauri::WindowEvent::DragDrop(tauri::DragDropEvent::Drop { paths, .. }) => {

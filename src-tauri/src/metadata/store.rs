@@ -37,6 +37,12 @@ CREATE TABLE IF NOT EXISTS metadata_pending(
   FOREIGN KEY(book_id) REFERENCES shelf(id) ON DELETE CASCADE
 );
 CREATE INDEX IF NOT EXISTS idx_book_metadata_provider ON book_metadata(provider);
+CREATE TABLE IF NOT EXISTS metadata_http_cache(
+  cache_key TEXT PRIMARY KEY,
+  body TEXT NOT NULL,
+  fetched_at INTEGER NOT NULL,
+  expires_at INTEGER NOT NULL
+);
 ";
 
 pub fn migrate(conn: &Connection) -> Result<(), String> {
@@ -54,6 +60,27 @@ pub fn migrate(conn: &Connection) -> Result<(), String> {
             [],
         )
         .map_err(|e| e.to_string())?;
+    }
+    for (name, decl) in [
+        ("status", "TEXT"),
+        ("chapter_count", "INTEGER"),
+        ("volume_count", "INTEGER"),
+        ("year", "INTEGER"),
+        ("aliases_json", "TEXT"),
+        ("locked", "INTEGER NOT NULL DEFAULT 0"),
+        ("locks_json", "TEXT"),
+    ] {
+        let present: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('book_metadata') WHERE name=?1",
+                [name],
+                |r| r.get(0),
+            )
+            .unwrap_or(0);
+        if present == 0 {
+            conn.execute(&format!("ALTER TABLE book_metadata ADD COLUMN {name} {decl}"), [])
+                .map_err(|e| e.to_string())?;
+        }
     }
     Ok(())
 }
@@ -78,6 +105,12 @@ pub struct BoundMetadata {
     pub match_kind: String,
     pub bound_at: i64,
     pub source_page_url: Option<String>,
+    pub status: Option<String>,
+    pub chapter_count: Option<i64>,
+    pub volume_count: Option<i64>,
+    pub year: Option<i32>,
+    pub aliases: Vec<String>,
+    pub locked: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -103,7 +136,8 @@ pub fn get_bound(book_id: i64) -> Result<Option<BoundMetadata>, String> {
         .query_row(
             "SELECT book_id, provider, external_id, title_display, title_cn, title_original,
                     summary, authors_json, tags_json, rating, rating_count, release_date,
-                    cover_url, cover_cache, match_kind, bound_at, source_page_url
+                    cover_url, cover_cache, match_kind, bound_at, source_page_url,
+                    status, chapter_count, volume_count, year, aliases_json, locked
              FROM book_metadata WHERE book_id=?1",
             [book_id],
             |r| {
@@ -125,6 +159,12 @@ pub fn get_bound(book_id: i64) -> Result<Option<BoundMetadata>, String> {
                     match_kind: r.get(14)?,
                     bound_at: r.get(15)?,
                     source_page_url: r.get(16)?,
+                    status: r.get(17)?,
+                    chapter_count: r.get(18)?,
+                    volume_count: r.get(19)?,
+                    year: r.get(20)?,
+                    aliases: decode_json_list(r.get(21)?),
+                    locked: r.get::<_, i64>(22).unwrap_or(0) != 0,
                 })
             },
         )
@@ -143,12 +183,14 @@ pub fn write_bound(
     let conn = db_conn()?;
     let authors = serde_json::to_string(&detail.authors).map_err(|e| e.to_string())?;
     let tags = serde_json::to_string(&detail.tags).map_err(|e| e.to_string())?;
+    let aliases = serde_json::to_string(&detail.aliases).map_err(|e| e.to_string())?;
     conn.execute(
         "INSERT INTO book_metadata(
             book_id, provider, external_id, title_display, title_cn, title_original, summary,
             authors_json, tags_json, rating, rating_count, release_date, cover_url, cover_cache,
-            match_kind, bound_at, source_page_url)
-         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17)
+            match_kind, bound_at, source_page_url, status, chapter_count, volume_count, year,
+            aliases_json, locked, locks_json)
+         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22,0,NULL)
          ON CONFLICT(book_id) DO UPDATE SET
             provider=excluded.provider, external_id=excluded.external_id,
             title_display=excluded.title_display, title_cn=excluded.title_cn,
@@ -157,7 +199,10 @@ pub fn write_bound(
             rating=excluded.rating, rating_count=excluded.rating_count,
             release_date=excluded.release_date, cover_url=excluded.cover_url,
             cover_cache=excluded.cover_cache, match_kind=excluded.match_kind,
-            bound_at=excluded.bound_at, source_page_url=excluded.source_page_url",
+            bound_at=excluded.bound_at, source_page_url=excluded.source_page_url,
+            status=excluded.status, chapter_count=excluded.chapter_count,
+            volume_count=excluded.volume_count, year=excluded.year,
+            aliases_json=excluded.aliases_json, locked=0, locks_json=NULL",
         params![
             book_id,
             detail.provider.as_str(),
@@ -176,6 +221,11 @@ pub fn write_bound(
             match_kind,
             now_secs(),
             source_page_url,
+            detail.facts.status,
+            detail.facts.chapter_count,
+            detail.facts.volume_count,
+            detail.facts.year,
+            aliases,
         ],
     )
     .map_err(|e| e.to_string())?;
@@ -263,6 +313,139 @@ pub fn book_title(book_id: i64) -> Result<String, String> {
     let conn = db_conn()?;
     conn.query_row("SELECT name FROM shelf WHERE id=?1", [book_id], |r| r.get(0))
         .map_err(|_| "书本不存在".into())
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ManualPatch {
+    pub title_display: Option<String>,
+    pub title_cn: Option<String>,
+    pub title_original: Option<String>,
+    pub summary: Option<String>,
+    pub authors: Option<Vec<String>>,
+    pub tags: Option<Vec<String>>,
+    pub status: Option<String>,
+    pub chapter_count: Option<i64>,
+    pub volume_count: Option<i64>,
+    pub year: Option<i32>,
+    pub release_date: Option<String>,
+    #[serde(default)]
+    pub lock: bool,
+}
+
+pub fn save_manual(book_id: i64, patch: &ManualPatch) -> Result<(), String> {
+    let _ = book_title(book_id)?;
+    let authors = serde_json::to_string(patch.authors.as_deref().unwrap_or(&[])).map_err(|e| e.to_string())?;
+    let tags = serde_json::to_string(patch.tags.as_deref().unwrap_or(&[])).map_err(|e| e.to_string())?;
+    let locks = if patch.lock {
+        serde_json::to_string(&[
+            "titleDisplay",
+            "titleCn",
+            "titleOriginal",
+            "summary",
+            "authors",
+            "tags",
+            "status",
+            "chapterCount",
+            "volumeCount",
+            "year",
+            "releaseDate",
+        ])
+        .ok()
+    } else {
+        None
+    };
+    let conn = db_conn()?;
+    let existing = get_bound(book_id)?;
+    let provider = existing
+        .as_ref()
+        .map(|b| b.provider.as_str().to_string())
+        .unwrap_or_else(|| "manual".into());
+    let external = existing
+        .as_ref()
+        .map(|b| b.external_id.clone())
+        .unwrap_or_else(|| "local".into());
+    let match_kind = if existing.is_some() { "manual" } else { "manual" };
+    conn.execute(
+        "INSERT INTO book_metadata(
+            book_id, provider, external_id, title_display, title_cn, title_original, summary,
+            authors_json, tags_json, rating, rating_count, release_date, cover_url, cover_cache,
+            match_kind, bound_at, source_page_url, status, chapter_count, volume_count, year,
+            aliases_json, locked, locks_json)
+         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,NULL,NULL,?10,NULL,NULL,?11,?12,NULL,?13,?14,?15,?16,'[]',?17,?18)
+         ON CONFLICT(book_id) DO UPDATE SET
+            title_display=excluded.title_display, title_cn=excluded.title_cn,
+            title_original=excluded.title_original, summary=excluded.summary,
+            authors_json=excluded.authors_json, tags_json=excluded.tags_json,
+            release_date=excluded.release_date, status=excluded.status,
+            chapter_count=excluded.chapter_count, volume_count=excluded.volume_count,
+            year=excluded.year, match_kind='manual', locked=excluded.locked, locks_json=excluded.locks_json",
+        params![
+            book_id,
+            provider,
+            external,
+            patch.title_display,
+            patch.title_cn,
+            patch.title_original,
+            patch.summary,
+            authors,
+            tags,
+            patch.release_date,
+            match_kind,
+            now_secs(),
+            patch.status,
+            patch.chapter_count,
+            patch.volume_count,
+            patch.year,
+            if patch.lock { 1 } else { 0 },
+            locks,
+        ],
+    )
+    .map_err(|e| e.to_string())?;
+    clear_pending(book_id)?;
+    Ok(())
+}
+
+pub fn cache_fresh(key: &str) -> Option<String> {
+    let conn = db_conn().ok()?;
+    let now = now_secs();
+    conn.query_row(
+        "SELECT body FROM metadata_http_cache WHERE cache_key=?1 AND expires_at>=?2",
+        params![key, now],
+        |r| r.get(0),
+    )
+    .ok()
+}
+
+pub fn cache_stale(key: &str) -> Option<String> {
+    let conn = db_conn().ok()?;
+    let oldest = now_secs() - 30 * 24 * 3600;
+    conn.query_row(
+        "SELECT body FROM metadata_http_cache WHERE cache_key=?1 AND fetched_at>=?2",
+        params![key, oldest],
+        |r| r.get(0),
+    )
+    .ok()
+}
+
+pub fn cache_put(key: &str, body: &str, ttl_secs: i64) {
+    if body.len() > 400_000 {
+        return;
+    }
+    let Ok(conn) = db_conn() else { return };
+    let now = now_secs();
+    let _ = conn.execute(
+        "INSERT INTO metadata_http_cache(cache_key, body, fetched_at, expires_at)
+         VALUES (?1,?2,?3,?4)
+         ON CONFLICT(cache_key) DO UPDATE SET body=excluded.body, fetched_at=excluded.fetched_at, expires_at=excluded.expires_at",
+        params![key, body, now, now + ttl_secs],
+    );
+    let _ = conn.execute(
+        "DELETE FROM metadata_http_cache WHERE expires_at < ?1 AND cache_key NOT IN (
+            SELECT cache_key FROM metadata_http_cache ORDER BY fetched_at DESC LIMIT 400
+        )",
+        params![now - 30 * 24 * 3600],
+    );
 }
 
 pub fn set_cover_cache(book_id: i64, cache_name: &str) -> Result<(), String> {

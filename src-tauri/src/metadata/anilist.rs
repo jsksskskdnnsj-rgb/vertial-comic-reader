@@ -2,7 +2,7 @@
 
 use serde::Deserialize;
 
-use super::client::{build_client, offline_message, throttle};
+use super::client::{build_client, send_retry};
 use super::config::MetadataNetworkConfig;
 use super::{MetadataCandidate, MetadataDetail, Provider};
 
@@ -15,6 +15,8 @@ query ($search: String, $perPage: Int) {
     media(search: $search, type: MANGA, sort: SEARCH_MATCH) {
       id
       title { romaji english native userPreferred }
+      synonyms
+      status
       startDate { year month day }
       coverImage { large medium }
       averageScore
@@ -28,7 +30,11 @@ query ($id: Int) {
   Media(id: $id, type: MANGA) {
     id
     title { romaji english native userPreferred }
+    synonyms
     description(asHtml: false)
+    status
+    chapters
+    volumes
     startDate { year month day }
     coverImage { large extraLarge }
     averageScore
@@ -66,6 +72,8 @@ struct SearchPage {
 struct MediaStub {
     id: i64,
     title: TitleBlock,
+    #[serde(default)]
+    synonyms: Vec<String>,
     startDate: Option<DateBlock>,
     coverImage: Option<CoverBlock>,
     averageScore: Option<i64>,
@@ -81,7 +89,12 @@ struct DetailData {
 struct MediaDetail {
     id: i64,
     title: TitleBlock,
+    #[serde(default)]
+    synonyms: Vec<String>,
     description: Option<String>,
+    status: Option<String>,
+    chapters: Option<i64>,
+    volumes: Option<i64>,
     startDate: Option<DateBlock>,
     coverImage: Option<CoverBlock>,
     averageScore: Option<i64>,
@@ -203,16 +216,15 @@ async fn gql<T: for<'de> Deserialize<'de>>(
     query: &str,
     variables: serde_json::Value,
 ) -> Result<T, String> {
-    throttle(cfg, HOST).await;
-    let client = build_client(cfg, Provider::Anilist)?;
-    let response = client
-        .post(ENDPOINT)
-        .header("Content-Type", "application/json")
-        .header("Accept", "application/json")
-        .json(&serde_json::json!({ "query": query, "variables": variables }))
-        .send()
-        .await
-        .map_err(|e| offline_message(&e))?;
+    let response = send_retry(cfg, HOST, 100, || {
+        let client = build_client(cfg, Provider::Anilist)?;
+        Ok(client
+            .post(ENDPOINT)
+            .header("Content-Type", "application/json")
+            .header("Accept", "application/json")
+            .json(&serde_json::json!({ "query": query, "variables": variables })))
+    })
+    .await?;
     if !response.status().is_success() {
         return Err(format!("AniList 请求失败（HTTP {}）", response.status()));
     }
@@ -245,7 +257,13 @@ pub async fn search(
         .into_iter()
         .map(|m| {
             let title = pick_title(&m.title);
-            let (original, aliases) = title_aliases(&m.title, &title);
+            let (original, mut aliases) = title_aliases(&m.title, &title);
+            for s in &m.synonyms {
+                let s = s.trim();
+                if !s.is_empty() && s != title && !aliases.iter().any(|a| a == s) {
+                    aliases.push(s.to_string());
+                }
+            }
             MetadataCandidate {
                 provider: Provider::Anilist,
                 external_id: m.id.to_string(),
@@ -258,6 +276,7 @@ pub async fn search(
                 source_label: "AniList".into(),
                 match_kind: None,
                 page_url: Some(format!("https://anilist.co/manga/{}", m.id)),
+                confidence: None,
             }
         })
         .collect())
@@ -269,6 +288,12 @@ pub async fn detail(cfg: &MetadataNetworkConfig, id: &str) -> Result<MetadataDet
     let m = data.media.ok_or_else(|| "AniList 条目不存在".to_string())?;
     let title = pick_title(&m.title);
     let (title_original, mut aliases) = title_aliases(&m.title, &title);
+    for s in &m.synonyms {
+        let s = s.trim();
+        if !s.is_empty() && s != title && !aliases.iter().any(|a| a == s) {
+            aliases.push(s.to_string());
+        }
+    }
     let title_cn = m.title.english.clone().filter(|s| *s != title);
     let tags: Vec<String> = m
         .tags
@@ -319,5 +344,11 @@ pub async fn detail(cfg: &MetadataNetworkConfig, id: &str) -> Result<MetadataDet
         cover_url: m.coverImage.as_ref().and_then(CoverBlock::best),
         aliases,
         page_url: Some(format!("https://anilist.co/manga/{}", m.id)),
+        facts: super::WorkFacts {
+            status: m.status.clone().filter(|s| !s.trim().is_empty()),
+            chapter_count: m.chapters.filter(|n| *n > 0),
+            volume_count: m.volumes.filter(|n| *n > 0),
+            year: m.startDate.as_ref().and_then(|d| d.year).and_then(|y| i32::try_from(y).ok()),
+        },
     })
 }

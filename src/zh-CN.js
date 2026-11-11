@@ -8,6 +8,9 @@ export default {
   'nav.home': '\u9996\u9875', // Home
   'nav.library': '\u4e66\u67b6', // Library
   'nav.import': '\u5bfc\u5165', // Import
+  'nav.scan': '\u626b\u63cf', // Scan
+  'nav.book': '\u4e66\u7c4d', // Book
+  'nav.reader': '\u9605\u8bfb', // Reader
   'nav.settings': '\u8bbe\u7f6e', // Settings
   'search.placeholder': '\u641c\u7d22\u4e66\u67b6\u2026', // Search your library…
   'search.shortcut': '按 / 或 Ctrl+K 聚焦搜索，Esc 清空',
@@ -124,6 +127,7 @@ export default {
   'imp.count': '{n} \u4e2a\u6765\u6e90', // {n} sources
   'imp.dropTitle': '\u628a\u6587\u4ef6\u5939\u548c\u538b\u7f29\u5305\u62d6\u653e\u5230\u8fd9\u91cc', // Drop folders and ZIP files here
   'imp.empty': '\u8fd8\u6ca1\u6709\u6765\u6e90\u3002\u53ef\u6dfb\u52a0\u591a\u4e2a\u538b\u7f29\u5305\u548c\u6587\u4ef6\u5939\uff0c\u5e76\u5408\u5e76\u4e3a\u4e00\u672c\u4e66\u3002', // No sources yet. Add several ZIP files and folders to merge them into one book.
+  'imp.sameBook': '有 {n} 组名字含连续 3 字以上的相同片段（如「{title}」）。扫描时会进待确认，不会自动合并。',
   'imp.failed': '\u5bfc\u5165\u5931\u8d25\uff1a{e}', // Import failed: {e}
   'imp.failedRow': '{p}\uff1a{r}', // {p}: {r}
   'imp.folder': '\u653e\u5165\u6587\u4ef6\u5939', // Add to folder
@@ -520,7 +524,7 @@ export default {
   'meta.match.weak': '待确认',
   'meta.match.none': '—',
   'meta.settingsTitle': '在线资料与网络',
-  'meta.settingsHelp': '按 Bangumi → MangaUpdates → AniList 顺序搜索；仅拉取作品信息，不下载章节内容。',
+  'meta.settingsHelp': '按 Bangumi、萌娘百科、MangaDex、Jikan、MangaUpdates、AniList 查询书架里已有的书。只拉作品资料，不下载章节。',
   'meta.proxy': 'HTTP/SOCKS 代理',
   'meta.proxyHelp': '访问境外 API 时可填，例如 http://127.0.0.1:7890 或 socks5://127.0.0.1:1080',
   'meta.bangumiToken': 'Bangumi 个人令牌',
@@ -531,5 +535,27 @@ export default {
   'meta.autoBindHelp': '书名 exact/strong 时自动写入；较弱匹配进入待确认。',
   'meta.batchMatch': '批量匹配未绑定书籍',
   'meta.batchDone': '已处理 {n} 本：绑定 {bound}，待确认 {pending}，无匹配 {none}',
-  'meta.legal': 'Bangumi / MangaUpdates / AniList / 18comic 镜像数据受其各自服务条款约束；仅抓取作品资料（封面/标签/作者/简介），不下载章节内容，请遵守各站速率与用途规定。',
+  'meta.legal': 'Bangumi / MangaUpdates / AniList / MangaDex / Jikan / 萌娘百科 / 18comic 镜像数据受其各自服务条款约束；仅抓取作品资料（封面缩略图/标签/作者/简介），不下载章节内容。',
+  'meta.rateLimit': '同一站点的最小间隔',
+  'meta.rateLimitHelp': '毫秒。Jikan 会再加长到至少约 1.1 秒。',
+  'meta.provider.mangadex': 'MangaDex',
+  'meta.provider.jikan': 'MyAnimeList',
+  'meta.provider.moegirl': '萌娘百科',
+  'meta.provider.manual': '手改',
+  'meta.confidence': '置信 {n}',
+  'meta.handEdit': '手改并锁定',
+  'meta.editTitle': '改正资料',
+  'meta.lock': '锁定这些字段，刷新时不覆盖',
+  'meta.manualSaved': '已保存手改资料',
+  'meta.refresh': '刷新资料',
+  'meta.refreshDone': '已从网络更新',
+  'meta.refreshLocked': '资料已锁定，未从网络覆盖',
+  'meta.fieldStatus': '状态',
+  'meta.fieldChapters': '话数',
+  'meta.fieldVolumes': '卷数',
+  'meta.fieldYear': '年份',
+  'meta.fieldAliases': '别名',
+  'meta.authorsPh': '作者，用顿号或逗号分隔',
+  'meta.tagsPh': '标签，用顿号或逗号分隔',
+  'meta.locked': '已锁定',
 };

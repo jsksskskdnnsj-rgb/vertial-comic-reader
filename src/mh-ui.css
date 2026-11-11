@@ -741,3 +741,65 @@ label.check{display:inline-flex;align-items:center;gap:6px;cursor:pointer}
 #host .sizer{filter:var(--reader-filter)}
 .page img.pg{transition:none}
 .flip-stage{touch-action:none}
+
+/* ==== shared shell tokens. Reader scroll surface is unchanged. ==== */
+:root{
+  --space-1:4px;
+  --space-2:8px;
+  --space-3:12px;
+  --space-4:16px;
+  --space-5:24px;
+  --radius-sm:10px;
+  --radius-md:14px;
+  --radius-lg:var(--radius, 20px);
+  --font-sm:12px;
+  --font-md:13px;
+  --font-lg:21px;
+  --dur-fast:.18s;
+  --shadow-float:0 18px 50px #0003;
+}
+.shell-crumb{
+  flex-shrink:0;
+  max-width:9rem;
+  padding:4px 10px;
+  border-radius:999px;
+  border:1px solid var(--line);
+  background:#ffffff10;
+  color:var(--muted);
+  font-size:var(--font-sm);
+  white-space:nowrap;
+  overflow:hidden;
+  text-overflow:ellipsis;
+}
+.work.shell-frame .page-head{margin:var(--space-1) 0 var(--space-4);gap:var(--space-3)}
+.work.shell-frame .page-head h1{font-size:var(--font-lg);font-weight:680;letter-spacing:-.02em}
+.work.shell-frame .lede{font-size:var(--font-md);margin:0 0 var(--space-4)}
+.work.shell-frame .panel{padding:var(--space-4)}
+.work.shell-frame .btn,
+.work.shell-frame .ibtn{
+  border-radius:var(--radius-sm);
+}
+.work.shell-frame .btn{min-height:36px;padding:8px 14px;font-size:var(--font-md)}
+.work.shell-frame .btn:active{transform:translateY(1px)}
+.work.shell-frame .quick-tile,
+.work.shell-frame .book-card .cover,
+.work.shell-frame .src-row{
+  border-radius:var(--radius-md);
+}
+.modal{border-radius:var(--radius-md);box-shadow:var(--shadow-float)}
+.modal__head,.modal__body{padding:var(--space-4)}
+.modal__actions .btn{min-width:5.5rem;border-radius:var(--radius-sm)}
+.menu{border-radius:var(--radius-sm)}
+.work.shell-frame .page-main.is-entering{animation:mh-enter var(--dur-fast) ease}
+.work.shell-frame .page-main.is-swapping{opacity:.4}
+@keyframes mh-enter{from{opacity:.4}to{opacity:1}}
+@media(prefers-reduced-motion:reduce){
+  .work.shell-frame .page-main.is-entering{animation:none}
+  .work.shell-frame .btn:active{transform:none}
+}
+.meta-form{display:flex;flex-direction:column;gap:10px}
+.meta-form label{display:flex;flex-direction:column;gap:4px;font-size:12px;color:var(--muted)}
+.meta-form input,.meta-form textarea{width:100%}
+.meta-form textarea{min-height:88px;resize:vertical}
+.meta-score{font-variant-numeric:tabular-nums;font-size:11px;color:var(--accent)}
+.meta-locked{color:var(--accent)}

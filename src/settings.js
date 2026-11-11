@@ -339,11 +339,18 @@ async function loadMetaNet() {
   $('metaSrcMu').checked = cfg.sources?.mangaupdates !== false;
   $('metaSrcAni').checked = cfg.sources?.anilist !== false;
   $('metaSrcC18').checked = cfg.sources?.comic18 === true;
+  $('metaSrcMoe').checked = cfg.sources?.moegirl !== false;
+  $('metaSrcMdx').checked = cfg.sources?.mangadex !== false;
+  $('metaSrcJikan').checked = cfg.sources?.jikan !== false;
   $('metaC18Domain').value = cfg.comic18Domain || '18comic.vip';
   $('metaProxyBgm').checked = cfg.proxyPerSource?.bangumi !== false;
   $('metaProxyMu').checked = cfg.proxyPerSource?.mangaupdates !== false;
   $('metaProxyAni').checked = cfg.proxyPerSource?.anilist !== false;
   $('metaProxyC18').checked = cfg.proxyPerSource?.comic18 !== false;
+  $('metaProxyMoe').checked = cfg.proxyPerSource?.moegirl !== false;
+  $('metaProxyMdx').checked = cfg.proxyPerSource?.mangadex !== false;
+  $('metaProxyJk').checked = cfg.proxyPerSource?.jikan !== false;
+  $('metaRate').value = String(cfg.rateLimitMs || 400);
   $('metaAutoBind').checked = cfg.autoBindConfident !== false;
 }
 function metaNetPayload() {
@@ -355,15 +362,21 @@ function metaNetPayload() {
       mangaupdates: $('metaProxyMu').checked,
       anilist: $('metaProxyAni').checked,
       comic18: $('metaProxyC18').checked,
+      moegirl: $('metaProxyMoe').checked,
+      mangadex: $('metaProxyMdx').checked,
+      jikan: $('metaProxyJk').checked,
     },
     sources: {
       bangumi: $('metaSrcBgm').checked,
       mangaupdates: $('metaSrcMu').checked,
       anilist: $('metaSrcAni').checked,
       comic18: $('metaSrcC18').checked,
+      moegirl: $('metaSrcMoe').checked,
+      mangadex: $('metaSrcMdx').checked,
+      jikan: $('metaSrcJikan').checked,
     },
     comic18Domain: $('metaC18Domain').value.trim() || '18comic.vip',
-    rateLimitMs: 400,
+    rateLimitMs: Math.min(5000, Math.max(200, Number($('metaRate').value) || 400)),
     autoBindConfident: $('metaAutoBind').checked,
   };
 }

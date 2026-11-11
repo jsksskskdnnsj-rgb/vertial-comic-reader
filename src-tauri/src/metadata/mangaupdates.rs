@@ -2,7 +2,7 @@
 
 use serde::Deserialize;
 
-use super::client::{build_client, offline_message, throttle};
+use super::client::send_retry;
 use super::config::MetadataNetworkConfig;
 use super::{MetadataCandidate, MetadataDetail, Provider};
 
@@ -74,6 +74,8 @@ struct SeriesDetail {
     genres: Vec<GenreRow>,
     #[serde(default)]
     authors: Vec<AuthorRow>,
+    #[serde(default)]
+    status: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -127,20 +129,19 @@ pub async fn search(
     query: &str,
     limit: u32,
 ) -> Result<Vec<MetadataCandidate>, String> {
-    throttle(cfg, HOST).await;
-    let client = build_client(cfg, Provider::Mangaupdates)?;
     let body = serde_json::json!({
         "search": query,
         "page": 1,
         "perpage": limit.clamp(1, 25),
     });
-    let response = client
-        .post(SEARCH)
-        .header("Accept", "application/json")
-        .json(&body)
-        .send()
-        .await
-        .map_err(|e| offline_message(&e))?;
+    let response = send_retry(cfg, HOST, 100, || {
+        let client = super::client::build_client(cfg, Provider::Mangaupdates)?;
+        Ok(client
+            .post(SEARCH)
+            .header("Accept", "application/json")
+            .json(&body))
+    })
+    .await?;
     if !response.status().is_success() {
         return Err(http_status_message(response.status()));
     }
@@ -165,21 +166,19 @@ pub async fn search(
                 source_label: "MangaUpdates".into(),
                 match_kind: None,
                 page_url: None,
+                confidence: None,
             }
         })
         .collect())
 }
 
 pub async fn detail(cfg: &MetadataNetworkConfig, id: &str) -> Result<MetadataDetail, String> {
-    throttle(cfg, HOST).await;
-    let client = build_client(cfg, Provider::Mangaupdates)?;
     let url = format!("{SERIES}/{}", id.trim());
-    let response = client
-        .get(&url)
-        .header("Accept", "application/json")
-        .send()
-        .await
-        .map_err(|e| offline_message(&e))?;
+    let response = send_retry(cfg, HOST, 100, || {
+        let client = super::client::build_client(cfg, Provider::Mangaupdates)?;
+        Ok(client.get(&url).header("Accept", "application/json"))
+    })
+    .await?;
     if !response.status().is_success() {
         return Err(http_status_message(response.status()));
     }
@@ -225,5 +224,11 @@ pub async fn detail(cfg: &MetadataNetworkConfig, id: &str) -> Result<MetadataDet
         cover_url: s.image.as_ref().and_then(Images::best),
         aliases,
         page_url: s.url.clone(),
+        facts: super::WorkFacts {
+            status: s.status.clone().filter(|t| !t.trim().is_empty()),
+            chapter_count: None,
+            volume_count: None,
+            year: s.year.as_deref().and_then(super::year_prefix),
+        },
     })
 }

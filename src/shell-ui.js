@@ -68,8 +68,31 @@ function isShellUrl(url) {
   return SHELL_PAGES.has(base);
 }
 
+function pageNameFromUrl(url = location) {
+  return (url.pathname.split('/').pop() || 'home.html').replace(/\.html$/i, '') || 'home';
+}
+
+const PAGE_LABEL = {
+  home: 'nav.home',
+  library: 'nav.library',
+  import: 'nav.import',
+  scan: 'nav.scan',
+  settings: 'nav.settings',
+  book: 'nav.book',
+  reader: 'nav.reader',
+};
+
+function syncCrumb() {
+  const el = document.getElementById('shellCrumb');
+  if (!el) return;
+  const key = PAGE_LABEL[pageNameFromUrl()];
+  el.textContent = key ? t(key) : '';
+}
+
 function syncRailActive(active) {
   const rail = document.getElementById('shell-rail');
+  document.body.dataset.page = pageNameFromUrl();
+  syncCrumb();
   if (!rail) return;
   rail.querySelectorAll('a[href]').forEach((a) => {
     const key = a.href.includes('settings.html') ? 'settings'
@@ -92,6 +115,8 @@ function renderRail(active) {
     `<span class="rail-spacer"></span>
      <a href="settings.html" class="${active === 'settings' ? 'is-on' : ''}">
        <svg class="i"><use href="icons.svg#settings"/></svg><span>${esc(t('nav.settings'))}</span></a>`;
+  document.body.dataset.page = pageNameFromUrl();
+  syncCrumb();
 }
 
 function buildShellTop(opts = {}) {
@@ -108,6 +133,7 @@ function buildShellTop(opts = {}) {
       <svg class="i"><use href="icons.svg#search"/></svg>
       <input id="shellSearch" type="search" autocomplete="off" placeholder="${esc(t('search.placeholder'))}">
     </label>
+    <span class="shell-crumb" id="shellCrumb"></span>
     <span class="spacer"></span>
     <button class="ibtn" id="shellLang" aria-label="${esc(t('settings.language'))}" title="${esc(t('settings.language'))}"><svg class="i"><use href="icons.svg#globe"/></svg></button>
     <div class="wc">
@@ -205,6 +231,7 @@ async function swapShellMain(href, { historyMode = 'push' } = {}) {
     main.scrollTop = 0;
     if (historyMode === 'push') history.pushState(null, '', url.pathname + url.search + url.hash);
     else if (historyMode === 'replace') history.replaceState(null, '', url.pathname + url.search + url.hash);
+    document.body.dataset.page = pageNameFromUrl(url);
     syncRailActive(railActiveFromUrl(url));
     await loadPageModule(url.pathname);
     applyI18n();
@@ -213,6 +240,9 @@ async function swapShellMain(href, { historyMode = 'push' } = {}) {
     location.assign(url.href);
   } finally {
     main.classList.remove('is-swapping');
+    main.classList.remove('is-entering');
+    void main.offsetWidth;
+    main.classList.add('is-entering');
     navBusy = false;
   }
 }

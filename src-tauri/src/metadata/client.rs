@@ -42,7 +42,11 @@ pub(crate) fn build_client_for(
 }
 
 pub(crate) async fn throttle(cfg: &MetadataNetworkConfig, host: &str) {
-    let gap = Duration::from_millis(cfg.rate_limit_ms.max(100));
+    throttle_min(cfg, host, 100).await;
+}
+
+pub(crate) async fn throttle_min(cfg: &MetadataNetworkConfig, host: &str, min_ms: u64) {
+    let gap = Duration::from_millis(cfg.rate_limit_ms.max(min_ms).max(100));
     let sleep = {
         let mut map = LAST_HIT.lock();
         let now = Instant::now();
@@ -56,6 +60,51 @@ pub(crate) async fn throttle(cfg: &MetadataNetworkConfig, host: &str) {
     if let Some(d) = sleep {
         tokio::time::sleep(d).await;
     }
+}
+
+/// Rebuilds the request on each attempt. 429 and 5xx back off; connect errors do too.
+pub(crate) async fn send_retry<F>(
+    cfg: &MetadataNetworkConfig,
+    host: &str,
+    min_gap_ms: u64,
+    mut build: F,
+) -> Result<reqwest::Response, String>
+where
+    F: FnMut() -> Result<reqwest::RequestBuilder, String>,
+{
+    let mut wait_ms = 350u64;
+    let mut last = "网络请求失败".to_string();
+    for attempt in 0..3u32 {
+        throttle_min(cfg, host, min_gap_ms).await;
+        let built = match build() {
+            Ok(req) => req,
+            Err(e) => return Err(e),
+        };
+        match built.send().await {
+            Ok(resp) => {
+                let code = resp.status().as_u16();
+                if code == 429 || (500..600).contains(&code) {
+                    last = format!("HTTP {code}");
+                    if attempt == 2 {
+                        return Ok(resp);
+                    }
+                    tokio::time::sleep(Duration::from_millis(wait_ms)).await;
+                    wait_ms = (wait_ms * 2).min(4000);
+                    continue;
+                }
+                return Ok(resp);
+            }
+            Err(e) => {
+                last = offline_message(&e);
+                if attempt == 2 {
+                    return Err(last);
+                }
+                tokio::time::sleep(Duration::from_millis(wait_ms)).await;
+                wait_ms = (wait_ms * 2).min(4000);
+            }
+        }
+    }
+    Err(last)
 }
 
 pub(crate) fn offline_message(err: &reqwest::Error) -> String {
