@@ -22,6 +22,7 @@ import { libraryCoversToWarm } from './library-cover-warm.js';
 import { coverWarmBatch } from './decode-budget.js';
 import * as act from './book-actions.js';
 import { openMergeDialog } from './merge-ui.js';
+import { openGroupEditor } from './group-ui.js';
 import { LIBRARY_RENDER_BATCH } from './library-render-window.js';
 import { readerOpenHref } from './reader-mode-store.js';
 import { readPresets, writePresets, snapshotPreset, applyPreset } from './library-presets.js';
@@ -245,6 +246,7 @@ function bookMenu(btn, b) {
   ];
   if (edited.has(b.id)) items.push({ a: 'resetedit', label: t('lib.resetEdits'), fn: async () => reload(await act.resetEdits(b), b.id, true) });
   if (missing.has(b.id)) items.push({ a: 'relink', label: t('reader.locate'), fn: async () => reload(await act.relinkBook(b), b.id, true) });
+  if (b.kind === 'folder' || b.merged) items.push({ a: 'group', label: t('lib.editGroup'), fn: () => openGroupEditor({ bookId: b.id, books, onDone: () => load() }) });
   if (b.merged) items.push({ a: 'unmerge', label: t('lib.unmerge'), fn: async () => {
     try { await invoke('unmerge_book', { bookId: b.id }); toast(t('merge.undone')); await load(); }
     catch (e) { toast(errText(e)); }

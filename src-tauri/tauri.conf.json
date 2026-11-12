@@ -6,7 +6,7 @@
         "enable": false,
         "scope": []
       },
-      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data: mhpage: mhcover: mhfile: http://mhpage.localhost http://mhcover.localhost http://mhfile.localhost; connect-src 'self' ipc: http://ipc.localhost https://ipc.localhost; font-src 'self' data:; object-src 'none'; base-uri 'self'; frame-src 'none'"
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data: mhpage: mhcover: mhfile: mhremote: http://mhpage.localhost http://mhcover.localhost http://mhfile.localhost http://mhremote.localhost; connect-src 'self' ipc: http://ipc.localhost https://ipc.localhost; font-src 'self' data:; object-src 'none'; base-uri 'self'; frame-src 'none'"
     },
     "windows": [
       {
@@ -24,7 +24,7 @@
     "withGlobalTauri": true
   },
   "build": {
-    "beforeBuildCommand": "",
+    "beforeBuildCommand": "node scripts/fetch-mihomo.mjs",
     "frontendDist": "../src"
   },
   "bundle": {
@@ -36,6 +36,12 @@
       "icons/icon.png",
       "icons/icon.ico",
       "icons/icon.icns"
+    ],
+    "resources": [
+      "resources/LICENSE.txt"
+    ],
+    "externalBin": [
+      "binaries/mihomo"
     ],
     "targets": [
       "nsis"

@@ -31,12 +31,19 @@ pub(crate) fn build_client_for(
         .redirect(reqwest::redirect::Policy::limited(3))
         .timeout(Duration::from_secs(25))
         .use_rustls_tls();
-    if cfg.use_proxy_for(provider) {
-        let url = cfg.proxy_url.trim();
-        let proxy = reqwest::Proxy::all(url)
-            .map_err(|_| format!("代理地址无效：{}", redact_proxy(url)))?;
+    // The in-app switch covers every caller: metadata, covers, and custom sources.
+    // Per-source checkboxes no longer bypass it. `provider` stays so call sites
+    // keep their existing signature.
+    let _ = provider;
+    if cfg.app_proxy {
+        let out = super::proxy::outbound(cfg)?;
+        let mut proxy = reqwest::Proxy::all(&out.url).map_err(|_| "代理地址无效".to_string())?;
+        if let Some(user) = out.user.as_deref() {
+            proxy = proxy.basic_auth(user, out.pass.as_deref().unwrap_or(""));
+        }
         b = b.proxy(proxy);
     }
+    let _ = redact_proxy;
     b.build()
         .map_err(|_| "无法创建网络客户端".into())
 }

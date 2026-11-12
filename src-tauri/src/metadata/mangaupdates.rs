@@ -6,8 +6,7 @@ use super::client::send_retry;
 use super::config::MetadataNetworkConfig;
 use super::{MetadataCandidate, MetadataDetail, Provider};
 
-const SEARCH: &str = "https://api.mangaupdates.com/v1/series/search";
-const SERIES: &str = "https://api.mangaupdates.com/v1/series";
+const ROOT: &str = "https://api.mangaupdates.com";
 const HOST: &str = "api.mangaupdates.com";
 
 #[derive(Debug, Deserialize)]
@@ -134,10 +133,13 @@ pub async fn search(
         "page": 1,
         "perpage": limit.clamp(1, 25),
     });
-    let response = send_retry(cfg, HOST, 100, || {
+    let root = super::endpoints::api_root(&cfg.bases.mangaupdates_api, ROOT);
+    let search = format!("{root}/v1/series/search");
+    let host = super::endpoints::host_of(&search, HOST);
+    let response = send_retry(cfg, &host, 100, || {
         let client = super::client::build_client(cfg, Provider::Mangaupdates)?;
         Ok(client
-            .post(SEARCH)
+            .post(&search)
             .header("Accept", "application/json")
             .json(&body))
     })
@@ -173,8 +175,10 @@ pub async fn search(
 }
 
 pub async fn detail(cfg: &MetadataNetworkConfig, id: &str) -> Result<MetadataDetail, String> {
-    let url = format!("{SERIES}/{}", id.trim());
-    let response = send_retry(cfg, HOST, 100, || {
+    let root = super::endpoints::api_root(&cfg.bases.mangaupdates_api, ROOT);
+    let url = format!("{root}/v1/series/{}", id.trim());
+    let host = super::endpoints::host_of(&url, HOST);
+    let response = send_retry(cfg, &host, 100, || {
         let client = super::client::build_client(cfg, Provider::Mangaupdates)?;
         Ok(client.get(&url).header("Accept", "application/json"))
     })

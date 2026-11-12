@@ -734,6 +734,7 @@ body:has(.shell-frame) .shell-top{
 .meta-list{display:flex;flex-direction:column;gap:12px;max-height:min(52vh,420px);overflow:auto}
 .meta-cand{display:flex;align-items:center;gap:10px;width:100%;text-align:left;padding:8px 10px}
 .meta-cover{max-width:120px;border-radius:8px;margin-top:4px}
+.meta-area{height:auto;min-height:72px;width:100%;padding:8px 12px;resize:vertical}
 .meta-sum{display:block;max-height:8em;overflow:auto;font-size:12px;line-height:1.45}
 .meta-opts{display:flex;flex-wrap:wrap;gap:12px;margin-top:10px;font-size:12px}
 label.check{display:inline-flex;align-items:center;gap:6px;cursor:pointer}

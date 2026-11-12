@@ -2,6 +2,7 @@
 import { t, esc, toast, openModal, promptDialog, confirmDialog } from './shell.js';
 import { lib } from './api.js';
 import { scoreTitle } from './title-score.js';
+import { remoteImgSrc } from './remote-img.js';
 
 const errText = (e) => String(e?.detail ?? e?.message ?? e);
 
@@ -94,7 +95,7 @@ export async function openMetadataMatch(book, { onBound } = {}) {
       const block = document.createElement('section');
       block.className = 'meta-group';
       const head = document.createElement('h3');
-      head.textContent = providerLabel(g.provider);
+      head.textContent = g.label || providerLabel(g.provider);
       block.append(head);
       if (g.error) {
         const err = document.createElement('p');
@@ -113,7 +114,9 @@ export async function openMetadataMatch(book, { onBound } = {}) {
           row.className = 'meta-cand btn btn--ghost';
           const conf = confidenceOf(q, c);
           const extra = [c.originalTitle, c.releaseDate].filter(Boolean).join(' · ');
+          const cover = remoteImgSrc(c.coverUrl);
           row.innerHTML = `
+            ${cover ? `<img class="meta-cover" alt="" src="${esc(cover)}">` : ''}
             <span class="grow"><b>${esc(c.title)}</b>
               ${extra ? `<span class="muted"> · ${esc(extra)}</span>` : ''}
             </span>

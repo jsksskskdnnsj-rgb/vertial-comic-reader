@@ -20,6 +20,7 @@ mod extractor;
 mod header_cache;
 mod library;
 mod merge;
+mod merge_manual;
 mod metadata;
 mod model;
 mod paths;
@@ -107,6 +108,12 @@ fn main() {
                 responder.respond(resp);
             });
         })
+        .register_asynchronous_uri_scheme_protocol("mhremote", |_ctx, req, responder| {
+            tauri::async_runtime::spawn(async move {
+                let resp = metadata::remote::serve(req).await;
+                responder.respond(resp);
+            });
+        })
         .invoke_handler(tauri::generate_handler![
             paths::pick_folder_paths,
             paths::list_images,
@@ -181,6 +188,14 @@ fn main() {
             merge::resolve_merge_pending,
             merge::merge_books,
             merge::unmerge_book,
+            merge_manual::group_describe,
+            merge_manual::group_remove_members,
+            merge_manual::group_reorder,
+            merge_manual::group_move_member,
+            merge_manual::group_add_books,
+            merge_manual::group_split,
+            merge_manual::group_undo,
+            merge_manual::group_restore_auto,
             adapters::reveal_book,
             adapters::relink_book,
             // v0.5 library management + page edits (library.rs)
@@ -221,6 +236,14 @@ fn main() {
             metadata::commands::metadata_refresh,
             metadata::commands::metadata_shelf_index,
             metadata::commands::metadata_cache_status,
+            metadata::clash::metadata_clash_import,
+            metadata::clash::metadata_clash_nodes,
+            metadata::proxy::metadata_proxy_status,
+            metadata::proxy::metadata_proxy_delay,
+            metadata::proxy::metadata_proxy_test,
+            metadata::proxy::metadata_proxy_stop,
+            metadata::custom::metadata_custom_parse,
+            metadata::custom::metadata_custom_test,
         ])
         .on_window_event(|window, event| match event {
             tauri::WindowEvent::DragDrop(tauri::DragDropEvent::Drop { paths, .. }) => {
@@ -234,8 +257,13 @@ fn main() {
             }
             _ => {}
         })
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|_app, event| {
+            if matches!(event, tauri::RunEvent::Exit) {
+                metadata::proxy::shutdown_core();
+            }
+        });
 }
 
 #[cfg(test)]

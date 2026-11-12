@@ -36,8 +36,10 @@ pub async fn search(
     query: &str,
     limit: u32,
 ) -> Result<Vec<MetadataCandidate>, String> {
-    let url = search_url(query, limit);
-    let response = send_retry(cfg, HOST, 800, || {
+    let root = super::endpoints::api_root(&cfg.bases.moegirl_api, "https://zh.moegirl.org.cn");
+    let url = search_url(query, limit).replacen(API, &format!("{root}/api.php"), 1);
+    let host = super::endpoints::host_of(&url, HOST);
+    let response = send_retry(cfg, &host, 800, || {
         let client = super::client::build_client(cfg, Provider::Moegirl)?;
         Ok(client.get(&url).header("Accept", "application/json"))
     })
@@ -81,8 +83,10 @@ pub async fn search(
 }
 
 pub async fn detail(cfg: &MetadataNetworkConfig, id: &str) -> Result<MetadataDetail, String> {
-    let url = detail_url(id);
-    let response = send_retry(cfg, HOST, 800, || {
+    let root = super::endpoints::api_root(&cfg.bases.moegirl_api, "https://zh.moegirl.org.cn");
+    let url = detail_url(id).replacen(API, &format!("{root}/api.php"), 1);
+    let host = super::endpoints::host_of(&url, HOST);
+    let response = send_retry(cfg, &host, 800, || {
         let client = super::client::build_client(cfg, Provider::Moegirl)?;
         Ok(client.get(&url).header("Accept", "application/json"))
     })

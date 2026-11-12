@@ -48,3 +48,13 @@ for (const f of DATA.files) {
 }
 console.log(`done: ${ok}/${DATA.files.length} verified (${wrote} written, ${skipped} already correct)`);
 if (ok !== DATA.files.length) process.exitCode = 1;
+
+// The Windows package fetches mihomo itself. Icon restore still finishes when
+// that download is unavailable; `tauri build` on Windows does not.
+import { spawnSync } from 'node:child_process';
+const fetched = spawnSync(process.execPath, [path.join(HERE, 'fetch-mihomo.mjs')], {
+  cwd: ROOT,
+  stdio: 'inherit',
+  env: { ...process.env },
+});
+if (fetched.status && process.platform === 'win32') process.exitCode = fetched.status;

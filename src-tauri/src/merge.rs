@@ -53,6 +53,21 @@ CREATE TABLE IF NOT EXISTS merge_pending (
 );
 CREATE INDEX IF NOT EXISTS idx_merge_pending_open ON merge_pending(resolved);
 CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY, value TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS merge_pin (
+  path_key TEXT PRIMARY KEY,
+  token TEXT NOT NULL,
+  ord INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS merge_apart (
+  a TEXT NOT NULL,
+  b TEXT NOT NULL,
+  PRIMARY KEY (a, b)
+);
+CREATE TABLE IF NOT EXISTS merge_undo (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  created_at INTEGER NOT NULL,
+  body TEXT NOT NULL
+);
 ";
 
 pub fn ensure_tables(conn: &Connection) -> Result<(), String> {
@@ -60,11 +75,11 @@ pub fn ensure_tables(conn: &Connection) -> Result<(), String> {
 }
 
 #[derive(Clone, Debug)]
-struct Parsed {
-    base: String,
-    display: String,
-    order: Option<(u64, u64)>,
-    label: String,
+pub(crate) struct Parsed {
+    pub(crate) base: String,
+    pub(crate) display: String,
+    pub(crate) order: Option<(u64, u64)>,
+    pub(crate) label: String,
 }
 
 struct Span {
@@ -75,20 +90,20 @@ struct Span {
 }
 
 #[derive(Clone, Debug)]
-struct Member {
-    shelf_id: Option<i64>,
-    name: String,
-    paths: Vec<String>,
-    pages: i64,
-    chapters: i64,
-    cover_ver: i64,
-    parsed: Parsed,
+pub(crate) struct Member {
+    pub(crate) shelf_id: Option<i64>,
+    pub(crate) name: String,
+    pub(crate) paths: Vec<String>,
+    pub(crate) pages: i64,
+    pub(crate) chapters: i64,
+    pub(crate) cover_ver: i64,
+    pub(crate) parsed: Parsed,
 }
 
-struct Group {
-    confident: bool,
-    title: String,
-    members: Vec<Member>,
+pub(crate) struct Group {
+    pub(crate) confident: bool,
+    pub(crate) title: String,
+    pub(crate) members: Vec<Member>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -1018,6 +1033,22 @@ fn group_relevant(fresh: &[Member], library: &[Member]) -> Vec<Group> {
         .collect()
 }
 
+pub(crate) fn member_from_parts(id: i64, name: &str, paths: Vec<String>, pages: i64) -> Member {
+    Member {
+        shelf_id: Some(id),
+        name: name.to_string(),
+        paths,
+        pages,
+        chapters: 0,
+        cover_ver: 1,
+        parsed: parse_name(name),
+    }
+}
+
+pub(crate) fn propose_groups(pool: &[Member]) -> Vec<Group> {
+    group_members(pool)
+}
+
 fn member_from_scan(b: &ScanBook) -> Member {
     Member {
         shelf_id: None,
@@ -1065,7 +1096,7 @@ fn to_pending(g: &Group) -> PendingGroup {
 
 // ---- shelf --------------------------------------------------------------------
 
-fn auto_on(conn: &Connection) -> bool {
+pub(crate) fn auto_on(conn: &Connection) -> bool {
     match conn.query_row(
         "SELECT value FROM settings WHERE key='merge.auto'",
         [],
@@ -1440,7 +1471,7 @@ fn apply_parts_inner(
     Ok(survivor)
 }
 
-fn apply_parts(
+pub(crate) fn apply_parts(
     conn: &Connection,
     title: &str,
     folder_override: Option<i64>,
@@ -1596,7 +1627,7 @@ fn unmerge_inner(conn: &Connection, book_id: i64) -> Result<(), String> {
     Ok(())
 }
 
-fn unmerge_conn(conn: &Connection, book_id: i64) -> Result<(), String> {
+pub(crate) fn unmerge_conn(conn: &Connection, book_id: i64) -> Result<(), String> {
     conn.execute_batch("SAVEPOINT merge_undo").map_err(|e| e.to_string())?;
     match unmerge_inner(conn, book_id) {
         Ok(()) => conn.execute_batch("RELEASE SAVEPOINT merge_undo").map_err(|e| e.to_string()),
@@ -1635,7 +1666,7 @@ fn group_key(members: &[PendingMember]) -> String {
     keys.join("\n")
 }
 
-fn store_pending(conn: &Connection, groups: &[Group], replace_all: bool) -> Result<(), String> {
+pub(crate) fn store_pending(conn: &Connection, groups: &[Group], replace_all: bool) -> Result<(), String> {
     if replace_all {
         conn.execute("DELETE FROM merge_pending WHERE resolved=0", [])
             .map_err(|e| e.to_string())?;
@@ -1683,7 +1714,44 @@ fn mark_already(snap: &mut ScanSnapshot, paths: &[String]) {
 }
 
 /// After a finished scan: auto-merge confident groups and record the rest.
+fn filter_auto(conn: &Connection, groups: Vec<Group>) -> Vec<Group> {
+    let Ok(rules) = crate::merge_manual::load_rules(conn) else {
+        return groups;
+    };
+    if rules.is_empty() {
+        return groups;
+    }
+    let mut out = Vec::new();
+    for g in groups {
+        let keys: Vec<Vec<String>> = g
+            .members
+            .iter()
+            .map(|m| {
+                m.paths
+                    .iter()
+                    .map(|p| path_key(p))
+                    .filter(|k| !k.is_empty())
+                    .collect()
+            })
+            .collect();
+        for cluster in crate::merge_manual::auto_clusters(&keys, &rules) {
+            let mut members: Vec<Member> = cluster.into_iter().map(|i| g.members[i].clone()).collect();
+            sort_members(&mut members);
+            let orders: Vec<_> = members.iter().filter_map(|m| m.parsed.order).collect();
+            let confident = g.confident && orders.len() == members.len() && !ranges_conflict(&orders);
+            let title = if members.len() == g.members.len() {
+                g.title.clone()
+            } else {
+                suggest_title(&members)
+            };
+            out.push(Group { confident, title, members });
+        }
+    }
+    out
+}
+
 pub fn finish_scan(conn: &Connection, snap: &mut ScanSnapshot) -> Result<(), String> {
+    crate::merge_manual::enforce_pins(conn)?;
     let fresh: Vec<Member> = snap
         .books
         .iter()
@@ -1697,7 +1765,7 @@ pub fn finish_scan(conn: &Connection, snap: &mut ScanSnapshot) -> Result<(), Str
         return Ok(());
     }
     let library = load_folder_members(conn);
-    let groups = group_relevant(&fresh, &library);
+    let groups = filter_auto(conn, group_relevant(&fresh, &library));
     let auto = auto_on(conn);
     let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
     let mut added = 0u64;
@@ -1741,13 +1809,14 @@ pub fn absorb_new(conn: &Connection, new_ids: &[i64]) -> Result<(), String> {
     if new_ids.is_empty() {
         return Ok(());
     }
+    crate::merge_manual::enforce_pins(conn)?;
     let want: HashSet<i64> = new_ids.iter().copied().collect();
     let library = load_folder_members(conn);
     let fresh: Vec<Member> = library.iter().filter(|m| m.shelf_id.is_some_and(|id| want.contains(&id))).cloned().collect();
     if fresh.is_empty() {
         return Ok(());
     }
-    let groups = group_relevant(&fresh, &library);
+    let groups = filter_auto(conn, group_relevant(&fresh, &library));
     if groups.is_empty() {
         return Ok(());
     }
@@ -1867,6 +1936,8 @@ pub fn resolve_merge_pending(
         .map_err(|_| "没有这组待确认的合并".to_string())?;
     let group: PendingGroup = serde_json::from_str(&payload).map_err(|e| e.to_string())?;
     let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
+    let touch: Vec<String> = group.members.iter().map(|m| m.path.clone()).filter(|p| !p.is_empty()).collect();
+    crate::merge_manual::push_undo(&tx, &touch)?;
     let result = if action == "separate" {
         for m in &group.members {
             if m.shelf_id.is_some() || m.path.is_empty() {
@@ -1878,13 +1949,17 @@ pub fn resolve_merge_pending(
             }
             insert_folder_row(&tx, &m.name, &[m.path.clone()], m.pages, 0, 0, folder_id, 0)?;
         }
+        crate::merge_manual::apart_all(&tx, &touch)?;
         0
     } else if action == "merge" {
         let mut members: Vec<Member> = group.members.iter().map(member_from_pending).collect();
         members = reorder_members(members, order);
         attach_shelf(&tx, &mut members, folder_id)?;
         let title = title.unwrap_or(group.suggested_title);
-        apply_parts(&tx, &title, folder_id, &members, false)?
+        let id = apply_parts(&tx, &title, folder_id, &members, false)?;
+        let paths: Vec<String> = members.iter().flat_map(|m| m.paths.clone()).collect();
+        crate::merge_manual::pin_exact(&tx, &paths)?;
+        id
     } else {
         return Err("未知操作".into());
     };
@@ -1914,7 +1989,10 @@ pub fn merge_books(title: String, folder_id: Option<i64>, members: Vec<MergeIn>)
         });
     }
     let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
+    let paths: Vec<String> = parts.iter().flat_map(|m| m.paths.clone()).collect();
+    crate::merge_manual::push_undo(&tx, &paths)?;
     let id = apply_parts(&tx, &title, folder_id, &parts, false)?;
+    crate::merge_manual::pin_exact(&tx, &paths)?;
     tx.commit().map_err(|e| e.to_string())?;
     Ok(id)
 }
@@ -1922,10 +2000,7 @@ pub fn merge_books(title: String, folder_id: Option<i64>, members: Vec<MergeIn>)
 #[tauri::command]
 pub fn unmerge_book(book_id: i64) -> Result<(), String> {
     let conn = crate::db_conn()?;
-    let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
-    unmerge_conn(&tx, book_id)?;
-    tx.commit().map_err(|e| e.to_string())?;
-    Ok(())
+    crate::merge_manual::unmerge_keeping_apart(&conn, book_id)
 }
 
 #[cfg(test)]
@@ -2270,6 +2345,65 @@ mod tests {
             )
             .unwrap();
         assert_eq!(restored, 3);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn removing_a_volume_keeps_the_file_and_stays_apart_after_rescan() {
+        let stamp = std::process::id();
+        let root = std::env::temp_dir().join(format!("mh-merge-apart-{stamp}"));
+        let _ = std::fs::remove_dir_all(&root);
+        let a = root.join("海贼王 第1-50话");
+        let b = root.join("海贼王 第51-100话");
+        std::fs::create_dir_all(&a).unwrap();
+        std::fs::create_dir_all(&b).unwrap();
+        let file_a = a.join("001.jpg");
+        let file_b = b.join("001.jpg");
+        std::fs::write(&file_a, b"volume-a").unwrap();
+        std::fs::write(&file_b, b"volume-b").unwrap();
+        let conn = Connection::open_in_memory().unwrap();
+        schema(&conn);
+        let path_a = a.to_string_lossy().into_owned();
+        let path_b = b.to_string_lossy().into_owned();
+        let id1 = insert_folder_row(&conn, "海贼王 第1-50话", &[path_a.clone()], 10, 0, 0, None, 0).unwrap();
+        let id2 = insert_folder_row(&conn, "海贼王 第51-100话", &[path_b.clone()], 12, 0, 0, None, 0).unwrap();
+        let members = vec![
+            Member {
+                shelf_id: Some(id1),
+                name: "海贼王 第1-50话".into(),
+                paths: vec![path_a.clone()],
+                pages: 10,
+                chapters: 50,
+                cover_ver: 1,
+                parsed: parse_name("海贼王 第1-50话"),
+            },
+            Member {
+                shelf_id: Some(id2),
+                name: "海贼王 第51-100话".into(),
+                paths: vec![path_b.clone()],
+                pages: 12,
+                chapters: 50,
+                cover_ver: 1,
+                parsed: parse_name("海贼王 第51-100话"),
+            },
+        ];
+        let id = apply_parts(&conn, "海贼王", None, &members, true).unwrap();
+        crate::merge_manual::remove_members_conn(&conn, id, vec![path_key(&path_b)]).unwrap();
+        assert_eq!(std::fs::read(&file_a).unwrap(), b"volume-a");
+        assert_eq!(std::fs::read(&file_b).unwrap(), b"volume-b");
+        let n: i64 = conn.query_row("SELECT COUNT(*) FROM shelf", [], |r| r.get(0)).unwrap();
+        assert_eq!(n, 2);
+        let ids: Vec<i64> = {
+            let mut stmt = conn.prepare("SELECT id FROM shelf").unwrap();
+            stmt.query_map([], |r| r.get(0)).unwrap().map(|r| r.unwrap()).collect()
+        };
+        absorb_new(&conn, &ids).unwrap();
+        let n: i64 = conn.query_row("SELECT COUNT(*) FROM shelf", [], |r| r.get(0)).unwrap();
+        assert_eq!(n, 2, "an apart pair must not be auto-merged again");
+        crate::merge_manual::undo_last_conn(&conn).unwrap();
+        let n: i64 = conn.query_row("SELECT COUNT(*) FROM shelf", [], |r| r.get(0)).unwrap();
+        assert_eq!(n, 1);
+        assert_eq!(std::fs::read(&file_b).unwrap(), b"volume-b");
         let _ = std::fs::remove_dir_all(&root);
     }
 }

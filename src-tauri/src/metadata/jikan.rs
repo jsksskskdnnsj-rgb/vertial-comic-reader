@@ -75,8 +75,17 @@ struct Named {
 }
 
 pub(crate) fn search_url(query: &str, limit: u32) -> String {
+    search_url_at(API, query, limit)
+}
+
+fn search_url_at(api: &str, query: &str, limit: u32) -> String {
     let q = url::form_urlencoded::byte_serialize(query.trim().as_bytes()).collect::<String>();
-    format!("{API}?q={q}&limit={}&sfw=false", limit.clamp(1, 25))
+    format!("{api}?q={q}&limit={}&sfw=false", limit.clamp(1, 25))
+}
+
+fn api_of(cfg: &MetadataNetworkConfig) -> String {
+    let root = super::endpoints::api_root(&cfg.bases.jikan_api, "https://api.jikan.moe");
+    format!("{root}/v4/manga")
 }
 
 fn cover_of(images: &Option<Images>) -> Option<String> {
@@ -191,8 +200,9 @@ pub async fn search(
     query: &str,
     limit: u32,
 ) -> Result<Vec<MetadataCandidate>, String> {
-    let url = search_url(query, limit);
-    let response = send_retry(cfg, HOST, GAP_MS, || {
+    let url = search_url_at(&api_of(cfg), query, limit);
+    let host = super::endpoints::host_of(&url, HOST);
+    let response = send_retry(cfg, &host, GAP_MS, || {
         let client = super::client::build_client(cfg, Provider::Jikan)?;
         Ok(client.get(&url).header("Accept", "application/json"))
     })
@@ -205,8 +215,9 @@ pub async fn search(
 }
 
 pub async fn detail(cfg: &MetadataNetworkConfig, id: &str) -> Result<MetadataDetail, String> {
-    let url = format!("{API}/{}", id.trim());
-    let response = send_retry(cfg, HOST, GAP_MS, || {
+    let url = format!("{}/{}", api_of(cfg), id.trim());
+    let host = super::endpoints::host_of(&url, HOST);
+    let response = send_retry(cfg, &host, GAP_MS, || {
         let client = super::client::build_client(cfg, Provider::Jikan)?;
         Ok(client.get(&url).header("Accept", "application/json"))
     })

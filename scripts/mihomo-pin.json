@@ -1,0 +1,12 @@
+{
+  "version": "v1.19.34",
+  "file": "mihomo-windows-amd64-v1.19.34.zip",
+  "url": "https://github.com/MetaCubeX/mihomo/releases/download/v1.19.34/mihomo-windows-amd64-v1.19.34.zip",
+  "bytes": 22386201,
+  "sha256": "f6b855de8722781caea62686f0301f89625fc558d48c1103ffdd98dad7f7f488",
+  "exeName": "mihomo-windows-amd64.exe",
+  "dest": "src-tauri/binaries/mihomo-x86_64-pc-windows-msvc.exe",
+  "source": "https://github.com/MetaCubeX/mihomo/tree/v1.19.34",
+  "license": "GPL-3.0-only",
+  "licenseUrl": "https://github.com/MetaCubeX/mihomo/blob/v1.19.34/LICENSE"
+}

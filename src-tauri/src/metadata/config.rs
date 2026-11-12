@@ -99,6 +99,32 @@ pub struct MetadataNetworkConfig {
     /// 入口域名（会跟随 301 跳转到当前镜像）。
     #[serde(default = "default_comic18_domain")]
     pub comic18_domain: String,
+    /// Master switch. When true, every in-app HTTP request uses the selected mode.
+    #[serde(default)]
+    pub app_proxy: bool,
+    /// off | system | manual | local | core
+    #[serde(default)]
+    pub proxy_mode: String,
+    #[serde(default)]
+    pub proxy_username: String,
+    #[serde(default)]
+    pub proxy_password: String,
+    #[serde(default = "default_local_proxy")]
+    pub local_proxy: String,
+    #[serde(default)]
+    pub local_controller: String,
+    #[serde(default)]
+    pub local_secret: String,
+    #[serde(default)]
+    pub local_node: String,
+    #[serde(default)]
+    pub local_group: String,
+    #[serde(default)]
+    pub core_node: String,
+    #[serde(default)]
+    pub bases: SourceBases,
+    #[serde(default)]
+    pub custom_sources: Vec<CustomSource>,
 }
 
 fn default_comic18_domain() -> String {
@@ -107,6 +133,76 @@ fn default_comic18_domain() -> String {
 
 fn default_rate_ms() -> u64 {
     400
+}
+
+fn default_local_proxy() -> String {
+    "http://127.0.0.1:7897".into()
+}
+
+fn default_json_format() -> String {
+    "json".into()
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HeaderPair {
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub value: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CustomSource {
+    #[serde(default)]
+    pub id: String,
+    #[serde(default)]
+    pub name: String,
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    /// Kept so older configs round-trip. The in-app proxy switch covers every request.
+    #[serde(default = "default_true")]
+    pub use_proxy: bool,
+    #[serde(default)]
+    pub search_url: String,
+    #[serde(default)]
+    pub headers: Vec<HeaderPair>,
+    #[serde(default = "default_json_format")]
+    pub format: String,
+    #[serde(default)]
+    pub list: String,
+    #[serde(default)]
+    pub id_path: String,
+    #[serde(default)]
+    pub title_path: String,
+    #[serde(default)]
+    pub author_path: String,
+    #[serde(default)]
+    pub summary_path: String,
+    #[serde(default)]
+    pub tags_path: String,
+    #[serde(default)]
+    pub cover_path: String,
+    #[serde(default)]
+    pub page_path: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct SourceBases {
+    #[serde(default)]
+    pub bangumi_api: String,
+    #[serde(default)]
+    pub mangadex_api: String,
+    #[serde(default)]
+    pub jikan_api: String,
+    #[serde(default)]
+    pub moegirl_api: String,
+    #[serde(default)]
+    pub mangaupdates_api: String,
+    #[serde(default)]
+    pub anilist_api: String,
 }
 
 impl Default for MetadataNetworkConfig {
@@ -119,6 +215,18 @@ impl Default for MetadataNetworkConfig {
             comic18_domain: default_comic18_domain(),
             rate_limit_ms: default_rate_ms(),
             auto_bind_confident: true,
+            app_proxy: false,
+            proxy_mode: String::new(),
+            proxy_username: String::new(),
+            proxy_password: String::new(),
+            local_proxy: default_local_proxy(),
+            local_controller: String::new(),
+            local_secret: String::new(),
+            local_node: String::new(),
+            local_group: String::new(),
+            core_node: String::new(),
+            bases: SourceBases::default(),
+            custom_sources: Vec::new(),
         }
     }
 }
@@ -132,10 +240,20 @@ pub fn load() -> MetadataNetworkConfig {
         Ok(p) => p,
         Err(_) => return MetadataNetworkConfig::default(),
     };
-    std::fs::read_to_string(&path)
-        .ok()
-        .and_then(|s| serde_json::from_str(&s).ok())
-        .unwrap_or_default()
+    let Ok(text) = std::fs::read_to_string(&path) else {
+        return MetadataNetworkConfig::default();
+    };
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(&text) else {
+        return MetadataNetworkConfig::default();
+    };
+    let mut cfg: MetadataNetworkConfig = serde_json::from_value(value.clone()).unwrap_or_default();
+    if value.get("appProxy").is_none() && !cfg.proxy_url.trim().is_empty() {
+        cfg.app_proxy = true;
+        if cfg.proxy_mode.trim().is_empty() {
+            cfg.proxy_mode = "manual".into();
+        }
+    }
+    cfg
 }
 
 pub fn save(cfg: &MetadataNetworkConfig) -> Result<(), String> {
@@ -180,23 +298,7 @@ impl MetadataNetworkConfig {
             super::Provider::Mangadex => self.sources.mangadex,
             super::Provider::Jikan => self.sources.jikan,
             super::Provider::Moegirl => self.sources.moegirl,
-            super::Provider::Manual => false,
-        }
-    }
-
-    pub fn use_proxy_for(&self, provider: super::Provider) -> bool {
-        if self.proxy_url.trim().is_empty() {
-            return false;
-        }
-        match provider {
-            super::Provider::Bangumi => self.proxy_per_source.bangumi,
-            super::Provider::Mangaupdates => self.proxy_per_source.mangaupdates,
-            super::Provider::Anilist => self.proxy_per_source.anilist,
-            super::Provider::Comic18 => self.proxy_per_source.comic18,
-            super::Provider::Mangadex => self.proxy_per_source.mangadex,
-            super::Provider::Jikan => self.proxy_per_source.jikan,
-            super::Provider::Moegirl => self.proxy_per_source.moegirl,
-            super::Provider::Manual => false,
+            super::Provider::Manual | super::Provider::Custom => false,
         }
     }
 }

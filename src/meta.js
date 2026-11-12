@@ -5,6 +5,8 @@ import { lib } from './api.js';
 import { mountShell } from './shell-ui.js';
 import { compareRows, filterShelf, createQueue, enqueue, nextPending, markRunning, cancelItem, cancelPending, retryItem, finishItem } from './meta-desk.js';
 import { openMetadataEditor } from './metadata-match.js';
+import { mountNetworkEditor, readMountedNetwork, refreshNetwork } from './meta-net.js';
+import { remoteImgSrc } from './remote-img.js';
 
 bootPage('meta');
 
@@ -148,7 +150,7 @@ function renderCands() {
   for (const group of groups) {
     const block = document.createElement('section');
     const head = document.createElement('h3');
-    head.textContent = providerLabel(group.provider);
+    head.textContent = group.label || providerLabel(group.provider);
     block.append(head);
     if (group.error) {
       const err = document.createElement('p');
@@ -166,7 +168,8 @@ function renderCands() {
       btn.dataset.external = cand.externalId;
       btn.dataset.kind = cand.matchKind || 'manual';
       const conf = cand.confidence != null ? t('meta.confidence', { n: cand.confidence }) : '';
-      btn.innerHTML = `<span class="grow"><b>${esc(cand.title || '')}</b></span><span class="meta-score">${esc(conf)}</span>`;
+      const cover = remoteImgSrc(cand.coverUrl);
+      btn.innerHTML = `${cover ? `<img class="meta-cover" alt="" src="${esc(cover)}">` : ''}<span class="grow"><b>${esc(cand.title || '')}</b></span><span class="meta-score">${esc(conf)}</span>`;
       block.append(btn);
     }
     host.append(block);
@@ -368,6 +371,7 @@ $('metaApply').addEventListener('click', async () => {
 $('metaSources').addEventListener('change', async (e) => {
   const box = e.target.closest('[data-src]');
   if (!box || !cfg) return;
+  cfg = { ...cfg, ...readMountedNetwork() };
   cfg.sources = cfg.sources || {};
   cfg.sources[box.dataset.src] = box.checked;
   try {
@@ -403,6 +407,12 @@ async function loadShelf() {
   rows = index || [];
   pendingIds = new Set((pending || []).map((row) => row.bookId));
   cfg = await lib.metadata.getConfig().catch(() => ({}));
+  const netHost = $('metaNetExtra');
+  if (netHost && !netHost.querySelector('#appProxy')) {
+    mountNetworkEditor(netHost, { cfg, getBookId: () => focusId, onSaved: (next) => { cfg = next; } });
+  } else {
+    refreshNetwork(cfg);
+  }
   renderSources();
   renderBooks();
 }

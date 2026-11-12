@@ -3,15 +3,20 @@
 
 pub mod anilist;
 pub mod bangumi;
+pub mod clash;
 pub mod client;
 pub mod commands;
 pub mod comic18;
 pub mod config;
+pub mod custom;
+pub mod endpoints;
 pub mod jikan;
 pub mod mangadex;
 pub mod mangaupdates;
 pub mod matching;
 pub mod moegirl;
+pub mod proxy;
+pub mod remote;
 pub mod store;
 
 use serde::{Deserialize, Serialize};
@@ -28,6 +33,7 @@ pub enum Provider {
     Jikan,
     Moegirl,
     Manual,
+    Custom,
 }
 
 impl Provider {
@@ -41,6 +47,7 @@ impl Provider {
             Provider::Jikan => "jikan",
             Provider::Moegirl => "moegirl",
             Provider::Manual => "manual",
+            Provider::Custom => "custom",
         }
     }
 
@@ -54,6 +61,7 @@ impl Provider {
             "jikan" | "mal" | "myanimelist" => Some(Self::Jikan),
             "moegirl" | "moe" => Some(Self::Moegirl),
             "manual" => Some(Self::Manual),
+            "custom" => Some(Self::Custom),
             _ => None,
         }
     }
@@ -68,6 +76,7 @@ impl Provider {
             Provider::Jikan => "MyAnimeList",
             Provider::Moegirl => "萌娘百科",
             Provider::Manual => "手改",
+            Provider::Custom => "自定义",
         }
     }
 }
@@ -147,7 +156,7 @@ impl MetadataDetail {
                 "https://zh.moegirl.org.cn/?curid={}",
                 self.external_id
             )),
-            Provider::Manual => None,
+            Provider::Manual | Provider::Custom => None,
         }
     }
 }

@@ -9,6 +9,8 @@ use super::bangumi;
 use super::client::{build_client, offline_message};
 use super::config::{self, MetadataNetworkConfig};
 use super::comic18;
+use super::custom;
+use super::proxy;
 use super::jikan;
 use super::mangadex;
 use super::mangaupdates;
@@ -25,6 +27,8 @@ pub struct SearchResult {
     pub provider: Provider,
     pub error: Option<String>,
     pub candidates: Vec<MetadataCandidate>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -50,7 +54,7 @@ fn metadata_covers_dir() -> Result<PathBuf, String> {
     Ok(dir)
 }
 
-fn require_shelf_book(book_id: i64) -> Result<(), String> {
+pub(crate) fn require_shelf_book(book_id: i64) -> Result<(), String> {
     store::book_title(book_id).map(|_| ()).map_err(|_| "只能为书架中已有的书查询在线资料".into())
 }
 
@@ -87,6 +91,7 @@ async fn search_provider_net(
             provider,
             error: Some("手改不是检索源".into()),
             candidates: Vec::new(),
+            label: None,
         };
     }
     let candidates = match provider {
@@ -97,7 +102,7 @@ async fn search_provider_net(
         Provider::Mangadex => mangadex::search(cfg, query, limit).await,
         Provider::Jikan => jikan::search(cfg, query, limit).await,
         Provider::Moegirl => moegirl::search(cfg, query, limit).await,
-        Provider::Manual => Ok(Vec::new()),
+        Provider::Manual | Provider::Custom => Ok(Vec::new()),
     };
     match candidates {
         Ok(mut list) => {
@@ -106,12 +111,14 @@ async fn search_provider_net(
                 provider,
                 error: None,
                 candidates: list,
+                label: None,
             }
         }
         Err(e) => SearchResult {
             provider,
             error: Some(e),
             candidates: Vec::new(),
+            label: None,
         },
     }
 }
@@ -169,6 +176,7 @@ async fn fetch_detail_net(cfg: &MetadataNetworkConfig, provider: Provider, id: &
         Provider::Jikan => jikan::detail(cfg, id).await,
         Provider::Moegirl => moegirl::detail(cfg, id).await,
         Provider::Manual => Err("手改条目没有远程详情".into()),
+        Provider::Custom => custom::detail(cfg, id).await,
     }
 }
 
@@ -325,7 +333,9 @@ pub fn metadata_get_config() -> Result<MetadataNetworkConfig, String> {
 
 #[tauri::command]
 pub fn metadata_set_config(cfg: MetadataNetworkConfig) -> Result<(), String> {
-    config::save(&cfg)
+    config::save(&cfg)?;
+    proxy::sync_lifecycle(&cfg);
+    Ok(())
 }
 
 #[tauri::command]
@@ -349,6 +359,7 @@ pub async fn metadata_search(
             provider: Provider::Bangumi,
             error: None,
             candidates,
+            label: None,
         }]);
     }
     let list: Vec<Provider> = providers
@@ -356,6 +367,7 @@ pub async fn metadata_search(
         .iter()
         .filter_map(|s| Provider::parse(s))
         .collect();
+    let include_custom = list.is_empty() || list.iter().any(|p| *p == Provider::Custom);
     let order = if list.is_empty() {
         cfg.provider_order()
     } else {
@@ -367,6 +379,20 @@ pub async fn metadata_search(
             continue;
         }
         out.push(search_provider(&cfg, p, query, limit).await);
+    }
+    if include_custom {
+        for hit in custom::search_enabled(&cfg, query, "").await {
+            let mut candidates = hit.candidates;
+            if hit.error.is_none() {
+                annotate(query, &mut candidates);
+            }
+            out.push(SearchResult {
+                provider: Provider::Custom,
+                error: hit.error,
+                candidates,
+                label: Some(hit.label),
+            });
+        }
     }
     Ok(out)
 }
@@ -634,6 +660,7 @@ fn fallback_page_url(
                 return Some(format!("https://zh.moegirl.org.cn/?curid={}", b.external_id));
             }
             Provider::Manual => {}
+            Provider::Custom => return None,
         }
     }
     Some(comic18::search_url_for_title(cfg, book_title))
