@@ -35,6 +35,11 @@ export function splitPlan(parts, keys) {
   };
 }
 
+/** Members whose checkbox was cleared. Those paths are split out of the review group. */
+export function pathsToSplit(members) {
+  return (members || []).filter((m) => m && m.keep === false && m.path).map((m) => m.path);
+}
+
 export function eachAlone(parts) {
   if (!parts || parts.length < 2) return { ok: false, reason: 'needPart' };
   return { ok: true, groups: parts.map((p) => [p.key]) };

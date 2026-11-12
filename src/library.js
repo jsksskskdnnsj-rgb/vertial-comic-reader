@@ -247,6 +247,16 @@ function bookMenu(btn, b) {
   if (edited.has(b.id)) items.push({ a: 'resetedit', label: t('lib.resetEdits'), fn: async () => reload(await act.resetEdits(b), b.id, true) });
   if (missing.has(b.id)) items.push({ a: 'relink', label: t('reader.locate'), fn: async () => reload(await act.relinkBook(b), b.id, true) });
   if (b.kind === 'folder' || b.merged) items.push({ a: 'group', label: t('lib.editGroup'), fn: () => openGroupEditor({ bookId: b.id, books, onDone: () => load() }) });
+  const pend = pendingByBook.get(b.id);
+  if (pend) items.push({ a: 'apart', label: t('merge.separateOne'), fn: async () => {
+    try {
+      await invoke('merge_detach', { id: pend.id, paths: [pend.path] });
+      toast(t('merge.separatedOne'));
+      await refreshMergeBanner();
+      await load();
+    } catch (e) { toast(errText(e)); }
+  } });
+  else if (b.merged) items.push({ a: 'apart', label: t('merge.separateOne'), fn: () => openGroupEditor({ bookId: b.id, books, onDone: () => load() }) });
   if (b.merged) items.push({ a: 'unmerge', label: t('lib.unmerge'), fn: async () => {
     try { await invoke('unmerge_book', { bookId: b.id }); toast(t('merge.undone')); await load(); }
     catch (e) { toast(errText(e)); }
@@ -455,8 +465,19 @@ async function mergeSelected() {
     onDone: () => { picking = false; selected.clear(); updateMergeBtn(); load(); },
   });
 }
+let pendingByBook = new Map();
+function indexPending(rows) {
+  pendingByBook = new Map();
+  for (const g of rows || []) {
+    for (const m of g.members || []) {
+      const sid = m.shelf_id || m.shelfId;
+      if (sid) pendingByBook.set(sid, { id: g.id, path: m.path });
+    }
+  }
+}
 async function refreshMergeBanner() {
   const rows = await invoke('list_merge_pending').catch(() => []);
+  indexPending(rows);
   const btn = $('mergeBanner');
   const n = rows?.length || 0;
   btn.hidden = n === 0;

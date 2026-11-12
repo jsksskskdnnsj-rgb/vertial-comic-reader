@@ -1,8 +1,19 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { eachAlone, moveIndex, removePlan, splitPlan } from '../src/group-edit.js';
+import { eachAlone, moveIndex, pathsToSplit, removePlan, splitPlan } from '../src/group-edit.js';
 import { applySourcePack, exportSourcePack, parseHeaders } from '../src/source-pack.js';
 import { remoteImgSrcWith } from '../src/remote-img.js';
+
+test('unchecked review rows are the ones split out of the set', () => {
+  const members = [
+    { path: 'a', keep: true },
+    { path: 'b', keep: false },
+    { path: 'c' },
+    { path: '', keep: false },
+  ];
+  assert.deepEqual(pathsToSplit(members), ['b']);
+  assert.deepEqual(pathsToSplit(members.map((m) => ({ ...m, keep: true }))), []);
+});
 
 test('reorder and removal plans keep a volume in the group', () => {
   const parts = [

@@ -2,7 +2,7 @@
 // and the same actions as the library menu (continue, start over, rename, locate, reveal, remove,
 // reset page edits, move to folder). Data: shelf_get, folder_list, episode_info (chapters.js),
 // bookmark_counts, check_books_missing, page_edit_info.
-import { invoke, t, esc, ago, fmtBytes, bootPage, lang, T } from './shell.js';
+import { invoke, t, esc, ago, fmtBytes, bootPage, lang, toast, T } from './shell.js';
 import { lib } from './api.js';
 import { mountShell, coverUrl, wireCoverFallback } from './shell-ui.js';
 import { fetchEpisodeInfo } from './chapters.js';
@@ -18,6 +18,7 @@ wireCoverFallback();
 const id = +new URLSearchParams(location.search).get('book');
 const KIND_KEY = { zip: 'type.zip', folder: 'type.folder', images: 'type.images' };
 let book = null;
+let pendingHit = null;
 let coverBust = 0;
 
 function parsePaths(b) { try { const p = JSON.parse(b.paths); return Array.isArray(p) ? p : []; } catch { return []; } }
@@ -51,6 +52,16 @@ async function load() {
   $('name').textContent = book.name;
   const groupBtn = $('groupBtn');
   if (groupBtn) groupBtn.hidden = !(book.kind === 'folder' || book.merged);
+  pendingHit = null;
+  const apartBtn = $('apartBtn');
+  if (apartBtn) {
+    const rows = await invoke('list_merge_pending').catch(() => []);
+    for (const g of rows || []) {
+      const member = (g.members || []).find((m) => (m.shelf_id || m.shelfId) === book.id);
+      if (member) pendingHit = { id: g.id, path: member.path };
+    }
+    apartBtn.hidden = !pendingHit && !book.merged;
+  }
   document.title = `${book.name} · ${t('app.name')}`;
   $('chips').innerHTML = [KIND_KEY[book.kind] ? t(KIND_KEY[book.kind]) : '', t('book.pages', { n: book.page_count })]
     .filter(Boolean).map((s) => `<span>${esc(s)}</span>`).join('');
@@ -161,6 +172,18 @@ $('relinkBtn').addEventListener('click', async () => after(await act.relinkBook(
 $('revealBtn').addEventListener('click', () => act.revealBook(book));
 $('groupBtn')?.addEventListener('click', () => {
   if (!book) return;
+  openGroupEditor({ bookId: book.id, onDone: () => load() });
+});
+$('apartBtn')?.addEventListener('click', async () => {
+  if (!book) return;
+  if (pendingHit) {
+    try {
+      await invoke('merge_detach', { id: pendingHit.id, paths: [pendingHit.path] });
+      toast(t('merge.separatedOne'));
+      await load();
+    } catch (e) { toast(String(e?.message || e || e)); }
+    return;
+  }
   openGroupEditor({ bookId: book.id, onDone: () => load() });
 });
 $('removeBtn').addEventListener('click', async () => { if (await act.removeBook(book)) location.href = 'library.html'; });

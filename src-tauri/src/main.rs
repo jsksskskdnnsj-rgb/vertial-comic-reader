@@ -185,6 +185,7 @@ fn main() {
             merge::merge_auto_get,
             merge::merge_auto_set,
             merge::list_merge_pending,
+            merge::merge_detach,
             merge::resolve_merge_pending,
             merge::merge_books,
             merge::unmerge_book,
