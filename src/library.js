@@ -26,6 +26,7 @@ import { openGroupEditor } from './group-ui.js';
 import { LIBRARY_RENDER_BATCH } from './library-render-window.js';
 import { readerOpenHref } from './reader-mode-store.js';
 import { readPresets, writePresets, snapshotPreset, applyPreset } from './library-presets.js';
+import { cachedInvoke } from './data-cache.js';
 
 const params = new URLSearchParams(location.search);
 const view = params.get('view') || '';
@@ -173,6 +174,12 @@ function pageWindow(list) {
   if (page < 0) page = 0;
   return { slice: list.slice(page * PAGE_SIZE, page * PAGE_SIZE + PAGE_SIZE), pages, total: list.length };
 }
+let gridHtml = '';
+function paintGrid(html) {
+  if (html === gridHtml) return;
+  gridHtml = html;
+  $('grid').innerHTML = html;
+}
 function renderGrid() {
   $('libLoading').hidden = true;
   const list = visibleBooks();
@@ -180,7 +187,7 @@ function renderGrid() {
   renderStatus();
   $('count').textContent = t('lib.count', { n: list.length });
   $('grid').className = viewMode === 'list' ? 'lib-list' : 'cards-row lib-grid';
-  $('grid').innerHTML = win.slice.map((b) => cardHtml(b)).join('');
+  paintGrid(win.slice.map((b) => cardHtml(b)).join(''));
   const empty = $('empty');
   empty.hidden = list.length > 0;
   $('emptyText').textContent = books.length ? t('lib.noBooks') : t('lib.emptyLibrary');
@@ -222,7 +229,7 @@ onPage(document, 'pointerdown', (e) => {
 }, { capture: true });
 onPage(document, 'keydown', (e) => { if (e.key === 'Escape') closeMenu(); });
 
-const reload = async (ok, id, bumpCover) => { if (ok) { if (bumpCover) bust.set(id, Date.now()); await load(); } };
+const reload = async (ok, id, bumpCover) => { if (ok) { if (bumpCover) bust.set(id, Date.now()); await load(true); } };
 
 function bookMenu(btn, b) {
   const r = btn.getBoundingClientRect();
@@ -236,7 +243,7 @@ function bookMenu(btn, b) {
       renderGrid();
     } },
     { a: 'details', label: t('lib.details'), fn: () => (location.href = `book.html?book=${b.id}`) },
-    { a: 'meta', label: t('meta.matchMenu'), fn: async () => act.matchMetadata(b, { onBound: () => load() }) },
+    { a: 'meta', label: t('meta.matchMenu'), fn: async () => act.matchMetadata(b, { onBound: () => load(true) }) },
     { a: 'metadesk', label: t('meta.deskLink'), fn: () => { location.href = `meta.html?book=${b.id}`; } },
     { a: 'metaopen', label: t('meta.openInBrowser'), fn: () => act.openMetadataPage(b) },
     { a: 'rename', label: t('lib.rename'), fn: async () => reload(await act.renameBook(b)) },
@@ -246,19 +253,19 @@ function bookMenu(btn, b) {
   ];
   if (edited.has(b.id)) items.push({ a: 'resetedit', label: t('lib.resetEdits'), fn: async () => reload(await act.resetEdits(b), b.id, true) });
   if (missing.has(b.id)) items.push({ a: 'relink', label: t('reader.locate'), fn: async () => reload(await act.relinkBook(b), b.id, true) });
-  if (b.kind === 'folder' || b.merged) items.push({ a: 'group', label: t('lib.editGroup'), fn: () => openGroupEditor({ bookId: b.id, books, onDone: () => load() }) });
+  if (b.kind === 'folder' || b.merged) items.push({ a: 'group', label: t('lib.editGroup'), fn: () => openGroupEditor({ bookId: b.id, books, onDone: () => load(true) }) });
   const pend = pendingByBook.get(b.id);
   if (pend) items.push({ a: 'apart', label: t('merge.separateOne'), fn: async () => {
     try {
       await invoke('merge_detach', { id: pend.id, paths: [pend.path] });
       toast(t('merge.separatedOne'));
       await refreshMergeBanner();
-      await load();
+      await load(true);
     } catch (e) { toast(errText(e)); }
   } });
-  else if (b.merged) items.push({ a: 'apart', label: t('merge.separateOne'), fn: () => openGroupEditor({ bookId: b.id, books, onDone: () => load() }) });
+  else if (b.merged) items.push({ a: 'apart', label: t('merge.separateOne'), fn: () => openGroupEditor({ bookId: b.id, books, onDone: () => load(true) }) });
   if (b.merged) items.push({ a: 'unmerge', label: t('lib.unmerge'), fn: async () => {
-    try { await invoke('unmerge_book', { bookId: b.id }); toast(t('merge.undone')); await load(); }
+    try { await invoke('unmerge_book', { bookId: b.id }); toast(t('merge.undone')); await load(true); }
     catch (e) { toast(errText(e)); }
   } });
   items.push(
@@ -284,18 +291,18 @@ const errText = (e) => String(e?.detail ?? e?.message ?? e);
 async function newFolder() {
   const name = await askName(t('lib.newFolder'));
   if (!name) return;
-  try { await lib.newFolder(name); toast(t('common.saved')); load(); } catch (e) { toast(errText(e)); }
+  try { await lib.newFolder(name); toast(t('common.saved')); load(true); } catch (e) { toast(errText(e)); }
 }
 async function renameFolder(id) {
   const f = folders.find((x) => x.id === id); if (!f) return;
   const name = await askName(t('lib.rename'), f.name);
   if (!name || name === f.name) return;
-  try { await lib.renameFolder(id, name); toast(t('common.saved')); load(); } catch (e) { toast(errText(e)); }
+  try { await lib.renameFolder(id, name); toast(t('common.saved')); load(true); } catch (e) { toast(errText(e)); }
 }
 async function deleteFolder(id) {
   const f = folders.find((x) => x.id === id);
   if (!await confirmDialog({ title: t('lib.deleteFolder'), message: t('lib.deleteFolderMsg', { name: f?.name ?? '' }), ok: t('common.delete'), danger: true })) return;
-  try { await lib.deleteFolder(id); if (filter === id) { filter = 'all'; prefs.set('libFolder', filter); } toast(t('common.saved')); load(); } catch (e) { toast(errText(e)); }
+  try { await lib.deleteFolder(id); if (filter === id) { filter = 'all'; prefs.set('libFolder', filter); } toast(t('common.saved')); load(true); } catch (e) { toast(errText(e)); }
 }
 async function moveFolder(id, dir) {
   const ids = folders.map((f) => f.id);
@@ -305,7 +312,7 @@ async function moveFolder(id, dir) {
   const swap = ids[i];
   ids[i] = ids[j];
   ids[j] = swap;
-  try { await invoke('folder_reorder', { ids }); load(); } catch (e) { toast(errText(e)); }
+  try { await invoke('folder_reorder', { ids }); load(true); } catch (e) { toast(errText(e)); }
 }
 
 // ---- events ----------------------------------------------------------------------
@@ -418,17 +425,22 @@ async function loadExtras(slice) {
   if (my !== extraSeq) return;
   rows.forEach((b, i) => episodes.set(b.id, eps?.[i] || null));
   const found = new Set();
-  await pool(rows, 8, async (b) => {
-    const info = await lib.pageEditInfo(b.id).catch(() => null);
-    if (info?.edited) found.add(b.id);
-  });
+  const flags = await lib.pageEditInfos(rows.map((b) => b.id)).catch(() => null);
+  if (Array.isArray(flags)) {
+    for (const f of flags) if (f.edited) found.add(f.bookId);
+  } else {
+    await pool(rows, 8, async (b) => {
+      const info = await lib.pageEditInfo(b.id).catch(() => null);
+      if (info?.edited) found.add(b.id);
+    });
+  }
   if (my !== extraSeq) return;
   for (const id of ids) edited.delete(id);
   for (const id of found) edited.add(id);
   renderFolders();
   const list = visibleBooks();
   const win = pageWindow(list);
-  $('grid').innerHTML = win.slice.map((b) => cardHtml(b)).join('');
+  paintGrid(win.slice.map((b) => cardHtml(b)).join(''));
 }
 function firstPath(b) {
   try {
@@ -462,7 +474,7 @@ async function mergeSelected() {
         cover_ver: 0,
       })),
     }],
-    onDone: () => { picking = false; selected.clear(); updateMergeBtn(); load(); },
+    onDone: () => { picking = false; selected.clear(); updateMergeBtn(); load(true); },
   });
 }
 let pendingByBook = new Map();
@@ -482,7 +494,7 @@ async function refreshMergeBanner() {
   const n = rows?.length || 0;
   btn.hidden = n === 0;
   btn.textContent = n ? t('merge.pendingBanner', { n }) : '';
-  btn.onclick = () => openMergeDialog({ groups: rows, folders, onDone: () => { refreshMergeBanner(); load(); } });
+  btn.onclick = () => openMergeDialog({ groups: rows, folders, onDone: () => { refreshMergeBanner(); load(true); } });
 }
 function cardHtml(b) {
   const ep = episodes.get(b.id);
@@ -511,10 +523,13 @@ function cardHtml(b) {
       <div class="meta meta--read">${esc(read)}</div>
     </article>`;
 }
-async function load() {
+async function load(fresh = false) {
   const my = ++loadSeq;
   page = 0;
-  const [bk, fl] = await Promise.all([lib.allBooks().catch(() => []), lib.folders().catch(() => null)]);
+  const [bk, fl] = await Promise.all([
+    cachedInvoke('shelf', () => lib.allBooks(), fresh).catch(() => []),
+    cachedInvoke('folders', () => lib.folders(), fresh).catch(() => null),
+  ]);
   if (my !== loadSeq) return;
   books = bk; folders = fl ?? [];
   if (fl) { const f = validFolder(filter, folders); if (f !== filter) { filter = f; prefs.set('libFolder', f); } }   // a remembered folder that was deleted -> All (a failed folder_list must not wipe it)

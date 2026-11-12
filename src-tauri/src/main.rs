@@ -24,6 +24,7 @@ mod merge_manual;
 mod metadata;
 mod model;
 mod paths;
+mod pipeline;
 mod protocol;
 mod scan;
 mod shelf;
@@ -177,6 +178,7 @@ fn main() {
             adapters::list_recent_books,
             adapters::list_recent_added,
             adapters::import_paths,
+            library::page_edit_infos,
             adapters::import_scan_books,
             merge::merge_auto_get,
             merge::merge_auto_set,

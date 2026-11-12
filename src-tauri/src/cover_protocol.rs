@@ -18,10 +18,8 @@
 use crate::commands::ReaderState;
 use crate::error::ReaderError;
 use crate::extractor::sniff;
-use std::collections::VecDeque;
-use std::io::Read as _;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Condvar, Mutex, Once, OnceLock};
+use std::sync::Arc;
 use std::{path::Path, path::PathBuf};
 use tauri::State;
 
@@ -111,41 +109,18 @@ fn acquire_cover_permit() -> CoverPermit {
     }
 }
 
-fn cover_queue() -> &'static (Mutex<VecDeque<i64>>, Condvar) {
-    static Q: OnceLock<(Mutex<VecDeque<i64>>, Condvar)> = OnceLock::new();
-    Q.get_or_init(|| (Mutex::new(VecDeque::new()), Condvar::new()))
-}
-
-fn cover_worker() {
-    let (queue, cv) = cover_queue();
-    loop {
-        let id = {
-            let mut q = queue.lock().unwrap_or_else(|e| e.into_inner());
-            while q.is_empty() {
-                q = cv.wait(q).unwrap_or_else(|e| e.into_inner());
-            }
-            q.pop_front().unwrap()
-        };
-        if let Ok(dir) = crate::data_dir() {
-            let _ = generate_cover(&dir.join("covers"), id);
-        }
-    }
-}
-
-/// Generate a missing cover off the import thread. Two workers share the decode cap.
+/// Generate a missing cover on the thumbnail pool, after any visible page read.
 pub(crate) fn queue_cover(book_id: i64) {
-    let _ = cover_queue();
-    static START: Once = Once::new();
-    START.call_once(|| {
-        for i in 0..COVER_PARALLEL {
-            let _ = std::thread::Builder::new()
-                .name(format!("mh-cover-{i}"))
-                .spawn(cover_worker);
-        }
-    });
-    let (queue, cv) = cover_queue();
-    queue.lock().unwrap_or_else(|e| e.into_inner()).push_back(book_id);
-    cv.notify_one();
+    crate::pipeline::scheduler().submit(
+        crate::pipeline::Priority::Thumb,
+        Some(book_id),
+        false,
+        move || {
+            if let Ok(dir) = crate::data_dir() {
+                let _ = generate_cover(&dir.join("covers"), book_id);
+            }
+        },
+    );
 }
 
 fn consider_cover(best: &mut Vec<(String, PathBuf)>, rel: String, path: PathBuf) {
@@ -190,8 +165,7 @@ fn read_capped(path: &Path) -> Option<Vec<u8>> {
     if len == 0 || len > MAX_COVER_SRC {
         return None;
     }
-    let buf = std::fs::read(path).ok()?;
-    (!buf.is_empty()).then_some(buf)
+    crate::pipeline::read_file_capped(path).ok().filter(|buf| !buf.is_empty())
 }
 
 fn downscale_cover(img: image::DynamicImage) -> image::DynamicImage {
@@ -204,11 +178,7 @@ fn downscale_cover(img: image::DynamicImage) -> image::DynamicImage {
 }
 
 fn decode_cover_bytes(bytes: &[u8]) -> Option<image::DynamicImage> {
-    image::ImageReader::new(std::io::Cursor::new(bytes))
-        .with_guessed_format()
-        .ok()
-        .and_then(|r| r.decode().ok())
-        .map(downscale_cover)
+    crate::pipeline::decode_limited(bytes).ok().map(downscale_cover)
 }
 
 /// First decodable early page. Bytes are read one candidate at a time.
@@ -237,11 +207,14 @@ fn decode_first_cover(book_id: i64) -> Result<Option<image::DynamicImage>, Reade
                     break;
                 }
                 let mut e = ar.by_index(index)?;
-                if e.size() == 0 || e.size() > MAX_COVER_SRC {
+                let claimed = e.size();
+                if claimed == 0 || claimed > MAX_COVER_SRC {
                     continue;
                 }
-                let mut buf = Vec::with_capacity(e.size() as usize);
-                e.read_to_end(&mut buf)?;
+                let buf = match crate::pipeline::read_capped(&mut e, claimed, MAX_COVER_SRC) {
+                    Ok(buf) if !buf.is_empty() => buf,
+                    _ => continue,
+                };
                 tries += 1;
                 if let Some(img) = decode_cover_bytes(&buf) {
                     return Ok(Some(img));

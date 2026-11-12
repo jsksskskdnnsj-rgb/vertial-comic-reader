@@ -22,6 +22,7 @@ thiserror = "1"
 parking_lot = "0.12"
 imagesize = "0.13"
 natord = "1"
+encoding_rs = "0.8"
 walkdir = "2"
 http = "1"
 # No `avif` feature: decoding AVIF needs dav1d. Pages with an AVIF payload are

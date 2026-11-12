@@ -77,11 +77,12 @@ fn walk_dir(dir: &Path, base: &Path, out: &mut Vec<PickedFile>, parallel: bool) 
     let mut subs: Vec<PathBuf> = Vec::new();
     for entry in entries.flatten() {
         let p = entry.path();
-        if p.is_dir() {
+        let Ok(ft) = entry.file_type() else { continue };
+        if ft.is_dir() {
             subs.push(p);
             continue;
         }
-        if kind_of(&p).is_none() {
+        if !ft.is_file() || kind_of(&p).is_none() {
             continue;
         }
         let rel = p

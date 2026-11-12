@@ -5,7 +5,7 @@ use crate::error::ReaderError;
 use crate::model::*;
 use std::{
     fs::File,
-    io::{BufReader, Cursor, Read},
+    io::{BufReader, Cursor},
     path::{Path, PathBuf},
     sync::Mutex,
 };
@@ -54,16 +54,20 @@ fn read_up_to(
 ) -> Option<(Vec<u8>, u64)> {
     let mut e = ar.by_index(entry as usize).ok()?; // seeks to local header, decompresses lazily
     let size = e.size();
-    let mut buf = Vec::with_capacity(limit.min(size) as usize);
-    e.by_ref().take(limit).read_to_end(&mut buf).ok()?;
+    // A prefix only. The claimed uncompressed size is never used as a capacity.
+    let buf = crate::pipeline::read_prefix(&mut e, limit).ok()?;
     Some((buf, size))
 }
 
 pub fn open_zip(path: &Path) -> Result<zip::ZipArchive<BufReader<File>>, ReaderError> {
-    Ok(zip::ZipArchive::new(BufReader::with_capacity(
-        64 * 1024,
-        File::open(path)?,
-    ))?) // central directory only
+    let opened = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        zip::ZipArchive::new(BufReader::with_capacity(64 * 1024, File::open(path)?))
+            .map_err(ReaderError::from)
+    }));
+    match opened {
+        Ok(r) => r, // central directory only
+        Err(_) => Err(ReaderError::Corrupt("压缩包异常，已跳过".into())),
+    }
 }
 
 fn zip_candidates(ar: &mut zip::ZipArchive<BufReader<File>>) -> Vec<(u32, String)> {
@@ -87,6 +91,7 @@ fn zip_header_key(ar: &mut zip::ZipArchive<BufReader<File>>, entry: u32, name: &
 }
 
 fn probe_zip_entry(ar: &mut zip::ZipArchive<BufReader<File>>, entry: u32, name: String) -> RealPage {
+    crate::pipeline::cooperate();
     let cached_key = zip_header_key(ar, entry, &name);
     if let Some((key, bytes)) = &cached_key {
         if let Some((w, h, stored)) = crate::header_cache::get(key) {
@@ -237,39 +242,21 @@ pub fn count_images_recursive(root: &Path) -> usize {
     scan_folder(root).len()
 }
 
-fn mtime_ms(m: &std::fs::Metadata) -> u128 {
-    m.modified()
-        .ok()
-        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-        .map(|d| d.as_millis())
-        .unwrap_or(0)
-}
-
 /// One directory walk: image names in reading order, plus the folder signature
 /// (`f{count}:{total_len}:{max_mtime}`) that `quick_sig` has always used.
 /// Counting every file (not only images) keeps the signature comparable with
 /// books already stored in the shelf.
 fn walk_folder(root: &Path) -> (Vec<(String, u64)>, String) {
-    let (mut n, mut len, mut mx) = (0u64, 0u64, 0u128);
-    let mut files: Vec<(String, u64)> = Vec::new();
-    for e in walkdir::WalkDir::new(root)
-        .follow_links(false)
+    let walked = crate::pipeline::walk_tree(root, &std::sync::atomic::AtomicBool::new(false), |_| {});
+    let files = walked
+        .images
         .into_iter()
-        .filter_map(Result::ok)
-        .filter(|e| e.file_type().is_file())
-    {
-        let Ok(m) = e.metadata() else { continue };
-        n += 1;
-        len += m.len();
-        mx = mx.max(mtime_ms(&m));
-        let Ok(rel) = e.path().strip_prefix(root) else { continue };
-        let rel = rel.to_string_lossy().replace('\\', "/");
-        if is_image(&rel) {
-            files.push((rel, m.len()));
-        }
-    }
-    crate::shelf_scan::sort_by_comic_name(&mut files, |f| f.0.as_str());
-    (files, format!("f{n}:{len}:{mx}"))
+        .map(|f| (f.rel, f.bytes))
+        .collect();
+    (
+        files,
+        format!("f{}:{}:{}", walked.files, walked.bytes, walked.max_mtime_ms),
+    )
 }
 
 pub fn scan_folder(root: &Path) -> Vec<RealPage> {
@@ -525,9 +512,8 @@ fn folder_page(root: &Path, name: String, bytes: u64) -> RealPage {
             };
         }
     }
-    let (w, h) = imagesize::size(&full)
-        .map(|s| (s.width as u32, s.height as u32))
-        .unwrap_or((0, 0));
+    crate::pipeline::cooperate();
+    let (w, h) = crate::pipeline::image_dims(&full);
     if let Some(key) = &key {
         crate::header_cache::put(key, w, h, bytes);
     }
@@ -687,9 +673,8 @@ fn loose_page(name: String, bytes: u64) -> RealPage {
             };
         }
     }
-    let (w, h) = imagesize::size(path)
-        .map(|s| (s.width as u32, s.height as u32))
-        .unwrap_or((0, 0));
+    crate::pipeline::cooperate();
+    let (w, h) = crate::pipeline::image_dims(path);
     if let Some(key) = &key {
         crate::header_cache::put(key, w, h, bytes);
     }

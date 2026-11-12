@@ -2417,6 +2417,7 @@ dependencies = [
 name = "mh-reader"
 version = "0.9.3"
 dependencies = [
+ "encoding_rs",
  "http 1.5.0",
  "image",
  "imagesize",
