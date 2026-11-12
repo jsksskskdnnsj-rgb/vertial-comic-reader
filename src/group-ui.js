@@ -65,6 +65,7 @@ export async function openGroupEditor({ bookId, books = null, onDone = null } = 
           <b title="${esc(part.name)}">${esc(part.name)}</b>
           <span class="meta num">${esc(path)}</span>
         </span>
+        <button type="button" class="btn btn--ghost btn--sm merge-apart" data-alone="${idx}" ${view.parts.length < 2 ? 'disabled' : ''}>${esc(t('merge.separateOne'))}</button>
         <span class="merge-row__move">
           <button type="button" class="ibtn" data-up="${idx}" aria-label="${esc(t('merge.up'))}"><svg class="i"><use href="icons.svg#chevron-up"/></svg></button>
           <button type="button" class="ibtn" data-down="${idx}" aria-label="${esc(t('merge.down'))}"><svg class="i"><use href="icons.svg#chevron-down"/></svg></button>
@@ -150,6 +151,19 @@ export async function openGroupEditor({ bookId, books = null, onDone = null } = 
   }
 
   list.addEventListener('click', async (e) => {
+    const alone = e.target.closest('[data-alone]');
+    if (alone && !alone.disabled) {
+      const part = view.parts[Number(alone.dataset.alone)];
+      if (!part) return;
+      const plan = removePlan(view.parts, [part.key]);
+      if (!plan.ok) { toast(t(plan.reason === 'none' ? 'group.pick' : 'group.needPart')); return; }
+      await run(
+        () => invoke('group_remove_members', { bookId: view.bookId, pathKeys: [part.key] }),
+        plan.stay[0]?.key,
+        t('merge.separatedOne'),
+      );
+      return;
+    }
     const up = e.target.closest('[data-up]');
     const down = e.target.closest('[data-down]');
     if (!up && !down) return;

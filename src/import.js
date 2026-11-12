@@ -88,8 +88,11 @@ function renderSameBook() {
   const groups = reviewGroups(sources.map(baseName)).filter((g) => g.members.length >= 2);
   if (!groups.length) { el.hidden = true; el.textContent = ''; return; }
   const title = [...(groups[0].title || '')].slice(0, 16).join('');
+  const names = groups.flatMap((g) => g.members);
+  const shown = names.slice(0, 12);
+  const more = names.length > shown.length ? '…' : '';
   el.hidden = false;
-  el.textContent = t('imp.sameBook', { n: groups.length, title });
+  el.textContent = `${t('imp.sameBook', { n: groups.length, title })} ${shown.join('、')}${more}`;
 }
 function renderScan() {
   let images = 0, nested = 0;
@@ -192,7 +195,12 @@ $('goBtn').addEventListener('click', async () => {
       const r = await lib.importPaths([...sources], folderId);
       $('summary').textContent = t('imp.summary', { a: r.added, s: r.skipped, f: r.failed.length });
       const pending = await invoke('list_merge_pending').catch(() => []);
-      if (pending?.length) toast(t('merge.pendingBanner', { n: pending.length }));
+      if (pending?.length) {
+        toast(t('merge.pendingBanner', { n: pending.length }));
+        const folders = await lib.folders().catch(() => []);
+        const { openMergeDialog } = await import('./merge-ui.js');
+        openMergeDialog({ groups: pending, folders });
+      }
       if (r.added) toast(t('imp.importedToast', { n: r.added }));
       else if (!r.failed.length) toast(t('imp.nothingNew'));
       $('failList').innerHTML = (r.failed || []).map((f) =>

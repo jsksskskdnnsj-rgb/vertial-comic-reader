@@ -136,6 +136,21 @@ pub(crate) fn pin_exact(conn: &Connection, paths: &[String]) -> Result<(), Strin
     Ok(())
 }
 
+pub(crate) fn apart_between_paths(conn: &Connection, left: &[String], right: &[String]) -> Result<(), String> {
+    apart_between(conn, &norm_keys(left), &norm_keys(right))
+}
+
+/// Keep these paths from being auto-grouped with each other. Pins on other books stay.
+pub(crate) fn apart_among(conn: &Connection, paths: &[String]) -> Result<(), String> {
+    let keys = norm_keys(paths);
+    for i in 0..keys.len() {
+        for j in (i + 1)..keys.len() {
+            apart_between(conn, &[keys[i].clone()], &[keys[j].clone()])?;
+        }
+    }
+    Ok(())
+}
+
 pub(crate) fn apart_all(conn: &Connection, paths: &[String]) -> Result<(), String> {
     let keys = norm_keys(paths);
     clear_pin_tokens(conn, &keys)?;
@@ -235,10 +250,21 @@ struct PinRow {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+struct PendingSnap {
+    id: i64,
+    resolved: i64,
+    payload: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
 struct UndoBody {
     books: Vec<UndoBook>,
     pins: Vec<PinRow>,
     apart: Vec<(String, String)>,
+    /// Open or resolved suggestion rows that mentioned these paths, so undo can put a
+    /// detached book back into the same review group.
+    #[serde(default)]
+    pending: Vec<PendingSnap>,
 }
 
 #[derive(Clone, Debug)]
@@ -432,7 +458,8 @@ pub(crate) fn push_undo(conn: &Connection, paths: &[String]) -> Result<(), Strin
         .filter(|(a, b)| keyset.contains(a.as_str()) || keyset.contains(b.as_str()))
         .cloned()
         .collect();
-    let body = serde_json::to_string(&UndoBody { books, pins, apart }).map_err(|e| e.to_string())?;
+    let pending = pending_snaps(conn, &keys);
+    let body = serde_json::to_string(&UndoBody { books, pins, apart, pending }).map_err(|e| e.to_string())?;
     conn.execute(
         "INSERT INTO merge_undo(created_at, body) VALUES(?1,?2)",
         params![crate::now_secs(), body],
@@ -444,6 +471,43 @@ pub(crate) fn push_undo(conn: &Connection, paths: &[String]) -> Result<(), Strin
     )
     .map_err(|e| e.to_string())?;
     Ok(())
+}
+
+fn pending_snaps(conn: &Connection, keys: &[String]) -> Vec<PendingSnap> {
+    let want: HashSet<&str> = keys.iter().map(|s| s.as_str()).collect();
+    if want.is_empty() {
+        return Vec::new();
+    }
+    let Ok(mut stmt) = conn.prepare("SELECT id, resolved, payload FROM merge_pending") else {
+        return Vec::new();
+    };
+    let Ok(rows) = stmt.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?, r.get::<_, String>(2)?))) else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for row in rows.flatten() {
+        let (id, resolved, payload) = row;
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(&payload) else {
+            continue;
+        };
+        let hit = value
+            .get("members")
+            .and_then(|m| m.as_array())
+            .map(|members| {
+                members.iter().any(|member| {
+                    member
+                        .get("path")
+                        .and_then(|p| p.as_str())
+                        .map(|p| want.contains(path_key(p).as_str()))
+                        .unwrap_or(false)
+                })
+            })
+            .unwrap_or(false);
+        if hit {
+            out.push(PendingSnap { id, resolved, payload });
+        }
+    }
+    out
 }
 
 fn path_set(paths: &[String]) -> HashSet<String> {
@@ -956,6 +1020,21 @@ pub(crate) fn undo_last_conn(conn: &Connection) -> Result<GroupEditResult, Strin
             params![a, b],
         )
         .map_err(|e| e.to_string())?;
+    }
+    for row in &snap.pending {
+        let updated = tx
+            .execute(
+                "UPDATE merge_pending SET payload=?1, resolved=?2 WHERE id=?3",
+                params![row.payload, row.resolved, row.id],
+            )
+            .map_err(|e| e.to_string())?;
+        if updated == 0 {
+            tx.execute(
+                "INSERT INTO merge_pending(id, created_at, resolved, payload) VALUES(?1,?2,?3,?4)",
+                params![row.id, crate::now_secs(), row.resolved, row.payload],
+            )
+            .map_err(|e| e.to_string())?;
+        }
     }
     tx.execute("DELETE FROM merge_undo WHERE id=?1", [id])
         .map_err(|e| e.to_string())?;

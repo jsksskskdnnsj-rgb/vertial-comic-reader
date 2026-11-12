@@ -2,6 +2,7 @@
 // Reordering is local until Merge; the backend then rewrites shelf rows only.
 import { invoke, t, esc, toast, openModal } from './shell.js';
 import { coverUrl, COVER_BASE } from './shell-ui.js';
+import { pathsToSplit } from './group-edit.js';
 
 function thumb(m) {
   if (m.shelf_id && COVER_BASE) {
@@ -28,13 +29,14 @@ export function openMergeDialog({ groups = [], folders = [], preview = false, on
     confident: !!g.confident,
     title: g.suggested_title || '',
     folderId: '',
-    members: (g.members || []).map((m, i) => ({ ...m, _i: i })),
+    members: (g.members || []).map((m, i) => ({ ...m, _i: i, keep: m.keep !== false })),
   }));
   const root = document.createElement('div');
   root.className = 'merge-dialog';
   const help = document.createElement('p');
   help.className = 'hint';
   help.textContent = t('merge.help');
+  const errText = (e) => String(e?.message || e || '');
   const list = document.createElement('div');
   list.className = 'merge-list';
   root.append(help, list);
@@ -49,16 +51,27 @@ export function openMergeDialog({ groups = [], folders = [], preview = false, on
       row.className = 'merge-row';
       row.draggable = true;
       row.innerHTML = `
+        <label class="check"><input type="checkbox" data-keep="${idx}" ${m.keep === false ? '' : 'checked'}> ${esc(t('merge.include'))}</label>
         ${thumb(m)}
         <span class="merge-row__main">
           <b title="${esc(m.name)}">${esc(m.name)}</b>
           <span class="meta num">${esc(metaLine(m))}</span>
         </span>
+        <button type="button" class="btn btn--ghost btn--sm merge-apart" data-alone="${idx}">${esc(t('merge.separateOne'))}</button>
         <span class="merge-row__move">
           <button type="button" class="ibtn" data-up="${idx}" aria-label="${esc(t('merge.up'))}" title="${esc(t('merge.up'))}"><svg class="i"><use href="icons.svg#chevron-up"/></svg></button>
           <button type="button" class="ibtn" data-down="${idx}" aria-label="${esc(t('merge.down'))}" title="${esc(t('merge.down'))}"><svg class="i"><use href="icons.svg#chevron-down"/></svg></button>
         </span>`;
+      row.querySelector('[data-keep]')?.addEventListener('change', (e) => {
+        m.keep = e.target.checked;
+      });
+      row.querySelector('[data-alone]')?.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        splitOut(g, box.closest('.merge-card'), [m.path]);
+      });
       row.addEventListener('dragstart', (e) => {
+        if (e.target.closest('button, input, label')) { e.preventDefault(); return; }
         row.classList.add('is-drag');
         e.dataTransfer?.setData('text/plain', String(idx));
         if (e.dataTransfer) e.dataTransfer.effectAllowed = 'move';
@@ -76,6 +89,36 @@ export function openMergeDialog({ groups = [], folders = [], preview = false, on
       });
       box.append(row);
     });
+  }
+
+  async function splitOut(g, card, paths) {
+    const list = (paths || []).filter(Boolean);
+    if (!list.length) { toast(t('merge.noneUnchecked')); return; }
+    if (preview || !g.id) {
+      const drop = new Set(list);
+      g.members = g.members.filter((m) => !drop.has(m.path));
+      if (g.members.length < 2) removeCard(card, g);
+      else paintRows(g, card.querySelector('.merge-rows'));
+      toast(list.length > 1 ? t('merge.separatedSome') : t('merge.separatedOne'));
+      return;
+    }
+    try {
+      const out = await invoke('merge_detach', { id: g.id, paths: list });
+      if (out?.closed || !out?.group) {
+        toast(t('merge.separatedOne'));
+        removeCard(card, g);
+        return;
+      }
+      g.members = (out.group.members || []).map((m, i) => ({ ...m, _i: i, keep: true }));
+      if (out.group.suggestedTitle) g.title = out.group.suggestedTitle;
+      else if (out.group.suggested_title) g.title = out.group.suggested_title;
+      paintRows(g, card.querySelector('.merge-rows'));
+      const titleInput = card.querySelector('.merge-field .field');
+      if (titleInput) titleInput.value = g.title;
+      toast(list.length > 1 ? t('merge.separatedSome') : t('merge.separatedOne'));
+    } catch (e) {
+      toast(errText(e));
+    }
   }
 
   function removeCard(card, g) {
@@ -132,26 +175,49 @@ export function openMergeDialog({ groups = [], folders = [], preview = false, on
     const sepBtn = document.createElement('button');
     sepBtn.type = 'button';
     sepBtn.className = 'btn btn--ghost btn--sm';
-    sepBtn.textContent = t('merge.separate');
-    sepBtn.hidden = !g.id;
+    sepBtn.textContent = t('merge.separateAll');
+    const uncheckedBtn = document.createElement('button');
+    uncheckedBtn.type = 'button';
+    uncheckedBtn.className = 'btn btn--ghost btn--sm';
+    uncheckedBtn.textContent = t('merge.separateUnchecked');
+    uncheckedBtn.addEventListener('click', () => splitOut(g, card, pathsToSplit(g.members)));
     mergeBtn.addEventListener('click', async () => {
       if (preview) { toast(t('merge.done')); return; }
       mergeBtn.disabled = true;
       const folderId = g.folderId ? Number(g.folderId) : null;
       try {
+        const dropped = pathsToSplit(g.members);
+        if (dropped.length && g.id) {
+          const out = await invoke('merge_detach', { id: g.id, paths: dropped });
+          if (out?.closed || !out?.group || (out.group.members || []).length < 2) {
+            toast(t('merge.separatedSome'));
+            removeCard(card, g);
+            return;
+          }
+          g.members = (out.group.members || []).map((m, i) => ({ ...m, _i: i, keep: true }));
+        } else if (dropped.length) {
+          const drop = new Set(dropped);
+          g.members = g.members.filter((m) => !drop.has(m.path));
+        }
+        const staying = g.members.filter((m) => m.keep !== false);
+        if (staying.length < 2) {
+          toast(t('merge.needTwo'));
+          mergeBtn.disabled = false;
+          return;
+        }
         if (g.id) {
           await invoke('resolve_merge_pending', {
             id: g.id,
             action: 'merge',
             title: g.title.trim(),
             folderId,
-            order: g.members.map((m) => m._i),
+            order: g.members.map((_, i) => i),
           });
         } else {
           await invoke('merge_books', {
             title: g.title.trim(),
             folderId,
-            members: g.members.map((m) => ({
+            members: staying.map((m) => ({
               shelfId: m.shelf_id,
               path: m.path || '',
               name: m.name || '',
@@ -167,7 +233,7 @@ export function openMergeDialog({ groups = [], folders = [], preview = false, on
       }
     });
     sepBtn.addEventListener('click', async () => {
-      if (preview) { removeCard(card, g); return; }
+      if (preview || !g.id) { removeCard(card, g); return; }
       sepBtn.disabled = true;
       try {
         await invoke('resolve_merge_pending', {
@@ -184,7 +250,7 @@ export function openMergeDialog({ groups = [], folders = [], preview = false, on
         sepBtn.disabled = false;
       }
     });
-    actions.append(sepBtn, mergeBtn);
+    actions.append(uncheckedBtn, sepBtn, mergeBtn);
     card.append(badge, title, cat, rows, actions);
     list.append(card);
   });

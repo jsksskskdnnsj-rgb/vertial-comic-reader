@@ -318,7 +318,8 @@ export function mountShell(active = '', opts = {}) {
   wireShellNavigation();
 }
 
-/** Corner pill while a folder scan is running, on every page. Click opens the scan page.
+/** Corner pill while a folder scan is running, on every page. A running scan opens the
+ *  scan page. An idle chip (groups waiting to confirm) opens the review dialog.
  *  The Rust scan keeps its own state, so moving between pages does not restart it. */
 function mountScanFloat() {
   if (document.getElementById('scanFloat')) return;
@@ -328,7 +329,22 @@ function mountScanFloat() {
   btn.className = 'scan-float';
   btn.hidden = true;
   btn.innerHTML = `<span class="spin" aria-hidden="true"></span><span id="scanFloatText"></span>`;
-  btn.addEventListener('click', () => { void shellNavigate('scan.html'); });
+  btn.addEventListener('click', async () => {
+    if (btn.classList.contains('is-idle')) {
+      const rows = await invoke('list_merge_pending').catch(() => []);
+      if (rows?.length) {
+        const { openMergeDialog } = await import('./merge-ui.js');
+        const folders = await invoke('folder_list').catch(() => []);
+        openMergeDialog({
+          groups: rows,
+          folders: folders || [],
+          onDone: () => { pendingCache = null; pendingAt = 0; },
+        });
+        return;
+      }
+    }
+    void shellNavigate('scan.html');
+  });
   document.body.append(btn);
   const text = btn.querySelector('#scanFloatText');
   const preview = new URLSearchParams(location.search).get('preview');

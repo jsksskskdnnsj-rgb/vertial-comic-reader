@@ -587,6 +587,8 @@ button:focus-visible,a.btn:focus-visible{outline:2px solid var(--accent-ink);out
 .merge-row__main{min-width:0;flex:1;display:flex;flex-direction:column;gap:2px}
 .merge-row__main b{font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .merge-row__move{display:flex;flex-direction:column;gap:2px;flex:0 0 auto}
+.merge-apart{flex:0 0 auto;white-space:nowrap}
+.merge-row .check{flex:0 0 auto;white-space:nowrap}
 .merge-banner{
   display:flex;align-items:center;width:100%;
   min-height:36px;margin:0 0 12px;padding:0 14px;

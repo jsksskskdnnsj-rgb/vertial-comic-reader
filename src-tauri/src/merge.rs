@@ -1918,6 +1918,71 @@ pub fn list_merge_pending() -> Result<Vec<PendingGroup>, String> {
     Ok(out)
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DetachOutcome {
+    pub closed: bool,
+    pub group: Option<PendingGroup>,
+}
+
+/// Pull some folders out of a review group. The others stay in that group.
+/// The comic files are not moved or deleted.
+pub(crate) fn detach_pending_conn(conn: &Connection, id: i64, paths: &[String]) -> Result<DetachOutcome, String> {
+    let payload: String = conn
+        .query_row(
+            "SELECT payload FROM merge_pending WHERE id=?1 AND resolved=0",
+            [id],
+            |r| r.get(0),
+        )
+        .map_err(|_| "没有这组待确认的合并".to_string())?;
+    let mut group: PendingGroup = serde_json::from_str(&payload).map_err(|e| e.to_string())?;
+    let drop_keys: HashSet<String> = paths.iter().map(|p| path_key(p)).filter(|k| !k.is_empty()).collect();
+    if drop_keys.is_empty() {
+        return Err("请选择要分开的书".into());
+    }
+    let mut stay = Vec::new();
+    let mut gone = Vec::new();
+    for member in std::mem::take(&mut group.members) {
+        if drop_keys.contains(&path_key(&member.path)) {
+            gone.push(member);
+        } else {
+            stay.push(member);
+        }
+    }
+    if gone.is_empty() {
+        return Err("没有这一本".into());
+    }
+    let all: Vec<String> = stay.iter().chain(gone.iter()).map(|m| m.path.clone()).collect();
+    let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
+    crate::merge_manual::push_undo(&tx, &all)?;
+    let stay_paths: Vec<String> = stay.iter().map(|m| m.path.clone()).collect();
+    let gone_paths: Vec<String> = gone.iter().map(|m| m.path.clone()).collect();
+    crate::merge_manual::apart_between_paths(&tx, &stay_paths, &gone_paths)?;
+    crate::merge_manual::apart_among(&tx, &gone_paths)?;
+    let closed = stay.len() < 2;
+    group.members = stay;
+    group.id = id;
+    if closed {
+        tx.execute("UPDATE merge_pending SET resolved=1 WHERE id=?1", [id])
+            .map_err(|e| e.to_string())?;
+    } else {
+        let body = serde_json::to_string(&group).map_err(|e| e.to_string())?;
+        tx.execute("UPDATE merge_pending SET payload=?1 WHERE id=?2", params![body, id])
+            .map_err(|e| e.to_string())?;
+    }
+    tx.commit().map_err(|e| e.to_string())?;
+    Ok(DetachOutcome {
+        closed,
+        group: if closed { None } else { Some(group) },
+    })
+}
+
+#[tauri::command]
+pub fn merge_detach(id: i64, paths: Vec<String>) -> Result<DetachOutcome, String> {
+    let conn = crate::db_conn()?;
+    detach_pending_conn(&conn, id, &paths)
+}
+
 #[tauri::command]
 pub fn resolve_merge_pending(
     id: i64,
@@ -2404,6 +2469,110 @@ mod tests {
         let n: i64 = conn.query_row("SELECT COUNT(*) FROM shelf", [], |r| r.get(0)).unwrap();
         assert_eq!(n, 1);
         assert_eq!(std::fs::read(&file_b).unwrap(), b"volume-b");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    fn seed_review(tag: &str) -> (Connection, std::path::PathBuf, Vec<String>, i64) {
+        let root = std::env::temp_dir().join(format!("mh-review-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let conn = Connection::open_in_memory().unwrap();
+        schema(&conn);
+        let names = ["海贼王 第1-50话", "海贼王 第51-100话", "海贼王 第101-150话"];
+        let mut paths = Vec::new();
+        let mut members = Vec::new();
+        for name in names {
+            let dir = root.join(name);
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(dir.join("001.jpg"), name.as_bytes()).unwrap();
+            let path = dir.to_string_lossy().into_owned();
+            let id = insert_folder_row(&conn, name, &[path.clone()], 10, 0, 0, None, 0).unwrap();
+            members.push(serde_json::json!({
+                "name": name,
+                "path": path,
+                "pages": 10,
+                "shelf_id": id
+            }));
+            paths.push(path);
+        }
+        let payload = serde_json::json!({
+            "suggested_title": "海贼王",
+            "confident": false,
+            "members": members
+        })
+        .to_string();
+        conn.execute(
+            "INSERT INTO merge_pending(created_at, resolved, payload) VALUES(1, 0, ?1)",
+            [payload],
+        )
+        .unwrap();
+        let id: i64 = conn.query_row("SELECT id FROM merge_pending", [], |r| r.get(0)).unwrap();
+        (conn, root, paths, id)
+    }
+
+    fn pending_members(conn: &Connection) -> Vec<String> {
+        let payload: String = conn
+            .query_row("SELECT payload FROM merge_pending WHERE resolved=0", [], |r| r.get(0))
+            .unwrap();
+        let group: PendingGroup = serde_json::from_str(&payload).unwrap();
+        group.members.into_iter().map(|m| m.path).collect()
+    }
+
+    #[test]
+    fn detaching_one_suspected_book_leaves_the_others_and_the_file() {
+        let (conn, root, paths, id) = seed_review("one");
+        let out = detach_pending_conn(&conn, id, &[paths[2].clone()]).unwrap();
+        assert!(!out.closed);
+        assert_eq!(out.group.unwrap().members.len(), 2);
+        let left = pending_members(&conn);
+        assert_eq!(left.len(), 2);
+        assert!(left.iter().all(|p| p != &paths[2]));
+        assert_eq!(std::fs::read(root.join("海贼王 第101-150话").join("001.jpg")).unwrap(), "海贼王 第101-150话".as_bytes());
+        let ids: Vec<i64> = {
+            let mut stmt = conn.prepare("SELECT id FROM shelf").unwrap();
+            stmt.query_map([], |r| r.get(0)).unwrap().map(|r| r.unwrap()).collect()
+        };
+        absorb_new(&conn, &ids).unwrap();
+        let n: i64 = conn.query_row("SELECT COUNT(*) FROM shelf", [], |r| r.get(0)).unwrap();
+        assert_eq!(n, 2, "the two that stayed may merge; the detached volume stays out");
+        let alone: String = conn
+            .query_row(
+                "SELECT paths FROM shelf WHERE paths LIKE '%101-150%'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!(!alone.contains("第1-50"));
+        assert_eq!(std::fs::read(root.join("海贼王 第1-50话").join("001.jpg")).unwrap(), "海贼王 第1-50话".as_bytes());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn detaching_several_suspected_books_survives_rescan_and_undo() {
+        let (conn, root, paths, id) = seed_review("many");
+        let out = detach_pending_conn(&conn, id, &[paths[0].clone(), paths[2].clone()]).unwrap();
+        assert!(out.closed, "one book left is no longer a group");
+        let open: i64 = conn
+            .query_row("SELECT COUNT(*) FROM merge_pending WHERE resolved=0", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(open, 0);
+        let ids: Vec<i64> = {
+            let mut stmt = conn.prepare("SELECT id FROM shelf").unwrap();
+            stmt.query_map([], |r| r.get(0)).unwrap().map(|r| r.unwrap()).collect()
+        };
+        absorb_new(&conn, &ids).unwrap();
+        let n: i64 = conn.query_row("SELECT COUNT(*) FROM shelf", [], |r| r.get(0)).unwrap();
+        assert_eq!(n, 3, "books split out of a suspicion must not be auto-merged again");
+        for path in &paths {
+            let jpg = std::path::Path::new(path).join("001.jpg");
+            assert!(jpg.is_file(), "{}", jpg.display());
+        }
+        crate::merge_manual::undo_last_conn(&conn).unwrap();
+        let n: i64 = conn.query_row("SELECT COUNT(*) FROM shelf", [], |r| r.get(0)).unwrap();
+        assert_eq!(n, 3);
+        let members = pending_members(&conn);
+        assert_eq!(members.len(), 3);
+        let apart: i64 = conn.query_row("SELECT COUNT(*) FROM merge_apart", [], |r| r.get(0)).unwrap();
+        assert_eq!(apart, 0, "undo drops the apart marks written by the split");
         let _ = std::fs::remove_dir_all(&root);
     }
 }
