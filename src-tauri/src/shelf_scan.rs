@@ -16,7 +16,7 @@ use std::collections::{HashMap, HashSet};
 use std::fs::{self, DirEntry};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, Once, OnceLock};
 
 use tauri::State;
 
@@ -35,7 +35,7 @@ pub struct ScanBook {
     pub already: bool,
 }
 
-#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ScanIssue {
     pub path: String,
     pub reason: String,
@@ -46,6 +46,8 @@ pub struct ScanSnapshot {
     pub phase: String,
     pub root: String,
     pub folders_scanned: u64,
+    /// Books whose directory mtimes still match the last walk, so this run did not list their files again.
+    pub reused_books: u64,
     pub books_found: u64,
     pub loose_pages: u64,
     pub files_seen: u64,
@@ -71,6 +73,7 @@ impl ScanSnapshot {
             phase: "running".into(),
             root: root.to_string_lossy().to_string(),
             folders_scanned: 0,
+            reused_books: 0,
             books_found: 0,
             loose_pages: 0,
             files_seen: 0,
@@ -373,6 +376,7 @@ fn rel_join(parent: &str, name: &str) -> String {
 const ISSUE_CAP: usize = 100;
 const ISSUE_DB_CAP: i64 = 2000;
 
+#[derive(Clone)]
 struct Tally {
     pages: u64,
     dirs: HashMap<String, u64>,
@@ -426,7 +430,11 @@ pub(crate) fn ensure_scan_tables(conn: &Connection) -> Result<(), String> {
             reason TEXT NOT NULL,
             created_at INTEGER NOT NULL
         );
-        CREATE INDEX IF NOT EXISTS idx_scan_issues_root ON scan_issues(root_key);",
+        CREATE INDEX IF NOT EXISTS idx_scan_issues_root ON scan_issues(root_key);
+        CREATE TABLE IF NOT EXISTS scan_book_memo (
+            path_key TEXT PRIMARY KEY,
+            body TEXT NOT NULL
+        );",
     )
     .map_err(|e| e.to_string())
 }
@@ -615,6 +623,12 @@ fn read_entries(dir: &Path, snap: &mut ScanSnapshot, pending: &mut Vec<ScanIssue
 }
 
 /// Count images under `dir` without keeping their paths. `Err(())` means cancelled.
+fn dir_mtime_ns(path: &Path) -> Option<u64> {
+    let modified = path.metadata().ok()?.modified().ok()?;
+    let ns = modified.duration_since(std::time::UNIX_EPOCH).ok()?.as_nanos();
+    u64::try_from(ns).ok()
+}
+
 fn tally_dir(
     dir: &Path,
     rel: &str,
@@ -622,6 +636,7 @@ fn tally_dir(
     snap: &mut ScanSnapshot,
     pending: &mut Vec<ScanIssue>,
     hook: &mut dyn FnMut(&ScanSnapshot),
+    dir_mtimes: &mut HashMap<String, u64>,
 ) -> Result<Tally, ()> {
     if cancel.load(Ordering::Relaxed) {
         return Err(());
@@ -633,6 +648,9 @@ fn tally_dir(
         Ok(v) => v,
         Err(()) => return Ok(Tally { pages: 0, dirs: HashMap::new() }),
     };
+    if let Some(ns) = dir_mtime_ns(dir) {
+        dir_mtimes.insert(rel.to_string(), ns);
+    }
     let mut tally = Tally { pages: 0, dirs: HashMap::new() };
     let mut subs = Vec::new();
     for e in entries {
@@ -673,7 +691,7 @@ fn tally_dir(
         if cancel.load(Ordering::Relaxed) {
             return Err(());
         }
-        let sub = tally_dir(&path, &child_rel, cancel, snap, pending, hook)?;
+        let sub = tally_dir(&path, &child_rel, cancel, snap, pending, hook, dir_mtimes)?;
         tally.pages += sub.pages;
         for (k, v) in sub.dirs {
             *tally.dirs.entry(k).or_insert(0) += v;
@@ -702,6 +720,253 @@ fn book_from_tally(title: &str, path: &str, tally: Tally) -> Option<ScanBook> {
         chapters,
         already: false,
     })
+}
+
+struct Isolated {
+    tally: Tally,
+    files_seen: u64,
+    folders_scanned: u64,
+    issues: Vec<ScanIssue>,
+    issue_count: u64,
+    dir_mtimes: HashMap<String, u64>,
+    from_memo: bool,
+}
+
+enum ChildOut {
+    Missing,
+    Cancelled,
+    Done(Isolated),
+}
+
+fn tally_book(path: &Path, cancel: &AtomicBool) -> Result<Isolated, ()> {
+    let mut local = ScanSnapshot::running(path);
+    let mut pending = Vec::new();
+    let mut dir_mtimes = HashMap::new();
+    let tally = tally_dir(path, "", cancel, &mut local, &mut pending, &mut |_| {}, &mut dir_mtimes)?;
+    Ok(Isolated {
+        tally,
+        files_seen: local.files_seen,
+        folders_scanned: local.folders_scanned,
+        issues: local.issues,
+        issue_count: local.issue_count,
+        dir_mtimes,
+        from_memo: false,
+    })
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+struct MemoBlob {
+    dir_mtimes: Vec<(String, String)>,
+    pages: u64,
+    chapter_dirs: Vec<(String, u64)>,
+    files_seen: u64,
+    folders_scanned: u64,
+    issues: Vec<ScanIssue>,
+    issue_count: u64,
+}
+
+struct BookMemo {
+    dir_mtimes: HashMap<String, u64>,
+    tally: Tally,
+    files_seen: u64,
+    folders_scanned: u64,
+    issues: Vec<ScanIssue>,
+    issue_count: u64,
+}
+
+fn book_memos() -> &'static Mutex<HashMap<String, BookMemo>> {
+    static MEMOS: OnceLock<Mutex<HashMap<String, BookMemo>>> = OnceLock::new();
+    MEMOS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn memo_from_blob(blob: MemoBlob) -> BookMemo {
+    let mut dir_mtimes = HashMap::new();
+    for (rel, ns) in blob.dir_mtimes {
+        if let Ok(n) = ns.parse::<u64>() {
+            dir_mtimes.insert(rel, n);
+        }
+    }
+    BookMemo {
+        dir_mtimes,
+        tally: Tally {
+            pages: blob.pages,
+            dirs: blob.chapter_dirs.into_iter().collect(),
+        },
+        files_seen: blob.files_seen,
+        folders_scanned: blob.folders_scanned,
+        issues: blob.issues,
+        issue_count: blob.issue_count,
+    }
+}
+
+fn blob_from_memo(memo: &BookMemo) -> MemoBlob {
+    MemoBlob {
+        dir_mtimes: memo.dir_mtimes.iter().map(|(k, v)| (k.clone(), v.to_string())).collect(),
+        pages: memo.tally.pages,
+        chapter_dirs: memo.tally.dirs.iter().map(|(k, v)| (k.clone(), *v)).collect(),
+        files_seen: memo.files_seen,
+        folders_scanned: memo.folders_scanned,
+        issues: memo.issues.clone(),
+        issue_count: memo.issue_count,
+    }
+}
+
+fn load_persisted_memos() {
+    static ONCE: Once = Once::new();
+    ONCE.call_once(|| {
+        if cfg!(test) {
+            return;
+        }
+        let Ok(conn) = crate::db_conn() else { return };
+        if ensure_scan_tables(&conn).is_err() {
+            return;
+        }
+        let Ok(mut stmt) = conn.prepare("SELECT path_key, body FROM scan_book_memo") else { return };
+        let Ok(rows) = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))) else { return };
+        let mut guard = book_memos().lock().unwrap_or_else(|e| e.into_inner());
+        for row in rows.flatten() {
+            if guard.contains_key(&row.0) {
+                continue;
+            }
+            if let Ok(blob) = serde_json::from_str::<MemoBlob>(&row.1) {
+                guard.insert(row.0, memo_from_blob(blob));
+            }
+        }
+    });
+}
+
+fn persist_memo(key: &str, memo: &BookMemo) {
+    if cfg!(test) {
+        return;
+    }
+    let Ok(body) = serde_json::to_string(&blob_from_memo(memo)) else { return };
+    let Ok(conn) = crate::db_conn() else { return };
+    if ensure_scan_tables(&conn).is_err() {
+        return;
+    }
+    let _ = conn.execute(
+        "INSERT INTO scan_book_memo (path_key, body) VALUES (?1,?2)
+         ON CONFLICT(path_key) DO UPDATE SET body=excluded.body",
+        params![key, body],
+    );
+}
+
+fn memo_fresh(root: &Path, memo: &BookMemo) -> bool {
+    // Directory mtime changes when a child is added, removed, or renamed.
+    // Replacing the bytes of an existing page does not change how many pages
+    // the shelf counts, so that case keeps the cached tally.
+    if memo.dir_mtimes.is_empty() || !memo.dir_mtimes.contains_key("") {
+        return false;
+    }
+    for (rel, stamp) in &memo.dir_mtimes {
+        let path = if rel.is_empty() { root.to_path_buf() } else { root.join(rel) };
+        match dir_mtime_ns(&path) {
+            Some(ns) if ns == *stamp => {}
+            _ => return false,
+        }
+    }
+    true
+}
+
+fn isolated_from_memo(memo: &BookMemo) -> Isolated {
+    Isolated {
+        tally: memo.tally.clone(),
+        files_seen: memo.files_seen,
+        folders_scanned: memo.folders_scanned,
+        issues: memo.issues.clone(),
+        issue_count: memo.issue_count,
+        dir_mtimes: memo.dir_mtimes.clone(),
+        from_memo: true,
+    }
+}
+
+fn memo_hit(path: &Path) -> Option<Isolated> {
+    load_persisted_memos();
+    let key = path_key(&path.to_string_lossy());
+    let memo = {
+        let guard = book_memos().lock().unwrap_or_else(|e| e.into_inner());
+        guard.get(&key).map(|memo| BookMemo {
+            dir_mtimes: memo.dir_mtimes.clone(),
+            tally: memo.tally.clone(),
+            files_seen: memo.files_seen,
+            folders_scanned: memo.folders_scanned,
+            issues: memo.issues.clone(),
+            issue_count: memo.issue_count,
+        })
+    }?;
+    memo_fresh(path, &memo).then(|| isolated_from_memo(&memo))
+}
+
+fn memo_store(path: &Path, iso: &Isolated) {
+    if iso.from_memo || iso.dir_mtimes.is_empty() || !iso.dir_mtimes.contains_key("") {
+        return;
+    }
+    let key = path_key(&path.to_string_lossy());
+    let memo = BookMemo {
+        dir_mtimes: iso.dir_mtimes.clone(),
+        tally: iso.tally.clone(),
+        files_seen: iso.files_seen,
+        folders_scanned: iso.folders_scanned,
+        issues: iso.issues.clone(),
+        issue_count: iso.issue_count,
+    };
+    persist_memo(&key, &memo);
+    let mut guard = book_memos().lock().unwrap_or_else(|e| e.into_inner());
+    guard.insert(key, memo);
+}
+
+fn tally_child(path: &Path, cancel: &AtomicBool) -> ChildOut {
+    if cancel.load(Ordering::Relaxed) {
+        return ChildOut::Cancelled;
+    }
+    if !path.is_dir() {
+        return ChildOut::Missing;
+    }
+    if let Some(hit) = memo_hit(path) {
+        return ChildOut::Done(hit);
+    }
+    match tally_book(path, cancel) {
+        Ok(v) => {
+            memo_store(path, &v);
+            ChildOut::Done(v)
+        }
+        Err(()) => ChildOut::Cancelled,
+    }
+}
+
+/// Read several book folders at once. Result order matches `children`.
+fn tally_children(children: &[(String, PathBuf)], cancel: &AtomicBool) -> Vec<ChildOut> {
+    if children.len() <= 1 {
+        return children
+            .iter()
+            .map(|(_, path)| tally_child(path, cancel))
+            .collect();
+    }
+    std::thread::scope(|scope| {
+        let mut handles = Vec::with_capacity(children.len());
+        for (_, path) in children {
+            let path = path.clone();
+            handles.push(scope.spawn(move || tally_child(&path, cancel)));
+        }
+        handles
+            .into_iter()
+            .map(|h| h.join().unwrap_or(ChildOut::Cancelled))
+            .collect()
+    })
+}
+
+fn merge_isolated(snap: &mut ScanSnapshot, pending: &mut Vec<ScanIssue>, iso: Isolated) {
+    snap.files_seen += iso.files_seen;
+    snap.folders_scanned += iso.folders_scanned;
+    snap.issue_count += iso.issue_count;
+    for issue in iso.issues {
+        pending.push(issue.clone());
+        snap.issues.push(issue);
+    }
+    if snap.issues.len() > ISSUE_CAP {
+        let extra = snap.issues.len() - ISSUE_CAP;
+        snap.issues.drain(0..extra);
+    }
 }
 
 fn emit(snap: &ScanSnapshot, pending: &mut Vec<ScanIssue>, on_flush: &mut dyn FnMut(&Flush), phase: &str, next_index: usize, child_names: Option<Vec<String>>, new_book: Option<ScanBook>) {
@@ -802,49 +1067,64 @@ fn scan_walk(
     let children: Vec<(String, PathBuf)> = child_names.iter().cloned().zip(child_names.iter().map(|n| root.join(n))).collect();
     let _ = resumed;
 
-    for (i, (name, path)) in children.iter().enumerate().skip(next_index) {
+    let parallel = children.len() >= 48;
+    while next_index < children.len() {
         if cancel.load(Ordering::Relaxed) {
             snap.phase = "cancelled".into();
             emit(&snap, &mut pending, on_flush, "cancelled", next_index, None, None);
             hook(&snap);
             return snap;
         }
-        if !path.is_dir() {
-            note(&mut snap, &mut pending, path.to_string_lossy().to_string(), "missing".into());
-            next_index = i + 1;
-            emit(&snap, &mut pending, on_flush, "running", next_index, None, None);
-            continue;
-        }
-        let start_folders = snap.folders_scanned;
-        let start_files = snap.files_seen;
-        let start_issues = snap.issue_count;
-        let start_issue_list = snap.issues.clone();
-        let tally = match tally_dir(path, "", cancel, &mut snap, &mut pending, hook) {
-            Ok(t) => t,
-            Err(()) => {
-                // This child did not finish. Drop its partial counts so the next scan repeats it once.
-                snap.folders_scanned = start_folders;
-                snap.files_seen = start_files;
-                snap.issue_count = start_issues;
-                snap.issues = start_issue_list;
-                pending.clear();
+        let remaining = children.len() - next_index;
+        let batch = if parallel {
+            crate::scan::io_workers(remaining).min(remaining)
+        } else {
+            1
+        };
+        let end = next_index + batch;
+        let slice = children[next_index..end].to_vec();
+        let computed = tally_children(&slice, cancel);
+        for (offset, out) in computed.into_iter().enumerate() {
+            if offset > 0 && cancel.load(Ordering::Relaxed) {
                 snap.phase = "cancelled".into();
                 emit(&snap, &mut pending, on_flush, "cancelled", next_index, None, None);
                 hook(&snap);
                 return snap;
             }
-        };
-        let abs = path.to_string_lossy().to_string();
-        let mut new_book = None;
-        if let Some(mut book) = book_from_tally(name, &abs, tally) {
-            book.already = existing.contains(&path_key(&abs));
-            snap.books.push(book.clone());
-            snap.books_found = snap.books.len() as u64;
-            new_book = Some(book);
+            let (name, path) = &slice[offset];
+            match out {
+                ChildOut::Cancelled => {
+                    snap.phase = "cancelled".into();
+                    emit(&snap, &mut pending, on_flush, "cancelled", next_index, None, None);
+                    hook(&snap);
+                    return snap;
+                }
+                ChildOut::Missing => {
+                    note(&mut snap, &mut pending, path.to_string_lossy().to_string(), "missing".into());
+                    next_index += 1;
+                    emit(&snap, &mut pending, on_flush, "running", next_index, None, None);
+                }
+                ChildOut::Done(iso) => {
+                    if iso.from_memo {
+                        snap.reused_books += 1;
+                    }
+                    let tally = iso.tally.clone();
+                    merge_isolated(&mut snap, &mut pending, iso);
+                    let abs = path.to_string_lossy().to_string();
+                    snap.current_path = abs.clone();
+                    let mut new_book = None;
+                    if let Some(mut book) = book_from_tally(name, &abs, tally) {
+                        book.already = existing.contains(&path_key(&abs));
+                        snap.books.push(book.clone());
+                        snap.books_found = snap.books.len() as u64;
+                        new_book = Some(book);
+                    }
+                    next_index += 1;
+                    emit(&snap, &mut pending, on_flush, "running", next_index, None, new_book);
+                    hook(&snap);
+                }
+            }
         }
-        next_index = i + 1;
-        emit(&snap, &mut pending, on_flush, "running", next_index, None, new_book);
-        hook(&snap);
     }
     snap.phase = "done".into();
     snap.current_path.clear();
@@ -889,6 +1169,7 @@ fn blank_snapshot() -> ScanSnapshot {
         phase: "idle".into(),
         root: String::new(),
         folders_scanned: 0,
+        reused_books: 0,
         books_found: 0,
         loose_pages: 0,
         files_seen: 0,
@@ -910,6 +1191,7 @@ fn publish(slot: &Mutex<ScanSnapshot>, next: &ScanSnapshot) {
     slot.phase = next.phase.clone();
     slot.root = next.root.clone();
     slot.folders_scanned = next.folders_scanned;
+    slot.reused_books = next.reused_books;
     slot.books_found = next.books_found;
     slot.loose_pages = next.loose_pages;
     slot.files_seen = next.files_seen;
@@ -1332,5 +1614,73 @@ mod tests {
         assert!(snap.books.len() >= n as usize, "books {}", snap.books.len());
         assert!(snap.issue_count >= 1, "expected the empty file to be recorded");
         assert_eq!(page, 48);
+    }
+
+    fn bench_note(line: &str) {
+        eprintln!("{line}");
+        let path = std::env::temp_dir().join("mh-bench.txt");
+        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
+            use std::io::Write;
+            let _ = writeln!(f, "{line}");
+        }
+    }
+
+    #[test]
+    fn second_scan_reuses_unchanged_books() {
+        let root = scratch("memo");
+        for i in 0..4 {
+            let dir = root.join(format!("book-{i}"));
+            touch(&dir.join("a.jpg"));
+            touch(&dir.join("ch").join("b.jpg"));
+        }
+        let cancel = AtomicBool::new(false);
+        let cold = scan_tree(&root, &cancel, &HashSet::new(), &mut |_| {});
+        assert_eq!(cold.reused_books, 0);
+        assert_eq!(cold.books.len(), 4);
+        let warm = scan_tree(&root, &cancel, &HashSet::new(), &mut |_| {});
+        assert_eq!(warm.reused_books, 4, "unchanged trees are not listed again");
+        assert_eq!(warm.files_seen, cold.files_seen);
+        assert_eq!(
+            warm.books.iter().map(|b| b.pages).sum::<u64>(),
+            cold.books.iter().map(|b| b.pages).sum::<u64>()
+        );
+        // Directory mtime on tmpfs moves in ~4ms steps. The two scans above can
+        // finish inside that step, so pause before adding a page or the parent
+        // stamp can stay unchanged and the memo looks fresh.
+        std::thread::sleep(std::time::Duration::from_millis(30));
+        std::fs::write(root.join("book-0").join("ch").join("c.jpg"), b"x").unwrap();
+        let changed = scan_tree(&root, &cancel, &HashSet::new(), &mut |_| {});
+        assert_eq!(changed.reused_books, 3);
+        let pages = changed.books.iter().find(|b| b.title == "book-0").unwrap().pages;
+        assert_eq!(pages, 3);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn shelf_five_hundred_warm_scan_skips_files() {
+        let root = scratch("bench500");
+        for i in 0..500 {
+            let dir = root.join(format!("book-{i:04}"));
+            touch(&dir.join("a.jpg"));
+            touch(&dir.join("b.jpg"));
+            touch(&dir.join("c.jpg"));
+        }
+        let cancel = AtomicBool::new(false);
+        let t0 = std::time::Instant::now();
+        let cold = scan_tree(&root, &cancel, &HashSet::new(), &mut |_| {});
+        let cold_ms = t0.elapsed().as_millis();
+        let t1 = std::time::Instant::now();
+        let warm = scan_tree(&root, &cancel, &HashSet::new(), &mut |_| {});
+        let warm_ms = t1.elapsed().as_millis();
+        let _ = std::fs::remove_dir_all(&root);
+        assert_eq!(cold.books.len(), 500);
+        assert_eq!(cold.books.iter().map(|b| b.pages).sum::<u64>(), 1500);
+        assert_eq!(warm.books.len(), 500);
+        assert_eq!(warm.reused_books, 500);
+        assert_eq!(warm.files_seen, cold.files_seen);
+        bench_note(&format!(
+            "BENCH shelf500 cold_ms={cold_ms} warm_ms={warm_ms} cold_files={} warm_reused={}",
+            cold.files_seen, warm.reused_books
+        ));
     }
 }

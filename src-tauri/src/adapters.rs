@@ -168,9 +168,15 @@ fn shelf_exists(conn: &Connection, kind: &str, paths_json: &str) -> bool {
 fn trigger_cover(book_id: i64) {
     // Same code path as ensure_cover; failures are ignored (cover can be
     // generated lazily later via the mhcover 404 -> ensure_cover flow).
-    if let Ok(dir) = crate::data_dir() {
-        let _ = crate::cover_protocol::generate_cover(&dir.join("covers"), book_id);
+    // Tests stay synchronous so a following assertion can see the file.
+    // The app queues the decode so import_paths returns without waiting on Lanczos.
+    if cfg!(test) {
+        if let Ok(dir) = crate::data_dir() {
+            let _ = crate::cover_protocol::generate_cover(&dir.join("covers"), book_id);
+        }
+        return;
     }
+    crate::cover_protocol::queue_cover(book_id);
 }
 
 fn import_zip(

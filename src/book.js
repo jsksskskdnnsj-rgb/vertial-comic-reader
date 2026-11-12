@@ -29,6 +29,8 @@ async function load() {
     return;
   }
   $('notFound').hidden = true; $('hero').hidden = false; $('details').hidden = false;
+  const desk = $('metaDeskBtn');
+  if (desk) desk.href = `meta.html?book=${book.id}`;
   const [folders, eps, counts, miss, info] = await Promise.all([
     lib.folders().catch(() => []),
     fetchEpisodeInfo(invoke, [{ id: book.id, page: book.last_page ?? 0 }]).catch(() => []),

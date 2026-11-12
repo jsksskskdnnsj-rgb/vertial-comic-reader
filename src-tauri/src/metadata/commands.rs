@@ -702,3 +702,71 @@ pub async fn metadata_refresh(book_id: i64) -> Result<RefreshOutcome, String> {
         message: None,
     })
 }
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MetaCacheRow {
+    pub provider: String,
+    /// fresh | stale | miss | off
+    pub search: String,
+    /// fresh | stale | miss | off | na
+    pub detail: String,
+}
+
+fn cache_label(stamp: Option<store::CacheStamp>, now: i64) -> String {
+    match stamp {
+        Some(s) if s.expires_at >= now => "fresh".into(),
+        Some(s) if s.fetched_at >= now.saturating_sub(30 * 24 * 3600) => "stale".into(),
+        _ => "miss".into(),
+    }
+}
+
+#[tauri::command]
+pub fn metadata_shelf_index() -> Result<Vec<store::MetaShelfRow>, String> {
+    store::list_shelf_meta()
+}
+
+/// Cache rows for one shelf book. `query` defaults to the shelf title (limit 12, same as search).
+#[tauri::command]
+pub fn metadata_cache_status(book_id: i64, query: Option<String>) -> Result<Vec<MetaCacheRow>, String> {
+    require_shelf_book(book_id)?;
+    let title = store::book_title(book_id)?;
+    let query = query.unwrap_or_default();
+    let query = if query.trim().is_empty() { title } else { query.trim().to_string() };
+    let bound = store::get_bound(book_id)?;
+    let cfg = config::load();
+    let now = crate::now_secs();
+    let providers = [
+        Provider::Bangumi,
+        Provider::Moegirl,
+        Provider::Mangadex,
+        Provider::Jikan,
+        Provider::Mangaupdates,
+        Provider::Anilist,
+        Provider::Comic18,
+    ];
+    let mut out = Vec::new();
+    for provider in providers {
+        if !cfg.enabled(provider) {
+            out.push(MetaCacheRow {
+                provider: provider.as_str().into(),
+                search: "off".into(),
+                detail: "off".into(),
+            });
+            continue;
+        }
+        let search = cache_label(store::cache_stamp(&search_cache_key(provider, &query, 12)), now);
+        let detail = match bound.as_ref() {
+            Some(b) if b.provider == provider => {
+                cache_label(store::cache_stamp(&detail_cache_key(provider, &b.external_id)), now)
+            }
+            _ => "na".into(),
+        };
+        out.push(MetaCacheRow {
+            provider: provider.as_str().into(),
+            search,
+            detail,
+        });
+    }
+    Ok(out)
+}

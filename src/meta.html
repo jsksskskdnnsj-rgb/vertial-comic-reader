@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title data-i="app.name"></title>
+<link rel="stylesheet" href="mh-ui.css">
+</head>
+<body>
+<div class="app">
+  <header id="shell-top"></header>
+  <div class="work shell-frame">
+    <nav id="shell-rail"></nav>
+    <main class="page-main">
+      <div class="page-head"><h1 data-i="meta.deskTitle"></h1></div>
+      <p class="lede" data-i="meta.deskHelp"></p>
+
+      <section class="panel glass">
+        <h2><svg class="i"><use href="icons.svg#globe"/></svg><span data-i="meta.sourcesHere"></span></h2>
+        <div class="meta-src" id="metaSources"></div>
+      </section>
+
+      <div class="meta-desk">
+        <section class="panel glass">
+          <h2><svg class="i"><use href="icons.svg#search"/></svg><span data-i="meta.shelfFilter"></span></h2>
+          <div class="meta-tools">
+            <select class="select" id="metaStatus">
+              <option value="all" data-i="meta.filterAll"></option>
+              <option value="bound" data-i="meta.filterBound"></option>
+              <option value="unbound" data-i="meta.filterUnbound"></option>
+              <option value="locked" data-i="meta.filterLocked"></option>
+              <option value="pending" data-i="meta.filterPending"></option>
+            </select>
+            <select class="select" id="metaKind">
+              <option value="all" data-i="meta.kindAll"></option>
+              <option value="folder" data-i="type.folder"></option>
+              <option value="zip" data-i="type.zip"></option>
+              <option value="images" data-i="type.images"></option>
+            </select>
+          </div>
+          <div class="meta-tools">
+            <button class="btn btn--ghost btn--sm" id="metaSelectAll" type="button"><span data-i="meta.selectAll"></span></button>
+            <button class="btn btn--ghost btn--sm" id="metaSelectNone" type="button"><span data-i="meta.selectNone"></span></button>
+            <span class="muted" id="metaSelected"></span>
+          </div>
+          <div class="meta-tools">
+            <button class="btn btn--ghost btn--sm" id="metaBatchSearch" type="button"><span data-i="meta.batchSearch"></span></button>
+            <button class="btn btn--ghost btn--sm" id="metaBatchAuto" type="button"><span data-i="meta.batchAuto"></span></button>
+            <button class="btn btn--ghost btn--sm" id="metaBatchRefresh" type="button"><span data-i="meta.batchRefresh"></span></button>
+          </div>
+          <div class="meta-books" id="metaBooks"></div>
+        </section>
+
+        <div>
+          <section class="panel glass" id="metaDetail">
+            <h2 id="metaBookTitle" data-i="meta.noBook"></h2>
+            <p class="hint muted" id="metaEmpty" data-i="meta.noBook"></p>
+            <div id="metaWork" hidden>
+              <label class="meta-query"><span data-i="meta.queryLabel"></span>
+                <input class="field" id="metaQuery" type="text" autocomplete="off">
+              </label>
+              <div class="meta-tools">
+                <button class="btn btn--primary btn--sm" id="metaSearchOne" type="button"><span data-i="meta.search"></span></button>
+                <button class="btn btn--ghost btn--sm" id="metaRefreshOne" type="button"><span data-i="meta.refresh"></span></button>
+                <button class="btn btn--ghost btn--sm" id="metaEditOne" type="button"><span data-i="meta.handEdit"></span></button>
+                <a class="btn btn--ghost btn--sm" id="metaOpenBook" href="book.html"><span data-i="nav.book"></span></a>
+              </div>
+              <label class="check"><input type="checkbox" id="metaImportTags"> <span data-i="meta.importTags"></span></label>
+              <label class="check"><input type="checkbox" id="metaUseCover"> <span data-i="meta.useRemoteCover"></span></label>
+              <h3 data-i="meta.cache"></h3>
+              <div class="meta-src" id="metaCache"></div>
+              <h3 data-i="meta.compare"></h3>
+              <p class="hint muted" id="metaCompareHint" data-i="meta.pickCandidate"></p>
+              <div class="meta-cands" id="metaCands"></div>
+              <div id="metaTable"></div>
+              <div class="meta-tools">
+                <button class="btn btn--primary btn--sm" id="metaApply" type="button" hidden><span data-i="meta.apply"></span></button>
+              </div>
+            </div>
+          </section>
+
+          <section class="panel glass meta-queue">
+            <h2><span data-i="meta.queue"></span><span class="spacer"></span>
+              <button class="btn btn--ghost btn--sm" id="metaCancelWait" type="button"><span data-i="meta.queueCancelAll"></span></button>
+            </h2>
+            <div class="meta-queue-list" id="metaQueue"></div>
+            <p class="hint muted" id="metaQueueEmpty" data-i="meta.queueEmpty"></p>
+          </section>
+        </div>
+      </div>
+    </main>
+  </div>
+</div>
+<script type="module" src="meta.js"></script>
+</body>
+</html>

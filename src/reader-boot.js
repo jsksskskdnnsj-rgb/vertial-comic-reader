@@ -139,7 +139,9 @@ function wireTrack() {
   tr.addEventListener('pointermove', (e) => { const r = tr.getBoundingClientRect(); tr.style.setProperty('--tx', Math.min(Math.max(e.clientX - r.left, 64), r.width - 64) + 'px'); });
 }
 function resetTrack() { const old = $('track'), fresh = old.cloneNode(true); fresh.classList.remove('is-drag'); old.replaceWith(fresh); wireTrack(); trackObserver.disconnect(); trackObserver.observe(fresh); }
-addEventListener('pointerup', () => $('track').classList.remove('is-drag'));
+const readerBootFresh = document.documentElement.dataset.readerBoot !== '1';
+if (readerBootFresh) document.documentElement.dataset.readerBoot = '1';
+if (readerBootFresh) addEventListener('pointerup', () => $('track').classList.remove('is-drag'));
 const trackObserver = new ResizeObserver(() => renderChapterUi());
 
 // ---- opening / switching views ----------------------------------------------------------------------------
@@ -175,7 +177,14 @@ async function startView({ startPos = null } = {}) {
     view.setCrop?.(cropOpts());
     view.setRtl?.(rp.rtl);
     applyReaderFit(rp.fitMode, view);
-  } catch (e) { book = null; view = null; showOpening(false); return openFailed(e); }
+  } catch (e) {
+    const dying = view;
+    view = null;
+    book = null;
+    showOpening(false);
+    await dying?.close?.().catch(() => {});
+    return openFailed(e);
+  }
   book = view.info; endDismissed = false; endArmAt = performance.now() + 1500;
   chMode = book.chapterMode; chN = sanePages(book.chapterPages); $('chrem').checked = !!book.chapterOverridden;
   $('bpCover').src = coverUrl(bookId); $('bbThumb').src = coverUrl(bookId);
@@ -275,7 +284,7 @@ function toggleFly(id) {
 $('tbSettings').addEventListener('click', () => toggleFly('flySettings'));
 $('tbAuto').addEventListener('click', () => toggleFly('flyAuto'));
 let chromeSuppressClick = false;
-addEventListener('pointerdown', (e) => {
+if (readerBootFresh) addEventListener('pointerdown', (e) => {
   const open = !$('flySettings').hidden || !$('flyAuto').hidden;
   const inside = !!e.target.closest('.flyout, #tb');
   if (!inside) closeFlies(null);
@@ -481,7 +490,7 @@ function setHelp(open) {
 $('helpBtn').addEventListener('click', () => setHelp(!helpOpen()));
 $('helpClose').addEventListener('click', () => setHelp(false));
 $('helpOverlay').addEventListener('click', (e) => { if (e.target === $('helpOverlay')) setHelp(false); });
-addEventListener('keydown', (e) => {
+if (readerBootFresh) addEventListener('keydown', (e) => {
   if (isModalOpen() || e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
   const k = e.key.toLowerCase();
   if (k === 'escape') {
@@ -501,7 +510,7 @@ addEventListener('keydown', (e) => {
   else if (k === 'g') $('pgCount').click(); else if (k === 'f' || k === 'f11') toggleFs(); else if (k === '[') goEpisode(prevTarget(chs, view.topPos())); else if (k === ']') goEpisode(nextTarget(chs, view.topPos())); else return;
   e.preventDefault();
 });
-win.onCloseRequested(async (e) => {
+if (readerBootFresh) win.onCloseRequested(async (e) => {
   e.preventDefault(); auto.stop();
   // close-to-tray: hide the window and keep the book open (progress is flushed when the page becomes hidden); otherwise quit as before
   if (await invoke('win_hide_if_tray').catch(() => false)) return;

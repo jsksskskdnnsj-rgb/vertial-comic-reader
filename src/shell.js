@@ -6,6 +6,7 @@
 // setLang helpers added. Existing exports are unchanged.
 import zh from './zh-CN.js';
 import en from './en.js';
+import { beginPage } from './page-life.js';
 
 export const T = window.__TAURI__ || {};
 export const invoke = (cmd, args = {}) => {
@@ -77,7 +78,7 @@ export function applyI18n(root = document) {
   document.documentElement.lang = lang() === 'en' ? 'en' : 'zh-CN';
   if (root === document) document.title = t('app.name');
 }
-export function bootPage(section) { applyI18n(); }
+export function bootPage(section) { beginPage(); applyI18n(); }
 
 export const isModalOpen = () => !!document.querySelector('.modal-backdrop');
 export function openModal({ title = '', body = null, wide = false, onClose = null } = {}) {

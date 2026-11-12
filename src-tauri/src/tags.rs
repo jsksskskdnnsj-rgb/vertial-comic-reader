@@ -30,11 +30,10 @@ pub fn migrate(conn: &rusqlite::Connection) -> Result<(), String> {
         )
         .unwrap_or(0);
     if has == 0 {
-        conn.execute(
+        crate::appdata::add_column(
+            conn,
             "ALTER TABLE shelf ADD COLUMN favorite INTEGER NOT NULL DEFAULT 0",
-            [],
-        )
-        .map_err(|e| e.to_string())?;
+        )?;
     }
     Ok(())
 }

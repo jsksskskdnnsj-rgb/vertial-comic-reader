@@ -12,6 +12,7 @@
 // filter, status filter and view mode are remembered next to the sort (prefs libFolder / libStatus / libMode / libSort); ?status=
 // overrides the saved status like ?sort= does. Filtering and status rules live in library-filters.js (pure, unit-tested).
 import { invoke, t, esc, toast, bootPage, prefs, confirmDialog, promptDialog, ago } from './shell.js';
+import { onPage } from './page-life.js';
 import { lib } from './api.js';
 import { mountShell, coverUrl, wireCoverFallback } from './shell-ui.js';
 import { fetchEpisodeInfo } from './chapters.js';
@@ -214,11 +215,11 @@ function showMenu(x, y, items) {
   document.body.append(menuEl);
   menuEl.querySelector('button')?.focus();
 }
-document.addEventListener('pointerdown', (e) => {
+onPage(document, 'pointerdown', (e) => {
   menuWasOpen = !!menuEl;
   if (menuEl && !menuEl.contains(e.target) && !e.target.closest('[data-more]')) closeMenu();
-}, true);
-document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeMenu(); });
+}, { capture: true });
+onPage(document, 'keydown', (e) => { if (e.key === 'Escape') closeMenu(); });
 
 const reload = async (ok, id, bumpCover) => { if (ok) { if (bumpCover) bust.set(id, Date.now()); await load(); } };
 
@@ -235,6 +236,7 @@ function bookMenu(btn, b) {
     } },
     { a: 'details', label: t('lib.details'), fn: () => (location.href = `book.html?book=${b.id}`) },
     { a: 'meta', label: t('meta.matchMenu'), fn: async () => act.matchMetadata(b, { onBound: () => load() }) },
+    { a: 'metadesk', label: t('meta.deskLink'), fn: () => { location.href = `meta.html?book=${b.id}`; } },
     { a: 'metaopen', label: t('meta.openInBrowser'), fn: () => act.openMetadataPage(b) },
     { a: 'rename', label: t('lib.rename'), fn: async () => reload(await act.renameBook(b)) },
     { a: 'move', label: t('lib.moveTo'), fn: () => moveMenu(b, r.left, r.bottom + 5) },
@@ -295,7 +297,7 @@ async function moveFolder(id, dir) {
 }
 
 // ---- events ----------------------------------------------------------------------
-document.addEventListener('click', (e) => {
+onPage(document, 'click', (e) => {
   const closedMenu = menuWasOpen; menuWasOpen = false;
   const more = e.target.closest('[data-more]');
   if (more) { e.stopPropagation(); const b = books.find((x) => x.id === +more.dataset.more); if (b) bookMenu(more, b); return; }
@@ -321,7 +323,7 @@ document.addEventListener('click', (e) => {
     location.href = readerOpenHref(card.dataset.id);
   }
 });
-document.addEventListener('keydown', (e) => {
+onPage(document, 'keydown', (e) => {
   if (e.key !== 'Enter' && e.key !== ' ') return;
   if (e.target.closest('button, select, input')) return;
   const frow = e.target.closest('[data-f]');

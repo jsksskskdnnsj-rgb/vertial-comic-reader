@@ -6,13 +6,14 @@ import { T, invoke, t, esc, toast, prefs, applyTheme, applyI18n, wireWindow, lan
 import { appearanceVars } from './appearance.js';
 import { glassVars, DEFAULT_CHROME_BLUR, DEFAULT_BG_BLUR } from './appearance-glass.js';
 import { extrasVars } from './appearance-extras.js';
+import { beginPage } from './page-life.js';
 
 export const COVER_BASE = T.core?.convertFileSrc
   ? T.core.convertFileSrc('', 'mhcover').replace(/\/$/, '')
   : '';
 export const coverUrl = (id, v = 0) => `${COVER_BASE}/${id}?v=${v ?? 0}`;
 
-const SHELL_PAGES = new Set(['home.html', 'library.html', 'import.html', 'settings.html', 'scan.html', 'book.html']);
+const SHELL_PAGES = new Set(['home.html', 'library.html', 'meta.html', 'import.html', 'settings.html', 'scan.html', 'book.html']);
 
 let coverWired = false;
 /** Cover <img data-cover="id"> fallback: a 404 means "not generated yet" -> ask Rust once
@@ -34,6 +35,7 @@ export function wireCoverFallback() {
 const RAIL = [
   { key: 'home', href: 'home.html', icon: 'home', label: 'nav.home' },
   { key: 'library', href: 'library.html', icon: 'shelf', label: 'nav.library' },
+  { key: 'meta', href: 'meta.html', icon: 'globe', label: 'nav.meta' },
   { key: 'recent', href: 'library.html?view=recent', icon: 'clock', label: 'reader.history' },
   { key: 'marked', href: 'library.html?view=marked', icon: 'star', label: 'bookmarks.title' },
   { key: 'import', href: 'import.html', icon: 'download', label: 'nav.import' },
@@ -55,6 +57,7 @@ export function railActiveFromUrl(url = location) {
     if (view === 'marked') return 'marked';
     return 'library';
   }
+  if (base === 'meta.html') return 'meta';
   if (base === 'settings.html') return 'settings';
   if (base === 'import.html' || base === 'scan.html') return 'import';
   if (base === 'book.html') return 'library';
@@ -78,6 +81,7 @@ const PAGE_LABEL = {
   import: 'nav.import',
   scan: 'nav.scan',
   settings: 'nav.settings',
+  meta: 'nav.meta',
   book: 'nav.book',
   reader: 'nav.reader',
 };
@@ -99,8 +103,9 @@ function syncRailActive(active) {
       : a.href.includes('view=recent') ? 'recent'
         : a.href.includes('view=marked') ? 'marked'
           : a.href.includes('import.html') ? 'import'
-            : a.href.includes('library.html') ? 'library'
-              : a.href.includes('home.html') ? 'home' : '';
+            : a.href.includes('meta.html') ? 'meta'
+              : a.href.includes('library.html') ? 'library'
+                : a.href.includes('home.html') ? 'home' : '';
     a.classList.toggle('is-on', key === active);
   });
 }
@@ -199,6 +204,7 @@ function syncShellSearch(opts = {}) {
 }
 
 async function loadPageModule(pathname) {
+  beginPage();
   const base = pathname.split('/').pop() || 'home.html';
   const stem = base.replace(/\.html$/i, '');
   const gen = ++navGen;

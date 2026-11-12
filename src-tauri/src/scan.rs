@@ -7,7 +7,20 @@ use std::{
     fs::File,
     io::{BufReader, Cursor, Read},
     path::Path,
+    sync::Mutex,
 };
+
+/// How many workers to use for header/stat probes. Small jobs stay on one thread.
+pub(crate) fn io_workers(n: usize) -> usize {
+    if n < 24 {
+        return 1;
+    }
+    std::thread::available_parallelism()
+        .map(|p| p.get())
+        .unwrap_or(4)
+        .clamp(2, 8)
+        .min(n)
+}
 
 pub const HEAD_SMALL: usize = 64 * 1024; // tier 1
 pub const HEAD_LARGE: usize = 1024 * 1024; // tier 2: JPEG with fat EXIF/ICC/thumbnail
@@ -53,8 +66,7 @@ pub fn open_zip(path: &Path) -> Result<zip::ZipArchive<BufReader<File>>, ReaderE
     ))?) // central directory only
 }
 
-pub fn scan_zip(path: &Path) -> Result<Vec<RealPage>, ReaderError> {
-    let mut ar = open_zip(path)?;
+fn zip_candidates(ar: &mut zip::ZipArchive<BufReader<File>>) -> Vec<(u32, String)> {
     // file_names() comes from the central directory: no per-entry I/O. enumerate() == entry index.
     let mut cands: Vec<(u32, String)> = ar
         .file_names()
@@ -63,42 +75,160 @@ pub fn scan_zip(path: &Path) -> Result<Vec<RealPage>, ReaderError> {
         .map(|(i, n)| (i as u32, n.replace('\\', "/")))
         .collect();
     crate::shelf_scan::sort_by_comic_name(&mut cands, |c| c.1.as_str()); // 2.jpg before 10.jpg, 第一话 before 第2话
+    cands
+}
 
+fn zip_header_key(ar: &mut zip::ZipArchive<BufReader<File>>, entry: u32, name: &str) -> Option<(String, u64)> {
+    let e = ar.by_index(entry as usize).ok()?;
+    let bytes = e.size();
+    // crc32 + uncompressed size come from the central directory. A replaced
+    // page misses; every other entry in the same archive still hits.
+    Some((format!("z:{:08x}:{bytes}:{name}", e.crc32()), bytes))
+}
+
+fn probe_zip_entry(ar: &mut zip::ZipArchive<BufReader<File>>, entry: u32, name: String) -> RealPage {
+    let cached_key = zip_header_key(ar, entry, &name);
+    if let Some((key, bytes)) = &cached_key {
+        if let Some((w, h, stored)) = crate::header_cache::get(key) {
+            return RealPage {
+                entry,
+                name,
+                w,
+                h,
+                bytes: stored.max(*bytes),
+                src_path: None,
+            };
+        }
+    }
+    let mut dims = None;
+    let mut bytes = cached_key.as_ref().map(|(_, n)| *n).unwrap_or(0);
+    for limit in [HEAD_SMALL as u64, HEAD_LARGE as u64] {
+        let Some((buf, size)) = read_up_to(ar, entry, limit) else {
+            break;
+        };
+        bytes = size;
+        if let Some(d) = head_dims(&buf) {
+            dims = Some(d);
+            break;
+        }
+        if (buf.len() as u64) < limit {
+            break;
+        } // whole entry read, header still unparsable
+    }
+    if dims.is_none() {
+        // tier 3: decoder reads dims (AVIF, odd files)
+        if let Some((buf, _)) = read_up_to(ar, entry, MAX_ENTRY) {
+            dims = image::ImageReader::new(Cursor::new(buf))
+                .with_guessed_format()
+                .ok()
+                .and_then(|r| r.into_dimensions().ok());
+        }
+    }
+    let (w, h) = dims.unwrap_or((0, 0)); // (0,0) = unknown; JS corrects on load
+    if let Some((key, _)) = &cached_key {
+        crate::header_cache::put(key, w, h, bytes);
+    }
+    RealPage {
+        entry,
+        name,
+        w,
+        h,
+        bytes,
+        src_path: None,
+    }
+}
+
+/// One page list for every shelf kind.
+///
+/// Zip and cbz are read from the archive. A folder (including a book that was
+/// a 7z/cb7/rar/cbr and unpacked at import) is a directory walk. Loose images
+/// keep the saved path order. Callers do not grow a second scanner.
+pub fn index_book(kind: SourceKind, paths: &[String]) -> Result<Vec<RealPage>, ReaderError> {
+    match kind {
+        SourceKind::Zip => {
+            let path = paths.first().map(std::path::PathBuf::from).unwrap_or_default();
+            scan_zip(&path)
+        }
+        SourceKind::Folder => {
+            if paths.len() > 1 {
+                Ok(scan_folder_parts(paths))
+            } else {
+                let path = paths.first().map(std::path::PathBuf::from).unwrap_or_default();
+                Ok(scan_folder(&path))
+            }
+        }
+        SourceKind::Images => Ok(scan_images(paths)),
+    }
+}
+
+/// One archive, one thread. Used by the benchmark as the pre-parallel baseline.
+pub(crate) fn scan_zip_linear(path: &Path) -> Result<Vec<RealPage>, ReaderError> {
+    let mut ar = open_zip(path)?;
+    let cands = zip_candidates(&mut ar);
     let mut out = Vec::with_capacity(cands.len());
     for (entry, name) in cands {
-        let mut dims = None;
-        let mut bytes = 0;
-        for limit in [HEAD_SMALL as u64, HEAD_LARGE as u64] {
-            let Some((buf, size)) = read_up_to(&mut ar, entry, limit) else {
-                break;
-            };
-            bytes = size;
-            if let Some(d) = head_dims(&buf) {
-                dims = Some(d);
-                break;
-            }
-            if (buf.len() as u64) < limit {
-                break;
-            } // whole entry read, header still unparsable
+        out.push(probe_zip_entry(&mut ar, entry, name));
+    }
+    Ok(out)
+}
+
+pub fn scan_zip(path: &Path) -> Result<Vec<RealPage>, ReaderError> {
+    let mut ar = open_zip(path)?;
+    let cands = zip_candidates(&mut ar);
+    let workers = io_workers(cands.len());
+    if workers == 1 {
+        let mut out = Vec::with_capacity(cands.len());
+        for (entry, name) in cands {
+            out.push(probe_zip_entry(&mut ar, entry, name));
         }
-        if dims.is_none() {
-            // tier 3: decoder reads dims (AVIF, odd files)
-            if let Some((buf, _)) = read_up_to(&mut ar, entry, MAX_ENTRY) {
-                dims = image::ImageReader::new(Cursor::new(buf))
-                    .with_guessed_format()
-                    .ok()
-                    .and_then(|r| r.into_dimensions().ok());
-            }
+        return Ok(out);
+    }
+    drop(ar);
+    let n = cands.len();
+    let jobs: Vec<(usize, u32, String)> = cands
+        .into_iter()
+        .enumerate()
+        .map(|(i, (entry, name))| (i, entry, name))
+        .collect();
+    let chunk = (n + workers - 1) / workers;
+    let mut groups: Vec<Vec<(usize, u32, String)>> = Vec::new();
+    let mut rest = jobs;
+    while !rest.is_empty() {
+        let take = chunk.min(rest.len());
+        groups.push(rest.drain(..take).collect());
+    }
+    let slots: Mutex<Vec<Option<RealPage>>> = Mutex::new((0..n).map(|_| None).collect());
+    let open_err: Mutex<Option<String>> = Mutex::new(None);
+    std::thread::scope(|scope| {
+        for group in groups {
+            let path = path.to_path_buf();
+            let slots = &slots;
+            let open_err = &open_err;
+            scope.spawn(move || {
+                let mut ar = match open_zip(&path) {
+                    Ok(a) => a,
+                    Err(e) => {
+                        *open_err.lock().unwrap_or_else(|err| err.into_inner()) = Some(e.to_string());
+                        return;
+                    }
+                };
+                let local: Vec<(usize, RealPage)> = group
+                    .into_iter()
+                    .map(|(i, entry, name)| (i, probe_zip_entry(&mut ar, entry, name)))
+                    .collect();
+                let mut guard = slots.lock().unwrap_or_else(|err| err.into_inner());
+                for (i, page) in local {
+                    guard[i] = Some(page);
+                }
+            });
         }
-        let (w, h) = dims.unwrap_or((0, 0)); // (0,0) = unknown; JS corrects on load
-        out.push(RealPage {
-            entry,
-            name,
-            w,
-            h,
-            bytes,
-            src_path: None,
-        });
+    });
+    if let Some(msg) = open_err.into_inner().unwrap_or_else(|err| err.into_inner()) {
+        return Err(ReaderError::Io(msg));
+    }
+    let mut out = Vec::with_capacity(n);
+    for page in slots.into_inner().unwrap_or_else(|err| err.into_inner()) {
+        out.push(page.ok_or_else(|| ReaderError::Io("zip scan incomplete".into()))?);
     }
     Ok(out)
 }
@@ -128,21 +258,84 @@ pub fn scan_folder(root: &Path) -> Vec<RealPage> {
         })
         .collect();
     crate::shelf_scan::sort_by_comic_name(&mut files, |f| f.0.as_str());
-    files
-        .into_iter()
-        .map(|(name, bytes)| {
-            let (w, h) = imagesize::size(root.join(&name))
-                .map(|s| (s.width as u32, s.height as u32))
-                .unwrap_or((0, 0));
-            RealPage {
+    probe_folder_pages(root, files)
+}
+
+fn folder_page(root: &Path, name: String, bytes: u64) -> RealPage {
+    let full = root.join(&name);
+    let key = crate::header_cache::file_key(&full);
+    if let Some(key) = &key {
+        if let Some((w, h, stored)) = crate::header_cache::get(key) {
+            return RealPage {
                 entry: 0,
                 name,
                 w,
                 h,
-                bytes,
+                bytes: if bytes == 0 { stored } else { bytes },
                 src_path: None,
-            }
-        })
+            };
+        }
+    }
+    let (w, h) = imagesize::size(&full)
+        .map(|s| (s.width as u32, s.height as u32))
+        .unwrap_or((0, 0));
+    if let Some(key) = &key {
+        crate::header_cache::put(key, w, h, bytes);
+    }
+    RealPage {
+        entry: 0,
+        name,
+        w,
+        h,
+        bytes,
+        src_path: None,
+    }
+}
+
+fn probe_folder_pages(root: &Path, files: Vec<(String, u64)>) -> Vec<RealPage> {
+    let workers = io_workers(files.len());
+    if workers == 1 {
+        return files
+            .into_iter()
+            .map(|(name, bytes)| folder_page(root, name, bytes))
+            .collect();
+    }
+    let n = files.len();
+    let jobs: Vec<(usize, String, u64)> = files
+        .into_iter()
+        .enumerate()
+        .map(|(i, (name, bytes))| (i, name, bytes))
+        .collect();
+    let chunk = (n + workers - 1) / workers;
+    let mut groups: Vec<Vec<(usize, String, u64)>> = Vec::new();
+    let mut rest = jobs;
+    while !rest.is_empty() {
+        let take = chunk.min(rest.len());
+        groups.push(rest.drain(..take).collect());
+    }
+    let slots: Mutex<Vec<Option<RealPage>>> = Mutex::new((0..n).map(|_| None).collect());
+    let root = root.to_path_buf();
+    std::thread::scope(|scope| {
+        for group in groups {
+            let root = root.clone();
+            let slots = &slots;
+            scope.spawn(move || {
+                let local: Vec<(usize, RealPage)> = group
+                    .into_iter()
+                    .map(|(i, name, bytes)| (i, folder_page(&root, name, bytes)))
+                    .collect();
+                let mut guard = slots.lock().unwrap_or_else(|err| err.into_inner());
+                for (i, page) in local {
+                    guard[i] = Some(page);
+                }
+            });
+        }
+    });
+    slots
+        .into_inner()
+        .unwrap_or_else(|err| err.into_inner())
+        .into_iter()
+        .map(|page| page.expect("folder probe"))
         .collect()
 }
 
@@ -178,22 +371,87 @@ pub fn scan_folder_parts(roots: &[String]) -> Vec<RealPage> {
 
 /// Loose images: `paths` come from the DB (user's drop order), name = absolute path.
 pub fn scan_images(paths: &[String]) -> Vec<RealPage> {
-    paths
+    let files: Vec<(String, u64)> = paths
         .iter()
         .map(|p| {
-            let (w, h) = imagesize::size(p)
-                .map(|s| (s.width as u32, s.height as u32))
-                .unwrap_or((0, 0));
-            RealPage {
+            let bytes = std::fs::metadata(p).map(|m| m.len()).unwrap_or(0);
+            (p.clone(), bytes)
+        })
+        .collect();
+    // Loose images keep the caller's order. Dimensions are read in parallel past the small-job cutoff.
+    let workers = io_workers(files.len());
+    if workers == 1 {
+        return files
+            .into_iter()
+            .map(|(name, bytes)| loose_page(name, bytes))
+            .collect();
+    }
+    let n = files.len();
+    let jobs: Vec<(usize, String, u64)> = files
+        .into_iter()
+        .enumerate()
+        .map(|(i, (name, bytes))| (i, name, bytes))
+        .collect();
+    let chunk = (n + workers - 1) / workers;
+    let mut groups: Vec<Vec<(usize, String, u64)>> = Vec::new();
+    let mut rest = jobs;
+    while !rest.is_empty() {
+        let take = chunk.min(rest.len());
+        groups.push(rest.drain(..take).collect());
+    }
+    let slots: Mutex<Vec<Option<RealPage>>> = Mutex::new((0..n).map(|_| None).collect());
+    std::thread::scope(|scope| {
+        for group in groups {
+            let slots = &slots;
+            scope.spawn(move || {
+                let local: Vec<(usize, RealPage)> = group
+                    .into_iter()
+                    .map(|(i, name, bytes)| (i, loose_page(name, bytes)))
+                    .collect();
+                let mut guard = slots.lock().unwrap_or_else(|err| err.into_inner());
+                for (i, page) in local {
+                    guard[i] = Some(page);
+                }
+            });
+        }
+    });
+    slots
+        .into_inner()
+        .unwrap_or_else(|err| err.into_inner())
+        .into_iter()
+        .map(|page| page.expect("image probe"))
+        .collect()
+}
+
+fn loose_page(name: String, bytes: u64) -> RealPage {
+    let path = Path::new(&name);
+    let key = crate::header_cache::file_key(path);
+    if let Some(key) = &key {
+        if let Some((w, h, stored)) = crate::header_cache::get(key) {
+            return RealPage {
                 entry: 0,
-                name: p.clone(),
+                name,
                 w,
                 h,
-                bytes: std::fs::metadata(p).map(|m| m.len()).unwrap_or(0),
+                bytes: if bytes == 0 { stored } else { bytes },
                 src_path: None,
-            }
-        })
-        .collect()
+            };
+        }
+    }
+    let (w, h) = imagesize::size(path)
+        .map(|s| (s.width as u32, s.height as u32))
+        .unwrap_or((0, 0));
+    if let Some(key) = &key {
+        crate::header_cache::put(key, w, h, bytes);
+    }
+    RealPage {
+        entry: 0,
+        name,
+        w,
+        h,
+        bytes,
+        src_path: None,
+    }
 }
 
 /// n equal slices, each <= SLICE_MAX, for images taller than SLICE_TRIGGER. Returns (y0, h).
@@ -303,5 +561,116 @@ pub fn quick_sig(kind: SourceKind, path: &Path) -> Result<String, ReaderError> {
             Ok(format!("f{n}:{len}:{mx}"))
         }
         SourceKind::Images => Ok("i".into()), // loose-image books: caller hashes the path list if needed
+    }
+}
+
+#[cfg(test)]
+mod bench_tests {
+    use super::*;
+    use std::io::{Cursor, Write};
+    use std::time::Instant;
+
+    fn note(line: &str) {
+        eprintln!("{line}");
+        let path = std::env::temp_dir().join("mh-bench.txt");
+        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
+            let _ = writeln!(f, "{line}");
+        }
+    }
+
+    fn jpeg(w: u32, h: u32) -> Vec<u8> {
+        let img = image::RgbImage::from_fn(w, h, |x, y| image::Rgb([(x % 256) as u8, (y % 256) as u8, 40]));
+        let mut buf = Vec::new();
+        image::DynamicImage::ImageRgb8(img)
+            .write_to(&mut Cursor::new(&mut buf), image::ImageFormat::Jpeg)
+            .unwrap();
+        buf
+    }
+
+    fn write_zip(path: &std::path::Path, prefix: &str, jpeg: &[u8], n: u32) {
+        let f = std::fs::File::create(path).unwrap();
+        let mut zw = zip::ZipWriter::new(f);
+        let opts = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Deflated);
+        for i in (1..=n).rev() {
+            zw.start_file(format!("{prefix}{i:03}.jpg"), opts).unwrap();
+            zw.write_all(jpeg).unwrap();
+        }
+        zw.finish().unwrap();
+    }
+
+    fn names_of(pages: &[RealPage]) -> Vec<&str> {
+        pages.iter().map(|p| p.name.as_str()).collect()
+    }
+
+    #[test]
+    fn zip_and_folder_share_one_index_and_header_cache() {
+        let dir = std::env::temp_dir().join(format!("mh-index-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let jpeg = jpeg(24, 36);
+        let zip_path = dir.join("book.cbz");
+        write_zip(&zip_path, "", &jpeg, 40);
+        let folder = dir.join("folder");
+        std::fs::create_dir_all(&folder).unwrap();
+        for i in (1..=40).rev() {
+            std::fs::write(folder.join(format!("{i:03}.jpg")), &jpeg).unwrap();
+        }
+        let (hits_before, _) = crate::header_cache::stats();
+        let t_cold = Instant::now();
+        let linear = scan_zip_linear(&zip_path).unwrap();
+        let cold_ms = t_cold.elapsed().as_millis();
+        let t_warm = Instant::now();
+        let warm = scan_zip_linear(&zip_path).unwrap();
+        let warm_ms = t_warm.elapsed().as_millis();
+        let via_index = index_book(SourceKind::Zip, &[zip_path.to_string_lossy().to_string()]).unwrap();
+        assert_eq!(linear.len(), 40);
+        assert_eq!(linear[0].name, "001.jpg");
+        assert_eq!(linear.last().unwrap().name, "040.jpg");
+        assert!(linear[0].w > 0 && linear[0].h > 0);
+        for (a, b) in linear.iter().zip(warm.iter()) {
+            assert_eq!(a.name, b.name);
+            assert_eq!(a.entry, b.entry);
+            assert_eq!((a.w, a.h), (b.w, b.h));
+        }
+        assert_eq!(names_of(&linear), names_of(&via_index));
+        let (hits_after, _) = crate::header_cache::stats();
+        assert!(hits_after > hits_before, "second zip read should use the header cache");
+        note(&format!("BENCH zip40 cold_linear_ms={cold_ms} warm_linear_ms={warm_ms} header_hits={}", hits_after - hits_before));
+
+        let par_zip = dir.join("par.cbz");
+        let lin_zip = dir.join("lin.cbz");
+        write_zip(&par_zip, "p", &jpeg, 300);
+        write_zip(&lin_zip, "q", &jpeg, 300);
+        let t_par = Instant::now();
+        let parallel = scan_zip(&par_zip).unwrap();
+        let par_ms = t_par.elapsed().as_millis();
+        let t_lin = Instant::now();
+        let linear300 = scan_zip_linear(&lin_zip).unwrap();
+        let lin_ms = t_lin.elapsed().as_millis();
+        assert_eq!(parallel.len(), 300);
+        assert_eq!(linear300.len(), 300);
+        assert_eq!(parallel[0].name, "p001.jpg");
+        assert_eq!(parallel.last().unwrap().name, "p300.jpg");
+        assert_eq!(linear300[0].name, "q001.jpg");
+        for (a, b) in parallel.iter().zip(linear300.iter()) {
+            assert_eq!(a.w, b.w);
+            assert_eq!(a.h, b.h);
+            assert_eq!(a.entry, b.entry);
+        }
+        note(&format!("BENCH zip300 parallel_ms={par_ms} linear_ms={lin_ms}"));
+
+        let t_folder = Instant::now();
+        let folder_pages = index_book(SourceKind::Folder, &[folder.to_string_lossy().to_string()]).unwrap();
+        let folder_cold = t_folder.elapsed().as_millis();
+        let t_folder2 = Instant::now();
+        let folder_warm = scan_folder(&folder);
+        let folder_warm_ms = t_folder2.elapsed().as_millis();
+        assert_eq!(folder_pages.len(), 40);
+        assert_eq!(folder_pages[0].name, "001.jpg");
+        assert_eq!(folder_pages.last().unwrap().name, "040.jpg");
+        assert_eq!(names_of(&folder_pages), names_of(&folder_warm));
+        note(&format!("BENCH folder40 cold_ms={folder_cold} warm_ms={folder_warm_ms}"));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

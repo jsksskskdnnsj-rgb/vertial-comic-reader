@@ -12,7 +12,7 @@ use std::{
     fs::File,
     io::{BufReader, Cursor, Read},
     sync::{
-        atomic::{AtomicBool, Ordering::SeqCst},
+        atomic::{AtomicBool, AtomicUsize, Ordering::SeqCst},
         Arc,
     },
 };
@@ -369,7 +369,7 @@ impl Extractor {
         } // phase check: jumped away
 
         if variant == 0 && !page.is_slice() {
-            // fast path: store as-is
+            // fast path: store as-is. The protocol serves these bytes; nothing is base64.
             let (_, ext) = sniff(&raw)
                 .ok_or_else(|| ReaderError::Corrupt("not a recognised image".into()))?;
             return self.store(key, ext, &raw);
@@ -378,6 +378,8 @@ impl Extractor {
         if page.w as u64 * page.full_h as u64 > scan::MAX_PIXELS {
             return Err(ReaderError::Unsupported("image too large".into()));
         }
+        // At most two full decodes at once, so four workers cannot each hold a page bitmap.
+        let _decode_slot = acquire_decode_slot();
         let img = decode(&raw)?;
         // A normal page has nothing to crop. Skip the full-buffer clone the old
         // loop did before shrink_to.
@@ -465,10 +467,37 @@ pub fn sniff(b: &[u8]) -> Option<(&'static str, &'static str)> {
     }
 }
 
+const DECODE_SLOTS: usize = 2;
+static DECODE_LIVE: AtomicUsize = AtomicUsize::new(0);
+
+fn decode_gate() -> &'static (Mutex<()>, Condvar) {
+    static GATE: std::sync::OnceLock<(Mutex<()>, Condvar)> = std::sync::OnceLock::new();
+    GATE.get_or_init(|| (Mutex::new(()), Condvar::new()))
+}
+
+struct DecodeSlot;
+impl Drop for DecodeSlot {
+    fn drop(&mut self) {
+        DECODE_LIVE.fetch_sub(1, SeqCst);
+        decode_gate().1.notify_one();
+    }
+}
+
+fn acquire_decode_slot() -> DecodeSlot {
+    let (lock, cv) = decode_gate();
+    let mut guard = lock.lock();
+    while DECODE_LIVE.load(SeqCst) >= DECODE_SLOTS {
+        cv.wait(&mut guard);
+    }
+    DECODE_LIVE.fetch_add(1, SeqCst);
+    DecodeSlot
+}
+
 fn decode(raw: &[u8]) -> Result<image::DynamicImage, ReaderError> {
     let mut r = image::ImageReader::new(Cursor::new(raw)).with_guessed_format()?;
     let mut lim = image::Limits::default();
-    lim.max_alloc = Some(1 << 30); // 1 GiB hard ceiling
+    // One decoded page, not a gigabyte. The slot above caps how many of these exist.
+    lim.max_alloc = Some(384 * 1024 * 1024);
     r.limits(lim);
     Ok(r.decode()?)
 }

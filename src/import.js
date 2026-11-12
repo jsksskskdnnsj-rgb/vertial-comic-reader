@@ -7,12 +7,13 @@
 // is listed it is inspected with list_images, the row shows how many images / subfolders it holds, and a folder with no
 // images at any depth is refused (reported under the list) instead of being added silently.
 import { T, invoke, t, esc, toast, bootPage } from './shell.js';
+import { onPage } from './page-life.js';
 import { lib } from './api.js';
 import { mountShell, watchDrops } from './shell-ui.js';
 import { sortSources } from './naming.js';
 import { orderByRange, suggestName, compareSources, baseName } from './merge-order.js';
 import { reviewGroups } from './same-book.js';
-import { inspectFolder, looksLikeFile } from './folder-scan.js';
+import { inspectFolder, looksLikeFile, mapPool } from './folder-scan.js';
 import { IMAGE_EXTS, ZIP_EXTS, archiveAndImageFilters } from './image-exts.js';
 
 bootPage('import');
@@ -50,13 +51,17 @@ async function doAdd(list) {
   if (!fresh.length) return;
   const scanning = fresh.some((p) => !looksLikeFile(p));
   if (scanning) $('summary').textContent = t('imp.scanning');
+  const rows = await mapPool(fresh, 4, async (p) => {
+    if (looksLikeFile(p)) return { path: p, file: true };
+    return { path: p, r: await inspectFolder(p, lib.listImages) };
+  });
   let refused = 0;
-  for (const p of fresh) {
-    if (looksLikeFile(p)) { sources.push(p); continue; }
-    const r = await inspectFolder(p, lib.listImages);
-    if (!r.ok) { sources.push(p); continue; }           // not readable as a folder (e.g. an unsupported file): the importer reports it as before
-    if (r.empty) { skipped.push({ path: p, archives: r.archives }); refused++; continue; }
-    info.set(p, r); sources.push(p);
+  for (const row of rows) {
+    if (row.file) { sources.push(row.path); continue; }
+    const r = row.r;
+    if (!r.ok) { sources.push(row.path); continue; }           // not readable as a folder (e.g. an unsupported file): the importer reports it as before
+    if (r.empty) { skipped.push({ path: row.path, archives: r.archives }); refused++; continue; }
+    info.set(row.path, r); sources.push(row.path);
   }
   if (scanning) $('summary').textContent = '';
   if (refused) toast(t('imp.emptySkipped'));
@@ -153,10 +158,10 @@ $('addFolders').addEventListener('click', async () => {
 // Drag-over highlight: enter/leave fire for every child element, so count them.
 const zone = $('zone');
 let dragDepth = 0;
-addEventListener('dragenter', (e) => { e.preventDefault(); dragDepth++; zone.classList.add('is-over'); });
-addEventListener('dragover', (e) => e.preventDefault());
-addEventListener('dragleave', () => { dragDepth = Math.max(0, dragDepth - 1); if (!dragDepth) zone.classList.remove('is-over'); });
-addEventListener('drop', (e) => { e.preventDefault(); dragDepth = 0; zone.classList.remove('is-over'); });
+onPage(window, 'dragenter', (e) => { e.preventDefault(); dragDepth++; zone.classList.add('is-over'); });
+onPage(window, 'dragover', (e) => e.preventDefault());
+onPage(window, 'dragleave', () => { dragDepth = Math.max(0, dragDepth - 1); if (!dragDepth) zone.classList.remove('is-over'); });
+onPage(window, 'drop', (e) => { e.preventDefault(); dragDepth = 0; zone.classList.remove('is-over'); });
 watchDrops(addSources);
 
 async function loadFolders() {

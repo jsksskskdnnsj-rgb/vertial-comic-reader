@@ -18,8 +18,11 @@
 use crate::commands::ReaderState;
 use crate::error::ReaderError;
 use crate::extractor::sniff;
+use std::collections::VecDeque;
 use std::io::Read as _;
-use std::{path::Path, path::PathBuf, sync::Arc};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Condvar, Mutex, Once, OnceLock};
+use std::{path::Path, path::PathBuf};
 use tauri::State;
 
 pub struct CoversDir(pub Arc<PathBuf>);
@@ -84,9 +87,132 @@ pub fn cover_handle(
     });
 }
 
-/// Up to `MAX_COVER_TRIES` early pages, from the verified machinery (NOT the extractor).
-/// The first one `image` can decode becomes the cover; AVIF-only books yield an empty list.
-fn cover_candidates(book_id: i64) -> Result<Vec<Vec<u8>>, ReaderError> {
+const COVER_PARALLEL: usize = 2;
+static COVER_HELD: AtomicUsize = AtomicUsize::new(0);
+
+struct CoverPermit;
+impl Drop for CoverPermit {
+    fn drop(&mut self) {
+        COVER_HELD.fetch_sub(1, Ordering::AcqRel);
+    }
+}
+
+fn acquire_cover_permit() -> CoverPermit {
+    loop {
+        let cur = COVER_HELD.load(Ordering::Relaxed);
+        if cur < COVER_PARALLEL
+            && COVER_HELD
+                .compare_exchange(cur, cur + 1, Ordering::AcqRel, Ordering::Relaxed)
+                .is_ok()
+        {
+            return CoverPermit;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(2));
+    }
+}
+
+fn cover_queue() -> &'static (Mutex<VecDeque<i64>>, Condvar) {
+    static Q: OnceLock<(Mutex<VecDeque<i64>>, Condvar)> = OnceLock::new();
+    Q.get_or_init(|| (Mutex::new(VecDeque::new()), Condvar::new()))
+}
+
+fn cover_worker() {
+    let (queue, cv) = cover_queue();
+    loop {
+        let id = {
+            let mut q = queue.lock().unwrap_or_else(|e| e.into_inner());
+            while q.is_empty() {
+                q = cv.wait(q).unwrap_or_else(|e| e.into_inner());
+            }
+            q.pop_front().unwrap()
+        };
+        if let Ok(dir) = crate::data_dir() {
+            let _ = generate_cover(&dir.join("covers"), id);
+        }
+    }
+}
+
+/// Generate a missing cover off the import thread. Two workers share the decode cap.
+pub(crate) fn queue_cover(book_id: i64) {
+    let _ = cover_queue();
+    static START: Once = Once::new();
+    START.call_once(|| {
+        for i in 0..COVER_PARALLEL {
+            let _ = std::thread::Builder::new()
+                .name(format!("mh-cover-{i}"))
+                .spawn(cover_worker);
+        }
+    });
+    let (queue, cv) = cover_queue();
+    queue.lock().unwrap_or_else(|e| e.into_inner()).push_back(book_id);
+    cv.notify_one();
+}
+
+fn consider_cover(best: &mut Vec<(String, PathBuf)>, rel: String, path: PathBuf) {
+    if !is_cover_name(&rel) {
+        return;
+    }
+    let worse = best
+        .last()
+        .map(|(name, _)| natord::compare_ignore_case(name, &rel).is_le())
+        .unwrap_or(false);
+    if best.len() >= MAX_COVER_TRIES && worse {
+        return;
+    }
+    best.push((rel, path));
+    best.sort_by(|a, b| natord::compare_ignore_case(&a.0, &b.0));
+    best.truncate(MAX_COVER_TRIES);
+}
+
+fn walk_cover_names(dir: &Path, rel_prefix: &str, best: &mut Vec<(String, PathBuf)>) {
+    let Ok(rd) = std::fs::read_dir(dir) else { return };
+    for ent in rd.flatten() {
+        let name = ent.file_name().to_string_lossy().to_string();
+        if name.starts_with('.') || name.is_empty() {
+            continue;
+        }
+        let path = ent.path();
+        let rel = if rel_prefix.is_empty() {
+            name
+        } else {
+            format!("{rel_prefix}/{name}")
+        };
+        match ent.file_type() {
+            Ok(ft) if ft.is_dir() => walk_cover_names(&path, &rel, best),
+            Ok(ft) if ft.is_file() => consider_cover(best, rel, path),
+            _ => {}
+        }
+    }
+}
+
+fn read_capped(path: &Path) -> Option<Vec<u8>> {
+    let len = std::fs::metadata(path).ok()?.len();
+    if len == 0 || len > MAX_COVER_SRC {
+        return None;
+    }
+    let buf = std::fs::read(path).ok()?;
+    (!buf.is_empty()).then_some(buf)
+}
+
+fn downscale_cover(img: image::DynamicImage) -> image::DynamicImage {
+    if img.width() <= COVER_WIDTH {
+        return img;
+    }
+    let nh = ((img.height() as u64 * COVER_WIDTH as u64) / img.width() as u64).max(1) as u32;
+    // Triangle is the thumbnail filter. Lanczos3 was the cost of every first cover.
+    img.resize_exact(COVER_WIDTH, nh, image::imageops::FilterType::Triangle)
+}
+
+fn decode_cover_bytes(bytes: &[u8]) -> Option<image::DynamicImage> {
+    image::ImageReader::new(std::io::Cursor::new(bytes))
+        .with_guessed_format()
+        .ok()
+        .and_then(|r| r.decode().ok())
+        .map(downscale_cover)
+}
+
+/// First decodable early page. Bytes are read one candidate at a time.
+fn decode_first_cover(book_id: i64) -> Result<Option<image::DynamicImage>, ReaderError> {
     let conn = crate::db_conn().map_err(ReaderError::Io)?;
     let row = crate::db::book_row(&conn, book_id)?;
     match row.kind.as_str() {
@@ -98,9 +224,6 @@ fn cover_candidates(book_id: i64) -> Result<Vec<Vec<u8>>, ReaderError> {
                 .ok_or_else(|| ReaderError::Corrupt("zip book without path".into()))?;
             let file = std::fs::File::open(&src)?;
             let mut ar = zip::ZipArchive::new(file)?;
-            // First image entry in natural (reading) order — same ordering scan_zip
-            // uses. Keep the raw index: entry names are read via by_index because the
-            // normalised name may differ from the stored one (backslashes).
             let mut cands: Vec<(usize, String)> = ar
                 .file_names()
                 .enumerate()
@@ -108,79 +231,61 @@ fn cover_candidates(book_id: i64) -> Result<Vec<Vec<u8>>, ReaderError> {
                 .map(|(i, n)| (i, n.replace('\\', "/")))
                 .collect();
             cands.sort_by(|a, b| natord::compare_ignore_case(&a.1, &b.1));
-            let mut out = Vec::new();
+            let mut tries = 0;
             for (index, _) in cands {
-                if out.len() >= MAX_COVER_TRIES {
+                if tries >= MAX_COVER_TRIES {
                     break;
                 }
                 let mut e = ar.by_index(index)?;
-                if e.size() > MAX_COVER_SRC {
+                if e.size() == 0 || e.size() > MAX_COVER_SRC {
                     continue;
                 }
                 let mut buf = Vec::with_capacity(e.size() as usize);
                 e.read_to_end(&mut buf)?;
-                if !buf.is_empty() {
-                    out.push(buf);
+                tries += 1;
+                if let Some(img) = decode_cover_bytes(&buf) {
+                    return Ok(Some(img));
                 }
             }
-            Ok(out)
+            Ok(None)
         }
         "folder" => {
-            let roots: Vec<String> = if row.paths.is_empty() {
+            if row.paths.is_empty() {
                 return Err(ReaderError::Corrupt("folder book without path".into()));
-            } else {
-                row.paths.clone()
-            };
-            // crate::list_images returns walk_dir order (not naturally sorted), so
-            // sort by display name the same way scan_folder does. A merged book
-            // tries each part in reading order until a cover decodes.
-            let mut files = Vec::new();
-            for src in roots {
-                match crate::list_images(src) {
-                    Ok(mut batch) => files.append(&mut batch),
-                    Err(_) => continue,
-                }
-                if files.iter().any(|f| is_cover_name(&f.name)) {
+            }
+            let mut best = Vec::new();
+            for src in &row.paths {
+                walk_cover_names(Path::new(src), "", &mut best);
+                if !best.is_empty() {
                     break;
                 }
             }
-            files.retain(|f| is_cover_name(&f.name));
-            files.sort_by(|a, b| natord::compare_ignore_case(&a.name, &b.name));
-            let mut out = Vec::new();
-            for f in files {
-                if out.len() >= MAX_COVER_TRIES {
-                    break;
-                }
-                if std::fs::metadata(&f.path).map(|m| m.len()).unwrap_or(0) > MAX_COVER_SRC {
-                    continue;
-                }
-                if let Ok(buf) = std::fs::read(&f.path) {
-                    if !buf.is_empty() {
-                        out.push(buf);
+            for (_, path) in best {
+                if let Some(buf) = read_capped(&path) {
+                    if let Some(img) = decode_cover_bytes(&buf) {
+                        return Ok(Some(img));
                     }
                 }
             }
-            Ok(out)
+            Ok(None)
         }
         "images" => {
-            let mut out = Vec::new();
+            let mut tries = 0;
             for path in &row.paths {
-                if out.len() >= MAX_COVER_TRIES {
+                if tries >= MAX_COVER_TRIES {
                     break;
                 }
                 if !is_cover_name(path) {
                     continue;
                 }
-                if std::fs::metadata(path).map(|m| m.len()).unwrap_or(0) > MAX_COVER_SRC {
-                    continue;
-                }
-                if let Ok(buf) = std::fs::read(path) {
-                    if !buf.is_empty() {
-                        out.push(buf);
+                if let Some(buf) = read_capped(Path::new(path)) {
+                    tries += 1;
+                    if let Some(img) = decode_cover_bytes(&buf) {
+                        return Ok(Some(img));
                     }
                 }
             }
-            Ok(out)
+            Ok(None)
         }
         other => Err(ReaderError::Unsupported(other.to_string())),
     }
@@ -196,24 +301,12 @@ pub(crate) fn generate_cover(covers_dir: &Path, book_id: i64) -> Result<(), Read
     if out.exists() {
         return Ok(());
     }
-    let img = cover_candidates(book_id)?.into_iter().find_map(|bytes| {
-        image::ImageReader::new(std::io::Cursor::new(bytes))
-            .with_guessed_format()
-            .ok()
-            .and_then(|r| r.decode().ok())
-    });
-    let Some(img) = img else {
+    let _permit = acquire_cover_permit();
+    if out.exists() {
         return Ok(());
-    };
-    let img = if img.width() > COVER_WIDTH {
-        let nh = ((img.height() as u64 * COVER_WIDTH as u64) / img.width() as u64).max(1) as u32;
-        img.resize_exact(
-            COVER_WIDTH,
-            nh,
-            image::imageops::FilterType::Lanczos3,
-        )
-    } else {
-        img
+    }
+    let Some(img) = decode_first_cover(book_id)? else {
+        return Ok(());
     };
     let mut jpg: Vec<u8> = Vec::new();
     {
@@ -283,4 +376,37 @@ pub async fn ensure_cover(
     tauri::async_runtime::spawn_blocking(move || generate_cover(&dir, book_id))
         .await
         .map_err(|e| ReaderError::Io(e.to_string()))?
+}
+
+#[cfg(test)]
+mod cover_bench {
+    use std::io::Write;
+
+    #[test]
+    fn triangle_cover_is_not_slower_than_lanczos() {
+        let img = image::RgbImage::from_fn(960, 1400, |x, y| {
+            image::Rgb([(x % 256) as u8, (y % 256) as u8, 80])
+        });
+        let src = image::DynamicImage::ImageRgb8(img);
+        let nh = ((1400u64 * 240) / 960).max(1) as u32;
+        let t0 = std::time::Instant::now();
+        let lanczos = src.clone().resize_exact(240, nh, image::imageops::FilterType::Lanczos3);
+        let lanczos_ms = t0.elapsed().as_millis();
+        let t1 = std::time::Instant::now();
+        let triangle = src.resize_exact(240, nh, image::imageops::FilterType::Triangle);
+        let triangle_ms = t1.elapsed().as_millis();
+        assert_eq!(triangle.width(), 240);
+        assert_eq!(lanczos.width(), 240);
+        assert_eq!(triangle.height(), lanczos.height());
+        assert!(
+            triangle_ms <= lanczos_ms.saturating_mul(2) + 80,
+            "triangle {triangle_ms}ms lanczos {lanczos_ms}ms"
+        );
+        let line = format!("BENCH cover960x1400 lanczos_ms={lanczos_ms} triangle_ms={triangle_ms}");
+        eprintln!("{line}");
+        let path = std::env::temp_dir().join("mh-bench.txt");
+        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
+            let _ = writeln!(f, "{line}");
+        }
+    }
 }

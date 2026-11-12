@@ -17,6 +17,7 @@ mod cover_protocol;
 mod db;
 mod error;
 mod extractor;
+mod header_cache;
 mod library;
 mod merge;
 mod metadata;
@@ -218,6 +219,8 @@ fn main() {
             metadata::commands::metadata_comic18_search_url,
             metadata::commands::metadata_save_manual,
             metadata::commands::metadata_refresh,
+            metadata::commands::metadata_shelf_index,
+            metadata::commands::metadata_cache_status,
         ])
         .on_window_event(|window, event| match event {
             tauri::WindowEvent::DragDrop(tauri::DragDropEvent::Drop { paths, .. }) => {

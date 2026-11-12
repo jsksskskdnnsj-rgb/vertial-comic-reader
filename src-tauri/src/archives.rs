@@ -1,6 +1,7 @@
 //! Extra archive formats for import (ComiGo / exhentai fileLoader ideas, MIT — reimplemented).
-//! zip/cbz stay on the existing zip path. 7z/cb7/rar/cbr unpack into a managed folder
-//! under the data dir and register as `folder` books.
+//! zip/cbz stay on the existing zip path (`scan::index_book`). 7z/cb7/rar/cbr unpack
+//! into a managed folder under the data dir and register as `folder` books, so the
+//! same page index reads them. Nothing here searches for or downloads comics.
 
 use crate::scan;
 use std::fs;
