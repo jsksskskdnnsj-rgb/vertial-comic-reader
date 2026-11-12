@@ -10,7 +10,7 @@ use std::{
     cmp::Ordering,
     collections::{BinaryHeap, HashMap},
     fs::File,
-    io::{BufReader, Cursor, Read},
+    io::{BufReader, Cursor},
     sync::{
         atomic::{AtomicBool, AtomicUsize, Ordering::SeqCst},
         Arc,
@@ -179,6 +179,7 @@ impl Extractor {
     }
 
     pub fn close_book(&self, id: i64) {
+        crate::pipeline::scheduler().cancel_book(id);
         let mut st = self.st.lock();
         st.books.remove(&id);
         if st.win.map(|w| w.book) == Some(id) {
@@ -217,6 +218,7 @@ impl Extractor {
             return Ok(());
         }
         st.win = Some(w);
+        crate::pipeline::note_visible(w.book);
         let (lo, hi) = w.range(n);
 
         // 1) re-prioritise and cancel: drain the (small) heap, keep what is still wanted
@@ -318,7 +320,16 @@ impl Extractor {
                     self.cv.wait(&mut st);
                 }
             };
-            let res = self.process(job.key, &slot, &book, &mut zip);
+            let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                self.process(job.key, &slot, &book, &mut zip)
+            }));
+            let res = match panicked {
+                Ok(r) => r,
+                Err(_) => {
+                    zip = None;
+                    Err(ReaderError::Corrupt("该页异常，已跳过".into()))
+                }
+            };
             if let Err(err) = &res {
                 if matches!(
                     err,
@@ -358,6 +369,8 @@ impl Extractor {
         if let Some(p) = self.cache.get(&key) {
             return Ok(p);
         } // sibling slice already produced it
+        // Page reads outrank thumbnail generation and folder/archive scans.
+        let _fg = crate::pipeline::enter_foreground();
         let (_, idx, variant) = key;
         let page = book
             .pages
@@ -369,6 +382,12 @@ impl Extractor {
         } // phase check: jumped away
 
         if variant == 0 && !page.is_slice() {
+            if crate::pipeline::should_downscale(page.w, page.h, raw.len()) {
+                let _decode_slot = acquire_decode_slot();
+                let img = crate::pipeline::downscale_huge(decode(&raw)?);
+                let (bytes, ext) = encode(&img)?;
+                return self.store(key, ext, &bytes);
+            }
             // fast path: store as-is. The protocol serves these bytes; nothing is base64.
             let (_, ext) = sniff(&raw)
                 .ok_or_else(|| ReaderError::Corrupt("not a recognised image".into()))?;
@@ -425,24 +444,30 @@ fn read_entry(
 ) -> Result<Vec<u8>, ReaderError> {
     // Appended/merged pages carry their own source file (see model::PageMeta).
     if let Some(p) = &page.src_path {
-        return Ok(std::fs::read(p)?);
+        return crate::pipeline::read_file_capped(std::path::Path::new(p));
     }
     match book.kind {
         SourceKind::Zip => {
             if zip.as_ref().map(|(id, _)| *id) != Some(book.id) {
                 *zip = Some((book.id, scan::open_zip(&book.path)?));
             }
-            let ar = &mut zip.as_mut().unwrap().1;
-            let mut e = ar.by_index(page.entry as usize)?;
-            if e.size() > scan::MAX_ENTRY {
-                return Err(ReaderError::Corrupt("entry too large".into()));
+            let read = {
+                let ar = &mut zip.as_mut().unwrap().1;
+                match ar.by_index(page.entry as usize) {
+                    Ok(mut e) => {
+                        let claimed = e.size();
+                        crate::pipeline::read_capped(&mut e, claimed, scan::MAX_ENTRY)
+                    }
+                    Err(err) => Err(err.into()),
+                }
+            };
+            if read.is_err() {
+                *zip = None;
             }
-            let mut buf = Vec::with_capacity(e.size() as usize);
-            e.read_to_end(&mut buf)?; // CRC checked by the zip crate at EOF
-            Ok(buf)
+            read
         }
-        SourceKind::Folder => Ok(std::fs::read(book.path.join(&page.name))?),
-        SourceKind::Images => Ok(std::fs::read(&page.name)?),
+        SourceKind::Folder => crate::pipeline::read_file_capped(&book.path.join(&page.name)),
+        SourceKind::Images => crate::pipeline::read_file_capped(std::path::Path::new(&page.name)),
     }
 }
 
@@ -494,12 +519,7 @@ fn acquire_decode_slot() -> DecodeSlot {
 }
 
 fn decode(raw: &[u8]) -> Result<image::DynamicImage, ReaderError> {
-    let mut r = image::ImageReader::new(Cursor::new(raw)).with_guessed_format()?;
-    let mut lim = image::Limits::default();
-    // One decoded page, not a gigabyte. The slot above caps how many of these exist.
-    lim.max_alloc = Some(384 * 1024 * 1024);
-    r.limits(lim);
-    Ok(r.decode()?)
+    crate::pipeline::decode_limited(raw)
 }
 fn shrink_to(img: image::DynamicImage, variant: u16) -> image::DynamicImage {
     if variant == 0 || img.width() <= variant as u32 {

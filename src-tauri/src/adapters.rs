@@ -12,6 +12,7 @@ use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
+use tauri::{AppHandle, Emitter};
 
 /// Same list as `crate::IMAGE_EXTS` (dialog filters and the reader sniff path).
 fn is_import_image(p: &Path) -> bool {
@@ -190,37 +191,55 @@ fn import_zip(
         res.skipped += 1;
         return;
     }
-    let file = match std::fs::File::open(path) {
-        Ok(f) => f,
-        Err(e) => {
-            res.failed.push(ImportFailure {
-                path: path.to_string(),
-                reason: format!("无法打开压缩包：{e}"),
-            });
-            return;
-        }
-    };
-    let mut ar = match zip::ZipArchive::new(file) {
-        Ok(a) => a,
-        Err(e) => {
-            res.failed.push(ImportFailure {
-                path: path.to_string(),
-                reason: format!("压缩包无法读取：{e}"),
-            });
-            return;
-        }
-    };
     let mut page_count: i64 = 0;
     let mut total_size: i64 = 0;
-    for i in 0..ar.len() {
-        let Ok(f) = ar.by_index(i) else { continue };
-        if f.is_dir() {
-            continue;
+    // Central directory only. by_index seeks to every local header.
+    let counted = match crate::pipeline::zip_central_index(Path::new(path)) {
+        Ok(entries) => {
+            for e in &entries {
+                if e.dir {
+                    continue;
+                }
+                total_size += e.bytes as i64;
+                if is_import_image(Path::new(&e.name)) {
+                    page_count += 1;
+                }
+            }
+            true
         }
-        // v0.3.x semantics: total_size sums ALL entries; page_count counts images only.
-        total_size += f.size() as i64;
-        if is_import_image(Path::new(f.name())) {
-            page_count += 1;
+        Err(_) => false,
+    };
+    if !counted {
+        let file = match std::fs::File::open(path) {
+            Ok(f) => f,
+            Err(e) => {
+                res.failed.push(ImportFailure {
+                    path: path.to_string(),
+                    reason: format!("无法打开压缩包：{e}"),
+                });
+                return;
+            }
+        };
+        let mut ar = match zip::ZipArchive::new(file) {
+            Ok(a) => a,
+            Err(e) => {
+                res.failed.push(ImportFailure {
+                    path: path.to_string(),
+                    reason: format!("压缩包无法读取：{e}"),
+                });
+                return;
+            }
+        };
+        for i in 0..ar.len() {
+            let Ok(f) = ar.by_index(i) else { continue };
+            if f.is_dir() {
+                continue;
+            }
+            // v0.3.x semantics: total_size sums ALL entries; page_count counts images only.
+            total_size += f.size() as i64;
+            if is_import_image(Path::new(f.name())) {
+                page_count += 1;
+            }
         }
     }
     if page_count == 0 {
@@ -298,15 +317,31 @@ fn import_folder(
     }
 }
 
+#[derive(Clone, Serialize)]
+struct ImportProgress {
+    index: usize,
+    total: usize,
+    path: String,
+}
+
 /// Rust-side import mirroring the verified v0.3.x frontend pipeline
 /// (INTEGRATION_NOTES §2.3): zip/cbz paths become zip books, folder paths
 /// become folder books, loose image files accumulate into ONE `images` book
 /// named `<first stem> 等<N>张` with total_size 0. Exact (kind, paths)
 /// duplicates count as skipped. folder_id (JS `folderId`) sets shelf.folder_id.
-#[tauri::command]
-pub fn import_paths(
+///
+/// One path that panics is recorded as a failed row. The rest of the batch continues.
+pub fn import_paths_blocking(
     paths: Vec<String>,
     folder_id: Option<i64>,
+) -> Result<ImportResult, String> {
+    import_paths_inner(paths, folder_id, |_, _| {})
+}
+
+fn import_paths_inner(
+    paths: Vec<String>,
+    folder_id: Option<i64>,
+    mut on_progress: impl FnMut(usize, &str),
 ) -> Result<ImportResult, String> {
     let conn = crate::db_conn()?;
     let mut res = ImportResult {
@@ -316,39 +351,28 @@ pub fn import_paths(
     };
     let mut loose: Vec<String> = Vec::new();
     let mut fresh_folders: Vec<i64> = Vec::new();
-    for raw in &paths {
-        let p = PathBuf::from(raw);
-        if p.is_dir() {
-            if let Some(id) = import_folder(&conn, raw, folder_id, &mut res) {
-                fresh_folders.push(id);
-            }
-        } else if crate::kind_of(&p) == Some("zip") {
-            import_zip(&conn, raw, folder_id, &mut res);
-        } else if crate::kind_of(&p) == Some("archive") {
-            match crate::archives::import_unpack_to_folder(raw) {
-                Ok(Some(folder)) => {
-                    if let Some(id) =
-                        import_folder(&conn, &folder.to_string_lossy(), folder_id, &mut res)
-                    {
-                        fresh_folders.push(id);
-                    }
+    for (index, raw) in paths.iter().enumerate() {
+        crate::pipeline::wait_foreground_idle();
+        on_progress(index, raw);
+        let step = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            import_one(&conn, raw, folder_id)
+        }));
+        match step {
+            Ok((one, folder)) => {
+                res.added += one.added;
+                res.skipped += one.skipped;
+                res.failed.extend(one.failed);
+                if let Some(id) = folder {
+                    fresh_folders.push(id);
                 }
-                Ok(None) => res.failed.push(ImportFailure {
-                    path: raw.clone(),
-                    reason: "无法识别的压缩包".into(),
-                }),
-                Err(e) => res.failed.push(ImportFailure {
-                    path: raw.clone(),
-                    reason: e,
-                }),
+                if one.loose {
+                    loose.push(raw.clone());
+                }
             }
-        } else if is_import_image(&p) {
-            loose.push(raw.clone());
-        } else {
-            res.failed.push(ImportFailure {
+            Err(_) => res.failed.push(ImportFailure {
                 path: raw.clone(),
-                reason: "不支持的格式（可用：文件夹、图片、ZIP/CBZ、7Z/CB7、RAR/CBR）".to_string(),
-            });
+                reason: "该文件异常，已跳过".into(),
+            }),
         }
     }
     if !loose.is_empty() {
@@ -387,6 +411,70 @@ pub fn import_paths(
     }
     let _ = crate::merge::absorb_new(&conn, &fresh_folders);
     Ok(res)
+}
+
+struct OneImport {
+    added: i64,
+    skipped: i64,
+    failed: Vec<ImportFailure>,
+    loose: bool,
+}
+
+fn import_one(conn: &Connection, raw: &str, folder_id: Option<i64>) -> (OneImport, Option<i64>) {
+    let mut res = ImportResult { added: 0, skipped: 0, failed: Vec::new() };
+    let p = PathBuf::from(raw);
+    let mut folder = None;
+    let mut loose = false;
+    if p.is_dir() {
+        folder = import_folder(conn, raw, folder_id, &mut res);
+    } else if crate::kind_of(&p) == Some("zip") {
+        import_zip(conn, raw, folder_id, &mut res);
+    } else if crate::kind_of(&p) == Some("archive") {
+        match crate::archives::import_unpack_to_folder(raw) {
+            Ok(Some(dir)) => {
+                folder = import_folder(conn, &dir.to_string_lossy(), folder_id, &mut res);
+            }
+            Ok(None) => res.failed.push(ImportFailure {
+                path: raw.to_string(),
+                reason: "无法识别的压缩包".into(),
+            }),
+            Err(e) => res.failed.push(ImportFailure {
+                path: raw.to_string(),
+                reason: e,
+            }),
+        }
+    } else if is_import_image(&p) {
+        loose = true;
+    } else {
+        res.failed.push(ImportFailure {
+            path: raw.to_string(),
+            reason: "不支持的格式（可用：文件夹、图片、ZIP/CBZ、7Z/CB7、RAR/CBR）".to_string(),
+        });
+    }
+    (
+        OneImport { added: res.added, skipped: res.skipped, failed: res.failed, loose },
+        folder,
+    )
+}
+
+/// Off the UI thread. Emits `import-progress` as each path starts.
+#[tauri::command]
+pub async fn import_paths(
+    app: AppHandle,
+    paths: Vec<String>,
+    folder_id: Option<i64>,
+) -> Result<ImportResult, String> {
+    let total = paths.len();
+    tauri::async_runtime::spawn_blocking(move || {
+        import_paths_inner(paths, folder_id, move |index, path| {
+            let _ = app.emit(
+                "import-progress",
+                ImportProgress { index, total, path: path.to_string() },
+            );
+        })
+    })
+    .await
+    .map_err(|_| "导入时出错，已跳过异常文件".to_string())?
 }
 
 #[derive(Deserialize)]

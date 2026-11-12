@@ -156,7 +156,7 @@ function buildShellTop(opts = {}) {
   q.addEventListener('input', () => {
     if (!searchCtx.onSearch) return;
     clearTimeout(searchCtx.searchTimer);
-    searchCtx.searchTimer = setTimeout(runSearch, 80);
+    searchCtx.searchTimer = setTimeout(runSearch, 140);
   });
   q.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') {
@@ -211,6 +211,8 @@ async function loadPageModule(pathname) {
   await import(`./${stem}.js?shell=${gen}`);
 }
 
+const shellHtmlCache = new Map();
+
 async function swapShellMain(href, { historyMode = 'push' } = {}) {
   const url = new URL(href, location.href);
   if (!isShellUrl(url)) {
@@ -228,12 +230,16 @@ async function swapShellMain(href, { historyMode = 'push' } = {}) {
   navBusy = true;
   main.classList.add('is-swapping');
   try {
-    const res = await fetch(url.pathname + url.search);
-    if (!res.ok) throw new Error(String(res.status));
-    const doc = new DOMParser().parseFromString(await res.text(), 'text/html');
-    const incoming = doc.querySelector('.page-main');
-    if (!incoming) throw new Error('no main');
-    main.innerHTML = incoming.innerHTML;
+    let html = shellHtmlCache.get(url.pathname);
+    if (html == null) {
+      const res = await fetch(url.pathname);
+      if (!res.ok) throw new Error(String(res.status));
+      const doc = new DOMParser().parseFromString(await res.text(), 'text/html');
+      html = doc.querySelector('.page-main')?.innerHTML;
+      if (html == null) throw new Error('no main');
+      shellHtmlCache.set(url.pathname, html);
+    }
+    main.innerHTML = html;
     main.scrollTop = 0;
     if (historyMode === 'push') history.pushState(null, '', url.pathname + url.search + url.hash);
     else if (historyMode === 'replace') history.replaceState(null, '', url.pathname + url.search + url.hash);

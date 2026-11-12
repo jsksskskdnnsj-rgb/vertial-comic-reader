@@ -59,6 +59,59 @@ export function virtualsNear(layout, scrollTop, viewH, nearVh) {
   for (let i = i0; i <= i1 && i < layout.n; i++) out.push(i);
   return out;
 }
+// How long a Ctrl+wheel burst stays on the composited scale before one real layout.
+export const ZOOM_COMMIT_MS = 140;
+export const PAGE_WINDOW_CAP = 96;
+export function clampZoom(z) {
+  const n = Number(z);
+  if (!Number.isFinite(n)) return 1;
+  return Math.min(3, Math.max(0.5, Math.round(n * 100) / 100));
+}
+/** CSS scale that shows `live` while the laid-out zoom is still `committed`. */
+export function zoomPreviewScale(committed, live) {
+  const base = committed > 0 && Number.isFinite(committed) ? committed : 1;
+  return clampZoom(live) / base;
+}
+/** Sizer Y that stays under the pointer. Fixed for the whole gesture. */
+export function zoomOriginY(scrollTop, anchorY) {
+  return Math.max(0, (Number(scrollTop) || 0) + (Number(anchorY) || 0));
+}
+/**
+ * Virtual pages that need a DOM box. `viewH <= 0` (unmeasured, or a unit test)
+ * keeps every page. Otherwise the window is the viewport plus `padVh` screens,
+ * capped so a book of tiny slices cannot mount the whole list.
+ */
+export function pageWindow(layout, scrollTop, viewH, padVh) {
+  const n = layout?.n | 0;
+  if (!n) return { from: 0, to: -1, count: 0 };
+  if (!(viewH > 0)) return { from: 0, to: n - 1, count: n };
+  const pad = Math.max(0, Number(padVh) || 0) * viewH;
+  const y0 = Math.max(0, (Number(scrollTop) || 0) - pad);
+  const y1 = (Number(scrollTop) || 0) + viewH + pad;
+  let from = layout.findVirtual(y0);
+  let to = layout.findVirtual(Math.max(0, y1));
+  from = Math.max(0, from - 1);
+  to = Math.min(n - 1, to + 1);
+  if (to < from) to = from;
+  if (to - from + 1 > PAGE_WINDOW_CAP) {
+    const mid = layout.findVirtual(Math.max(0, (Number(scrollTop) || 0) + viewH / 2));
+    from = Math.max(0, mid - Math.floor(PAGE_WINDOW_CAP / 2));
+    to = Math.min(n - 1, from + PAGE_WINDOW_CAP - 1);
+    from = Math.max(0, to - PAGE_WINDOW_CAP + 1);
+  }
+  return { from, to, count: to - from + 1 };
+}
+/** Dev timing. Always `console.debug`. `localStorage mh-perf=1` also prints info. */
+export function perfLog(phase, t0, extra) {
+  const ms = Math.round((performance.now() - t0) * 10) / 10;
+  const tail = extra ? ' ' + JSON.stringify(extra) : '';
+  const line = `[mh-perf] ${phase} ${ms}ms${tail}`;
+  console.debug(line);
+  try {
+    if (globalThis.localStorage?.getItem('mh-perf') === '1') console.info(line);
+  } catch { /* private mode */ }
+  return ms;
+}
 const CFG = {
   prefetchMinGapMs: 40,        // trailing send still lets the final position win
   saveDebounceMs: 1500, saveMaxWaitMs: 4000,
@@ -164,49 +217,101 @@ class Strip {
     this.scroller.append(this.sizer);
     host.append(this.scroller);
     this.layout = new Layout();
-    this.pages = [];
+    this.pages = [];               // sparse: only the live window has elements
+    this.padVh = 4.2;              // matches PERF.balanced.farVh; open() copies the active preset
+    this.onBox = null;             // (index, el, 'add'|'remove') — ImageWindow observes live boxes
+    this.layoutGen = 0;
   }
   get viewW() { return this.scroller.clientWidth; }  // excludes the scrollbar
   get viewH() { return this.scroller.clientHeight; }
+  get liveCount() {
+    let n = 0;
+    for (let i = 0; i < this.pages.length; i++) if (this.pages[i]) n++;
+    return n;
+  }
 
   build(dims, src) {
     this.layout.setBook(dims, src);
-    const frag = document.createDocumentFragment();
-    this.pages = dims.map((_, i) => {
-      const d = el('div', 'page'); d.dataset.i = i;
-      const label = el('span', 'page-label'); label.textContent = src[i] + 1; // faint number while loading
-      d.append(label); frag.append(d); return d;
-    });
-    this.sizer.replaceChildren(frag);
+    this.pages = new Array(dims.length);
+    this.layoutGen = 0;
+    this.sizer.replaceChildren();
   }
 
   apply(params) {
-    const L = this.layout;
-    L.compute(params);
-    this.sizer.style.width = L.sizerW + 'px';
-    this.sizer.style.height = L.sizerH + 'px';
-    for (let i = 0; i < L.n; i++) {
-      const s = this.pages[i].style;
-      const cover = pageSeamCover(L, i);
-      s.left = (L.vLeft[i] ?? L.left) + 'px';
-      s.width = (L.vW[i] || L.colW) + 'px';
-      // One extra pixel upward, painted by this later page, hides the hairline
-      // the compositor flashes between abutting boxes. Gap > 0 does not abut.
-      s.top = (L.vTop[i] - cover) + 'px';
-      s.height = (L.vH[i] + cover) + 'px';
-    }
+    this.layout.compute(params);
+    this.layoutGen = (this.layoutGen + 1) | 0;
+    this.sizer.style.width = this.layout.sizerW + 'px';
+    this.sizer.style.height = this.layout.sizerH + 'px';
+    this.syncBoxes();
   }
 
   // Re-layout while keeping the same (page, frac) under viewport line `anchorY`
   // (0 = top edge: resize / dim fixes; pointer y: Ctrl+wheel zoom).
+  // Scroll is restored before boxes are created, so a resume jump does not
+  // mount the pages at the top and then throw them away.
   relayout(params, anchorY = 0) {
     const sc = this.scroller;
     const pos = this.layout.getPosition(sc.scrollTop + anchorY);   // 1. read BEFORE touching anything
-    this.apply(params);                                            // 2. new tops/heights/sizer
+    this.layout.compute(params);
+    this.layoutGen = (this.layoutGen + 1) | 0;
+    this.sizer.style.width = this.layout.sizerW + 'px';
+    this.sizer.style.height = this.layout.sizerH + 'px';
     // The scroll event this assignment fires is not the reader scrolling.
     this.ignoreChromeScroll = true;
-    sc.scrollTop = this.layout.posToY(pos) - anchorY;              // 3. restore in the same task
+    sc.scrollTop = this.layout.posToY(pos) - anchorY;              // 2. restore in the same task
     this.ignoreChromeScroll = false;
+    this.syncBoxes();                                              // 3. boxes at the restored scroll
+  }
+
+  syncBoxes() {
+    const win = pageWindow(this.layout, this.scroller.scrollTop, this.viewH, this.padVh);
+    for (let i = 0; i < this.pages.length; i++) {
+      if (i < win.from || i > win.to) this.dropBox(i);
+    }
+    for (let i = win.from; i <= win.to; i++) this.ensureBox(i);
+  }
+
+  ensureBox(i) {
+    if (i < 0 || i >= this.layout.n) return null;
+    let d = this.pages[i];
+    if (!d) {
+      d = el('div', 'page');
+      d.dataset.i = i;
+      const label = el('span', 'page-label');
+      label.textContent = (this.layout.src[i] ?? i) + 1; // faint number while loading
+      d.append(label);
+      this.pages[i] = d;
+      let before = null;
+      for (let j = i + 1; j < this.pages.length; j++) {
+        if (this.pages[j]) { before = this.pages[j]; break; }
+      }
+      if (before) this.sizer.insertBefore(d, before);
+      else this.sizer.append(d);
+      this.onBox?.(i, d, 'add');
+    }
+    if (d._placeGen !== this.layoutGen) this.placeBox(i, d);
+    return d;
+  }
+
+  dropBox(i) {
+    const d = this.pages[i];
+    if (!d) return;
+    this.onBox?.(i, d, 'remove');
+    d.remove();
+    this.pages[i] = null;
+  }
+
+  placeBox(i, d) {
+    const L = this.layout;
+    const s = d.style;
+    const cover = pageSeamCover(L, i);
+    s.left = (L.vLeft[i] ?? L.left) + 'px';
+    s.width = (L.vW[i] || L.colW) + 'px';
+    // One extra pixel upward, painted by this later page, hides the hairline
+    // the compositor flashes between abutting boxes. Gap > 0 does not abut.
+    s.top = (L.vTop[i] - cover) + 'px';
+    s.height = (L.vH[i] + cover) + 'px';
+    d._placeGen = this.layoutGen;
   }
 }
 
@@ -239,10 +344,15 @@ class ViewportTracker {
 
     prefetcher.update(this.r.computeWindow(y, this.dir));
     saver.mark(pos, atEnd);
+    if (sc.isConnected) strip.syncBoxes();                     // mount the window around the viewport, not the whole book
     iw.flush();                                                // nearest pages, including while the strip is still moving
     iw.warmAhead(this.dir);
   }
-  destroy() { this.r.strip.scroller.removeEventListener('scroll', this.onScroll); }
+  destroy() {
+    cancelAnimationFrame(this.raf);
+    this.raf = 0;
+    this.r.strip.scroller.removeEventListener('scroll', this.onScroll);
+  }
 }
 
 // ---------------------------------------------------------------- ImageWindow
@@ -261,7 +371,22 @@ class ImageWindow {
     const root = reader.strip.scroller;
     this.nearIO = new IntersectionObserver(es => this.onNear(es), { root, rootMargin: rootMargin(perf.nearVh), threshold: 0 });
     this.farIO  = new IntersectionObserver(es => this.onFar(es),  { root, rootMargin: rootMargin(perf.farVh), threshold: 0 });
-    for (const p of reader.strip.pages) { this.nearIO.observe(p); this.farIO.observe(p); }
+    reader.strip.onBox = (i, node, op) => this.onBox(i, node, op);
+    for (const p of reader.strip.pages) {
+      if (p) { this.nearIO.observe(p); this.farIO.observe(p); }
+    }
+  }
+
+  onBox(i, node, op) {
+    if (op === 'add') {
+      this.nearIO.observe(node);
+      this.farIO.observe(node);
+      return;
+    }
+    this.nearIO.unobserve(node);
+    this.farIO.unobserve(node);
+    this.near.delete(i);
+    this.release(i);
   }
 
   onNear(entries) {
@@ -341,7 +466,8 @@ class ImageWindow {
 
   mount(i, urgent = false) {
     if (this.mounted.has(i)) return;
-    const box = this.r.strip.pages[i];
+    const box = this.r.strip.ensureBox(i);
+    if (!box) return;
     let img = this.takeWarm(i);
     if (!img) {
       img = new Image();
@@ -399,7 +525,7 @@ class ImageWindow {
     this.mounted.delete(i);
     rec.img.removeAttribute('src');        // cancels an in-flight request and frees the bitmap
     rec.img.remove();
-    this.r.strip.pages[i].classList.remove('failed');
+    this.r.strip.pages[i]?.classList.remove('failed');
   }
 
   async onError(i, rec) {
@@ -415,7 +541,9 @@ class ImageWindow {
     // Permanent: ask the protocol WHY (img.onerror gives no body), show it in the placeholder.
     let why = 'failed to load';
     try { const r = await fetch(this.url(i)); if (!r.ok) { const j = await r.json(); why = j.code || why; } } catch {}
-    box.classList.add('failed'); box.dataset.error = why;   // CSS: .page.failed::after{content:"Page " attr(data-n) " - " attr(data-error)}
+    const live = this.r.strip.pages[i];
+    if (!live) return;
+    live.classList.add('failed'); live.dataset.error = why;   // CSS: .page.failed::after{content:"Page " attr(data-n) " - " attr(data-error)}
     rec.img.remove();
   }
 
@@ -550,6 +678,11 @@ export class Reader {
     this._glideWrittenY = 0;
     this._glideWrittenX = 0;
     this._wheelAt = 0;
+    this._openToken = 0;
+    this._zoom = null;          // { base, live, anchorY, originY, raf, timer } while a gesture is composited
+    this._layoutRaf = 0;
+    this._layoutAnchor = 0;
+    this._inLayout = false;
   }
 
   layoutParams() { return { viewW: this.strip.viewW, ...this.params }; }
@@ -557,24 +690,47 @@ export class Reader {
   // opts: perf, widthPct, gap, startPos ({page,frac}: overrides the saved resume point),
   //       beforeMount(info) -> false (cancel) | {perf} | undefined   (used for the large-book warning)
   async open(bookId, { perf = 'balanced', widthPct = 100, gap = 0, spread = false, startPos = null, beforeMount = null, wheelSpeed = WHEEL_GEAR_DEFAULT } = {}) {
+    const token = ++this._openToken;
+    const superseded = () => {
+      const err = { code: 'superseded', detail: 'superseded' };
+      throw err;
+    };
     this.perfName = perf; this.perf = PERF[perf];
     this.wheelGear = wheelGear(wheelSpeed);
     Object.assign(this.params, { widthPct: clampWidthPct(widthPct), gap, spread: !!spread });
-    this.info = await api.openBook(bookId);                 // { bookId, sig, dims, src, realPages, chapters, resume, ... }
+    const tOpen = performance.now();
+    let info;
+    try {
+      info = await api.openBook(bookId);            // { bookId, sig, dims, src, realPages, chapters, resume, ... }
+    } catch (e) {
+      if (token !== this._openToken || e?.detail === 'superseded') superseded();
+      throw e;
+    }
+    if (token !== this._openToken) superseded();
+    this.info = info;
+    perfLog('openBook', tOpen, { bookId, pages: info?.realPages });
     if (beforeMount) {
       const r = await beforeMount(this.info);
+      if (token !== this._openToken) superseded();
       if (r === false) { await api.closeBook(bookId).catch(() => {}); throw { code: 'cancelled' }; }
       if (r?.perf) { this.perfName = r.perf; this.perf = PERF[r.perf]; }
     }
+    if (token !== this._openToken) superseded();
     this.perf = tunePerf(this.perf, this.info?.realPages);
+    this.strip.padVh = this.perf.farVh || 4.2;
     const { dims, src } = this.info, resume = startPos ?? this.info.resume;
 
+    const tDom = performance.now();
     this.strip.build(dims, src);
-    this.strip.apply(this.layoutParams());
     const sc = this.strip.scroller, L = this.strip.layout;
+    L.compute(this.layoutParams());
+    this.strip.sizer.style.width = L.sizerW + 'px';
+    this.strip.sizer.style.height = L.sizerH + 'px';
     sc.scrollTop = resume ? L.posToY(resume) : 0;           // exact resume, before any image is requested
-
-    this.imageWindow = new ImageWindow(this, this.perf);
+    this.imageWindow = new ImageWindow(this, this.perf);    // onBox is live before the first boxes exist
+    this.strip.layoutGen = 1;
+    this.strip.syncBoxes();
+    perfLog('firstBoxes', tDom, { boxes: this.strip.liveCount, pages: L.n });
     this.prefetcher = new Prefetcher(this);
     this.saver = new ProgressSaver(bookId);
     this.tracker = new ViewportTracker(this);
@@ -585,10 +741,12 @@ export class Reader {
     this.tracker.tick();
 
     // width changes -> relayout with (page, frac) preserved. Height-only changes need nothing.
+    // A zoom preview is committed first so the transform and the new column are not stacked.
     let lastW = this.strip.viewW;
     this.ro = new ResizeObserver(() => {
+      if (this._inLayout) return;
       const w = this.strip.viewW; if (w === lastW) return; lastW = w;
-      this.strip.relayout(this.layoutParams());             // ResizeObserver runs before paint: no flash
+      this.relayoutNow(0);
     });
     this.ro.observe(sc);
 
@@ -628,7 +786,12 @@ export class Reader {
   stepPage(dir) { const p = this.topPos(); const to = clamp(p.page + dir, 0, this.strip.layout.realPages - 1); this.jumpTo({ page: to, frac: 0 }, { smooth: true }); }
   refresh() { this.tracker?.tick(); }
   setRtl(on) { this.rtl = !!on; }
-  setFit() { this.params.zoom = 1; this.params.widthPct = 100; this.strip.relayout(this.layoutParams()); }   // "fit to panel"
+  setFit() {                                                                   // "fit to panel"
+    this.dismissZoomPreview();
+    this.params.zoom = 1;
+    this.params.widthPct = 100;
+    this.relayoutNow(0);
+  }
   keysEnabled = true;
 
   emitPosition(p) {
@@ -724,7 +887,13 @@ export class Reader {
   onWheel(e) {
     if (e.ctrlKey) {
       e.preventDefault();
-      this.setZoom(this.params.zoom * (e.deltaY < 0 ? 1.1 : 1 / 1.1), e.clientY - this.strip.scroller.getBoundingClientRect().top);
+      const factor = e.deltaY < 0 ? 1.1 : 1 / 1.1;
+      if (!this._zoom) {
+        const anchorY = e.clientY - this.strip.scroller.getBoundingClientRect().top;
+        this.previewZoom((this.params.zoom || 1) * factor, anchorY);
+      } else {
+        this.previewZoom(this._zoom.live * factor, this._zoom.anchorY);
+      }
       return;
     }
     this.stopKeyScroll();
@@ -829,16 +998,101 @@ export class Reader {
     cancelAnimationFrame(hold.raf);
     if (hold.onUp) window.removeEventListener('keyup', hold.onUp);
   }
-  setZoom(z, anchorY = 0) {
-    this.params.zoom = clamp(Math.round(z * 100) / 100, 0.5, 3);
-    this.strip.relayout(this.layoutParams(), anchorY);
+  // Ctrl+wheel: one transform per frame. The origin stays at the pointer from the
+  // first event of the burst. Layout (every page's top/height) runs once, after idle.
+  previewZoom(nextZoom, anchorY) {
+    const live = clampZoom(nextZoom);
+    if (!this._zoom) {
+      const sc = this.strip.scroller;
+      this._zoom = {
+        base: this.params.zoom || 1,
+        live,
+        anchorY,
+        originY: zoomOriginY(sc.scrollTop, anchorY),
+        raf: 0,
+        timer: 0,
+      };
+    } else {
+      this._zoom.live = live;
+    }
+    const z = this._zoom;
+    if (!z.raf) z.raf = requestAnimationFrame(() => this.paintZoom());
+    clearTimeout(z.timer);
+    z.timer = setTimeout(() => this.commitZoom(), ZOOM_COMMIT_MS);
   }
-  setWidthPct(pct) { this.params.widthPct = clampWidthPct(pct); this.strip.relayout(this.layoutParams()); }
-  setGap(px)       { this.params.gap = px;                       this.strip.relayout(this.layoutParams()); }
+  paintZoom() {
+    const z = this._zoom;
+    if (!z) return;
+    z.raf = 0;
+    const sizer = this.strip.sizer;
+    sizer.classList.add('zoom-live');
+    sizer.style.transformOrigin = `50% ${z.originY}px`;
+    sizer.style.transform = `scale(${zoomPreviewScale(z.base, z.live)})`;
+  }
+  clearZoomStyle() {
+    const sizer = this.strip?.sizer;
+    if (!sizer) return;
+    sizer.style.transform = '';
+    sizer.style.transformOrigin = '';
+    sizer.classList.remove('zoom-live');
+  }
+  dismissZoomPreview() {
+    const z = this._zoom;
+    if (!z) return;
+    cancelAnimationFrame(z.raf);
+    clearTimeout(z.timer);
+    this._zoom = null;
+    this.clearZoomStyle();
+  }
+  commitZoom() {
+    const z = this._zoom;
+    if (!z) return;
+    const anchor = z.anchorY;
+    const live = z.live;
+    const same = live === this.params.zoom;
+    cancelAnimationFrame(z.raf);
+    clearTimeout(z.timer);
+    this._zoom = null;
+    this.clearZoomStyle();
+    if (same) return;
+    this.params.zoom = live;
+    this.relayoutNow(anchor);
+  }
+  relayoutNow(anchorY = 0) {
+    if (this._layoutRaf) {
+      cancelAnimationFrame(this._layoutRaf);
+      this._layoutRaf = 0;
+    }
+    if (this._zoom) {
+      const z = this._zoom;
+      cancelAnimationFrame(z.raf);
+      clearTimeout(z.timer);
+      this._zoom = null;
+      this.clearZoomStyle();
+      this.params.zoom = z.live;
+      anchorY = z.anchorY;
+    }
+    if (this._inLayout) return;
+    this._inLayout = true;
+    try { this.strip.relayout(this.layoutParams(), anchorY); }
+    finally { this._inLayout = false; }
+  }
+  queueRelayout(anchorY = 0) {
+    this._layoutAnchor = anchorY;
+    if (this._layoutRaf) return;
+    this._layoutRaf = requestAnimationFrame(() => this.relayoutNow(this._layoutAnchor || 0));
+  }
+  setZoom(z, anchorY = 0) {
+    this.dismissZoomPreview();
+    this.params.zoom = clampZoom(z);
+    this.relayoutNow(anchorY);
+  }
+  setWidthPct(pct) { this.params.widthPct = clampWidthPct(pct); this.queueRelayout(0); }
+  setGap(px)       { this.params.gap = px; this.relayoutNow(0); }
   setSpread(on, spreadGap = this.params.spreadGap) {
     this.params.spread = !!on;
     this.params.spreadGap = spreadGap;
-    this.strip.relayout(this.layoutParams());
+    this.relayoutNow(0);
   }
   setCrop(opts = {}) {
     Object.assign(this.crop, opts);
@@ -856,7 +1110,7 @@ export class Reader {
     if (this.fixRaf) return;
     this.fixRaf = requestAnimationFrame(() => {
       this.fixRaf = 0;
-      this.strip.relayout(this.layoutParams());              // anchored on viewport top (page, frac)
+      this.relayoutNow(0);                                    // anchored on viewport top (page, frac)
       const batch = [...this.fixes.values()]; this.fixes.clear();
       if (batch.length) api.fixDims(this.info.bookId, batch).catch(() => {});
     });
@@ -901,6 +1155,9 @@ export class Reader {
   }
 
   async close() {
+    this._openToken = (this._openToken || 0) + 1;
+    this.dismissZoomPreview();
+    if (this._layoutRaf) { cancelAnimationFrame(this._layoutRaf); this._layoutRaf = 0; }
     this.stopKeyScroll();
     this.stopGlide();
     await this.saver?.flush();

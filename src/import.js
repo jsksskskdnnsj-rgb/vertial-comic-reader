@@ -15,6 +15,7 @@ import { orderByRange, suggestName, compareSources, baseName } from './merge-ord
 import { reviewGroups } from './same-book.js';
 import { inspectFolder, looksLikeFile, mapPool } from './folder-scan.js';
 import { IMAGE_EXTS, ZIP_EXTS, archiveAndImageFilters } from './image-exts.js';
+import { markDirty } from './data-cache.js';
 
 bootPage('import');
 mountShell('import');
@@ -184,6 +185,14 @@ $('goBtn').addEventListener('click', async () => {
   $('summary').textContent = t('imp.working');
   $('failList').innerHTML = '';
   $('openNew').hidden = true;
+  let stopProgress = null;
+  if (T.event?.listen) {
+    stopProgress = await T.event.listen('import-progress', (ev) => {
+      const p = ev.payload || {};
+      if (!p.total) return;
+      $('summary').textContent = `${t('imp.working')} ${Number(p.index) + 1}/${p.total}`;
+    }).catch(() => null);
+  }
   try {
     if (merge) {
       const name = $('mergeName').value.trim() || null;
@@ -211,11 +220,13 @@ $('goBtn').addEventListener('click', async () => {
     manualOrder = false;
     nameEdited = false;
     $('mergeName').value = '';
+    markDirty();
     render();
   } catch (e) {
     $('summary').textContent = '';
     toast(String(e?.detail ?? e?.message ?? e));
   } finally {
+    if (typeof stopProgress === 'function') stopProgress();
     $('goBtn').disabled = false;
     $('goBtn').classList.remove('is-busy');
     $('goBtn').removeAttribute('aria-busy');

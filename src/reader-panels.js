@@ -29,22 +29,70 @@ export class HistoryStack {
   updateCurrent({ page, realPages, epText }) {
     const c = this.host.querySelector('.hcard.is-current'); if (!c) return;
     const pct = Math.min(100, Math.round(((page + 1) / Math.max(1, realPages)) * 100));
-    c.querySelector('[data-role="bar"]').style.width = pct + '%'; c.querySelector('[data-role="pct"]').textContent = pct + '%'; c.querySelector('[data-role="where"]').textContent = epText;
+    const width = pct + '%';
+    const bar = c.querySelector('[data-role="bar"]');
+    const pctEl = c.querySelector('[data-role="pct"]');
+    const where = c.querySelector('[data-role="where"]');
+    if (bar && bar.style.width !== width) bar.style.width = width;
+    if (pctEl && pctEl.textContent !== width) pctEl.textContent = width;
+    if (where && where.textContent !== epText) where.textContent = epText;
   }
 }
 
 /** deps: { thumb(page) -> url, onJump(page) }. Shows pages [cur-2 .. cur+4]. */
 export class ThumbStrip {
-  constructor(host, deps) { this.host = host; this.d = deps; this.cur = -1; host.addEventListener('click', (e) => { const b = e.target.closest('button'); if (b) this.d.onJump(Number(b.dataset.page)); }); }
-  update(page, realPages) {
-    if (page === this.cur) return; this.cur = page;
-    if (!(realPages > 0)) { this.host.innerHTML = ''; return; }   // not ready / empty book: skip thumbs, don't throw
-    const from = Math.max(0, Math.min(page - 2, realPages - 7)), to = Math.min(realPages - 1, from + 6), out = [];
+  constructor(host, deps) { this.host = host; this.d = deps; this.cur = -1; this._key = ''; host.addEventListener('click', (e) => { const b = e.target.closest('button'); if (b) this.d.onJump(Number(b.dataset.page)); }); }
+  _range(page, realPages) {
+    const from = Math.max(0, Math.min(page - 2, realPages - 7));
+    const to = Math.min(realPages - 1, from + 6);
+    return { from, to, key: `${from}:${to}:${realPages}` };
+  }
+  _html(from, to, page) {
+    const out = [];
     for (let p = from; p <= to; p++) {
       const src = this.d.thumb(p) || '';
-      out.push(`<button data-page="${p}" class="${p === page ? 'is-active' : ''}" aria-label="${p + 1}"><img alt="" loading="lazy" src="${src}"></button>`);
+      out.push(`<button data-page="${p}" class="${p === page ? 'is-active' : ''}" aria-label="${p + 1}"><img alt="" loading="lazy" decoding="async" src="${src}"></button>`);
     }
-    this.host.innerHTML = out.join('');
+    return out.join('');
   }
-  reset() { this.cur = -1; this.host.innerHTML = ''; }
+  update(page, realPages) {
+    if (!(realPages > 0)) { this.reset(); return; }   // not ready / empty book: skip thumbs, don't throw
+    const { from, to, key } = this._range(page, realPages);
+    if (page === this.cur && this._key === key) return;
+    const reuse = typeof document !== 'undefined' && typeof this.host.querySelector === 'function';
+    if (reuse && this._key === key) {
+      this.cur = page;
+      for (const b of this.host.querySelectorAll('button')) b.classList.toggle('is-active', Number(b.dataset.page) === page);
+      return;
+    }
+    if (reuse) {
+      const have = new Map();
+      for (const b of this.host.querySelectorAll('button')) have.set(Number(b.dataset.page), b);
+      const frag = document.createDocumentFragment();
+      for (let p = from; p <= to; p++) {
+        let b = have.get(p);
+        if (!b) {
+          b = document.createElement('button');
+          b.dataset.page = String(p);
+          b.setAttribute('aria-label', String(p + 1));
+          const img = document.createElement('img');
+          img.alt = '';
+          img.loading = 'lazy';
+          img.decoding = 'async';
+          const src = this.d.thumb(p) || '';
+          if (src) img.src = src;
+          b.append(img);
+        }
+        b.classList.toggle('is-active', p === page);
+        frag.append(b);
+        have.delete(p);
+      }
+      this.host.replaceChildren(frag);
+    } else {
+      this.host.innerHTML = this._html(from, to, page);
+    }
+    this.cur = page;
+    this._key = key;
+  }
+  reset() { this.cur = -1; this._key = ''; this.host.innerHTML = ''; }
 }

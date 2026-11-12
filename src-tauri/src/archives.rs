@@ -47,14 +47,73 @@ fn unique_dest(stem: &str) -> Result<PathBuf, String> {
 }
 
 pub fn extract_sevenz(archive: &Path, dest: &Path) -> Result<(), String> {
-    sevenz_rust::decompress_file(
-        archive.to_string_lossy().as_ref(),
-        dest.to_string_lossy().as_ref(),
-    )
-    .map_err(|e| format!("7z 解压失败：{e}"))
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        sevenz_rust::decompress_file_with_extract_fn(
+            archive.to_string_lossy().as_ref(),
+            dest.to_string_lossy().as_ref(),
+            |entry, reader, dest| write_sevenz_entry(entry, reader, dest),
+        )
+        .map_err(|e| format!("7z 解压失败：{e}"))
+    }));
+    match result {
+        Ok(r) => r,
+        Err(_) => Err("7z 条目异常，已跳过".into()),
+    }
+}
+
+fn write_sevenz_entry(
+    entry: &sevenz_rust::SevenZArchiveEntry,
+    reader: &mut dyn std::io::Read,
+    dest: &Path,
+) -> Result<bool, sevenz_rust::Error> {
+    crate::pipeline::wait_foreground_idle();
+    if entry.is_directory() {
+        std::fs::create_dir_all(dest).map_err(sevenz_rust::Error::io)?;
+        return Ok(true);
+    }
+    if let Some(parent) = dest.parent() {
+        std::fs::create_dir_all(parent).map_err(sevenz_rust::Error::io)?;
+    }
+    if entry.size() > crate::pipeline::PAGE_BYTE_CAP {
+        std::io::copy(reader, &mut std::io::sink()).map_err(sevenz_rust::Error::io)?;
+        return Ok(true);
+    }
+    let file = std::fs::File::create(dest).map_err(sevenz_rust::Error::io)?;
+    let mut writer = std::io::BufWriter::new(file);
+    let copied = copy_at_most(reader, &mut writer, crate::pipeline::PAGE_BYTE_CAP.saturating_add(1))
+        .map_err(sevenz_rust::Error::io)?;
+    if copied > crate::pipeline::PAGE_BYTE_CAP {
+        drop(writer);
+        let _ = std::fs::remove_file(dest);
+        std::io::copy(reader, &mut std::io::sink()).map_err(sevenz_rust::Error::io)?;
+    }
+    Ok(true)
+}
+
+fn copy_at_most(reader: &mut dyn std::io::Read, writer: &mut dyn std::io::Write, max: u64) -> std::io::Result<u64> {
+    let mut buf = [0u8; 64 * 1024];
+    let mut copied = 0u64;
+    while copied < max {
+        let want = ((max - copied) as usize).min(buf.len());
+        let n = reader.read(&mut buf[..want])?;
+        if n == 0 {
+            break;
+        }
+        writer.write_all(&buf[..n])?;
+        copied += n as u64;
+    }
+    Ok(copied)
 }
 
 pub fn extract_rar(archive: &Path, dest: &Path) -> Result<(), String> {
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| extract_rar_inner(archive, dest)));
+    match result {
+        Ok(r) => r,
+        Err(_) => Err("RAR 条目异常，已跳过".into()),
+    }
+}
+
+fn extract_rar_inner(archive: &Path, dest: &Path) -> Result<(), String> {
     let mut archive = unrar::Archive::new(archive)
         .open_for_processing()
         .map_err(|e| format!("无法打开 RAR：{e}"))?;
@@ -62,7 +121,9 @@ pub fn extract_rar(archive: &Path, dest: &Path) -> Result<(), String> {
         .read_header()
         .map_err(|e| format!("RAR 读取失败：{e}"))?
     {
-        archive = if entry.entry().is_file() {
+        crate::pipeline::wait_foreground_idle();
+        let huge = entry.entry().is_file() && entry.entry().unpacked_size > crate::pipeline::PAGE_BYTE_CAP;
+        archive = if entry.entry().is_file() && !huge {
             entry
                 .extract_with_base(dest)
                 .map_err(|e| format!("RAR 解压失败：{e}"))?

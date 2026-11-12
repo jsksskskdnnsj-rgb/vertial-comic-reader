@@ -24,6 +24,7 @@ mod merge_manual;
 mod metadata;
 mod model;
 mod paths;
+mod pipeline;
 mod protocol;
 mod scan;
 mod shelf;
@@ -68,11 +69,7 @@ fn main() {
             let cache =
                 std::sync::Arc::new(cache::PageCache::open(dir.join("cache"), 512 << 20)?);
             let extractor = extractor::Extractor::start(cache.clone(), extractor::worker_count());
-            app.manage(commands::ReaderState {
-                db: rdb,
-                cache,
-                extractor,
-            });
+            app.manage(commands::ReaderState::new(rdb, cache, extractor));
             let covers = dir.join("covers");
             cover_protocol::trim_covers(&covers, 512 << 20);
             app.manage(cover_protocol::CoversDir(std::sync::Arc::new(covers)));
@@ -181,6 +178,7 @@ fn main() {
             adapters::list_recent_books,
             adapters::list_recent_added,
             adapters::import_paths,
+            library::page_edit_infos,
             adapters::import_scan_books,
             merge::merge_auto_get,
             merge::merge_auto_set,

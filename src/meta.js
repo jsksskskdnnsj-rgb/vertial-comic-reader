@@ -7,6 +7,7 @@ import { compareRows, filterShelf, createQueue, enqueue, nextPending, markRunnin
 import { openMetadataEditor } from './metadata-match.js';
 import { mountNetworkEditor, readMountedNetwork, refreshNetwork } from './meta-net.js';
 import { remoteImgSrc } from './remote-img.js';
+import { cachedInvoke } from './data-cache.js';
 
 bootPage('meta');
 
@@ -100,10 +101,11 @@ function renderSources() {
   }).join('');
 }
 
+let booksHtml = '';
 function renderBooks() {
   const list = visible();
   $('metaSelected').textContent = t('meta.selected', { n: [...selected].filter((id) => list.some((row) => row.bookId === id)).length });
-  $('metaBooks').innerHTML = list.map((row) => {
+  const html = list.map((row) => {
     const mark = row.provider ? providerLabel(row.provider) : t('meta.notBound');
     const on = row.bookId === focusId ? ' is-on' : '';
     return `<div class="meta-book${on}" data-book="${row.bookId}">
@@ -111,6 +113,10 @@ function renderBooks() {
       <span class="grow"><b>${esc(row.name)}</b><span class="muted">${esc(mark)}${row.locked ? ' · ' + esc(t('meta.locked')) : ''}</span></span>
     </div>`;
   }).join('');
+  if (html !== booksHtml) {
+    booksHtml = html;
+    $('metaBooks').innerHTML = html;
+  }
 }
 
 function renderQueue() {
@@ -337,7 +343,7 @@ $('metaEditOne').addEventListener('click', () => {
   if (!row) return;
   openMetadataEditor({ id: row.bookId, name: row.name }, {
     onBound: async () => {
-      await loadShelf();
+      await loadShelf(true);
       showBook(row.bookId);
     },
   });
@@ -364,7 +370,7 @@ $('metaApply').addEventListener('click', async () => {
       useRemoteCover: $('metaUseCover').checked,
     });
     toast(t('meta.bound'));
-    await loadShelf();
+    await loadShelf(true);
     showBook(row.bookId);
   } catch (err) { toast(errText(err)); }
 });
@@ -399,10 +405,10 @@ onPage(window, 'keydown', (e) => {
   renderQueue();
 });
 
-async function loadShelf() {
+async function loadShelf(fresh = false) {
   const [index, pending] = await Promise.all([
-    lib.metadata.shelfIndex().catch(() => []),
-    lib.metadata.listPending().catch(() => []),
+    cachedInvoke('meta-shelf', () => lib.metadata.shelfIndex(), fresh).catch(() => []),
+    cachedInvoke('meta-pending', () => lib.metadata.listPending(), fresh).catch(() => []),
   ]);
   rows = index || [];
   pendingIds = new Set((pending || []).map((row) => row.bookId));

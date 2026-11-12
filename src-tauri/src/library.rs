@@ -277,6 +277,53 @@ pub struct PageEditInfo {
     pub page_count: u32,
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PageEditFlag {
+    pub book_id: i64,
+    pub edited: bool,
+    pub page_count: u32,
+}
+
+/// One query for the visible page of cards, instead of one invoke per book.
+#[tauri::command]
+pub fn page_edit_infos(book_ids: Vec<i64>) -> Result<Vec<PageEditFlag>, String> {
+    if book_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let conn = crate::db_conn()?;
+    let mut counts: std::collections::HashMap<i64, u32> = std::collections::HashMap::new();
+    for chunk in book_ids.chunks(400) {
+        let mut sql = String::from(
+            "SELECT book_id, COUNT(*) FROM edited_pages WHERE book_id IN (",
+        );
+        for i in 0..chunk.len() {
+            if i > 0 {
+                sql.push(',');
+            }
+            sql.push('?');
+        }
+        sql.push_str(") GROUP BY book_id");
+        let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map(rusqlite::params_from_iter(chunk.iter()), |r| {
+                Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)? as u32))
+            })
+            .map_err(|e| e.to_string())?;
+        for row in rows {
+            let (id, n) = row.map_err(|e| e.to_string())?;
+            counts.insert(id, n);
+        }
+    }
+    Ok(book_ids
+        .into_iter()
+        .map(|id| {
+            let n = counts.get(&id).copied().unwrap_or(0);
+            PageEditFlag { book_id: id, edited: n > 0, page_count: n }
+        })
+        .collect())
+}
+
 #[tauri::command]
 pub fn page_edit_info(book_id: i64) -> Result<PageEditInfo, String> {
     let conn = crate::db_conn()?;
@@ -538,7 +585,7 @@ mod chain_tests {
         .expect("import_merged failed");
 
         // 2) plain import of the same sources (zip book + folder book)
-        let r = crate::adapters::import_paths(
+        let r = crate::adapters::import_paths_blocking(
             vec![
                 zipp.to_string_lossy().into_owned(),
                 folder.to_string_lossy().into_owned(),
@@ -571,11 +618,11 @@ mod chain_tests {
             crate::cache::PageCache::open(base.join("cache"), 512 << 20).unwrap(),
         );
         let ex = crate::extractor::Extractor::start(cache.clone(), 2);
-        let state = crate::commands::ReaderState {
-            db: std::sync::Arc::new(parking_lot::Mutex::new(conn2)),
-            cache: cache.clone(),
-            extractor: ex.clone(),
-        };
+        let state = crate::commands::ReaderState::new(
+            std::sync::Arc::new(parking_lot::Mutex::new(conn2)),
+            cache.clone(),
+            ex.clone(),
+        );
 
         for (id, want) in [(merged_id, 6u32), (zip_id, 3), (folder_id, 3)] {
             let opened = crate::commands::open_blocking(&state, id, false)
@@ -659,7 +706,7 @@ mod chain_tests2 {
         crate::bookmarks::migrate(&conn).unwrap();
         drop(conn);
 
-        let r = crate::adapters::import_paths(
+        let r = crate::adapters::import_paths_blocking(
             vec![
                 zipp.to_string_lossy().into_owned(),
                 folder.to_string_lossy().into_owned(),
@@ -676,11 +723,11 @@ mod chain_tests2 {
         let conn2 = crate::db_conn().unwrap();
         let cache = std::sync::Arc::new(crate::cache::PageCache::open(base.join("cache"), 512 << 20).unwrap());
         let ex = crate::extractor::Extractor::start(cache.clone(), 2);
-        let state = crate::commands::ReaderState {
-            db: std::sync::Arc::new(parking_lot::Mutex::new(conn2)),
-            cache: cache.clone(),
-            extractor: ex.clone(),
-        };
+        let state = crate::commands::ReaderState::new(
+            std::sync::Arc::new(parking_lot::Mutex::new(conn2)),
+            cache.clone(),
+            ex.clone(),
+        );
         // zip: 5 image pages (4 jpg + 1 webp), junk skipped; folder: 3 pages
         for (id, want) in [(zip_id, 5u32), (folder_id, 3)] {
             let opened = crate::commands::open_blocking(&state, id, false)

@@ -27,6 +27,7 @@ export const lib = {
   appendPages: (bookId, sources) => invoke('append_pages', { bookId, sources }),
   resetPageEdits: (bookId) => invoke('reset_page_edits', { bookId }),
   pageEditInfo: (bookId) => invoke('page_edit_info', { bookId }),
+  pageEditInfos: (bookIds) => invoke('page_edit_infos', { bookIds }),
 
   // library management
   allBooks: () => invoke('shelf_list'),
