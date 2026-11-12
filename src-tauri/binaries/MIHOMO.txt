@@ -1,0 +1,10 @@
+mihomo v1.19.34 (Windows x64) is bundled as a separate executable.
+
+License: GPL-3.0-only
+Source: https://github.com/MetaCubeX/mihomo/tree/v1.19.34
+Upstream license: https://github.com/MetaCubeX/mihomo/blob/v1.19.34/LICENSE
+The full license text ships in resources/LICENSE.txt.
+
+The reader does not statically link this program. It may spawn mihomo with a
+generated config that listens on 127.0.0.1 only, for this app's own requests.
+The pinned download and sha256 are in scripts/mihomo-pin.json.

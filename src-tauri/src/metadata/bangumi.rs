@@ -6,8 +6,7 @@ use super::client::{build_client, send_retry};
 use super::config::MetadataNetworkConfig;
 use super::{MetadataCandidate, MetadataDetail, Provider};
 
-const SEARCH: &str = "https://api.bgm.tv/v0/search/subjects";
-const SUBJECT: &str = "https://api.bgm.tv/v0/subjects";
+const ROOT: &str = "https://api.bgm.tv";
 const TYPE_MANGA: i64 = 1;
 const HOST: &str = "api.bgm.tv";
 
@@ -216,8 +215,10 @@ pub async fn search(
     query: &str,
     limit: u32,
 ) -> Result<Vec<MetadataCandidate>, String> {
-    let url = format!("{SEARCH}?limit={}", limit.clamp(1, 25));
-    let response = send_retry(cfg, HOST, 100, || {
+    let root = super::endpoints::api_root(&cfg.bases.bangumi_api, ROOT);
+    let url = format!("{root}/v0/search/subjects?limit={}", limit.clamp(1, 25));
+    let host = super::endpoints::host_of(&url, HOST);
+    let response = send_retry(cfg, &host, 100, || {
         Ok(request(cfg, reqwest::Method::POST, &url)?.json(&SearchBody {
             keyword: query,
             filter: SearchFilter {
@@ -264,8 +265,10 @@ pub async fn search(
 }
 
 pub async fn detail(cfg: &MetadataNetworkConfig, id: &str) -> Result<MetadataDetail, String> {
-    let url = format!("{SUBJECT}/{}", id.trim());
-    let response = send_retry(cfg, HOST, 100, || request(cfg, reqwest::Method::GET, &url)).await?;
+    let root = super::endpoints::api_root(&cfg.bases.bangumi_api, ROOT);
+    let url = format!("{root}/v0/subjects/{}", id.trim());
+    let host = super::endpoints::host_of(&url, HOST);
+    let response = send_retry(cfg, &host, 100, || request(cfg, reqwest::Method::GET, &url)).await?;
     if !response.status().is_success() {
         return Err(http_status_message(response.status()));
     }

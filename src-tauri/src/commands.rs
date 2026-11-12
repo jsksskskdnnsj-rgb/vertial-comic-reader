@@ -105,18 +105,8 @@ pub(crate) fn open_blocking(
     } else if !cached.is_empty() {
         cached
     } else {
-        let fresh = match kind {
-            // zip: central dir + header reads, folder: header reads, images: header reads per file
-            SourceKind::Zip => scan::scan_zip(&path)?,
-            SourceKind::Folder => {
-                if row.paths.len() > 1 {
-                    scan::scan_folder_parts(&row.paths)
-                } else {
-                    scan::scan_folder(&path)
-                }
-            }
-            SourceKind::Images => scan::scan_images(&row.paths),
-        };
+        // One index for zip/cbz, folders (and archives unpacked to folders), and loose images.
+        let fresh = scan::index_book(kind, &row.paths)?;
         if fresh.is_empty() {
             return Err(ReaderError::Corrupt("no pages found".into()));
         }

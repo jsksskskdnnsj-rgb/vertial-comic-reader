@@ -29,6 +29,24 @@ export function summarizeFolder(files) {
   return { images, archives, top, nested: images - top, bytes, depth, subfolders: dirs.size, subfolderNames, empty: images === 0 };
 }
 
+/** Run `fn` over `items` with at most `limit` calls in flight. Result order matches `items`. */
+export async function mapPool(items, limit, fn) {
+  const list = Array.isArray(items) ? items : [];
+  const out = new Array(list.length);
+  if (!list.length) return out;
+  let next = 0;
+  const width = Math.max(1, Math.min(list.length, Math.floor(Number(limit) || 1)));
+  async function worker() {
+    while (next < list.length) {
+      const i = next;
+      next += 1;
+      out[i] = await fn(list[i], i);
+    }
+  }
+  await Promise.all(Array.from({ length: width }, () => worker()));
+  return out;
+}
+
 /** listImages(path) -> Promise<files>. Never throws: { ok:false } when the path cannot be read as a folder. */
 export async function inspectFolder(path, listImages) {
   try { return { ok: true, ...summarizeFolder(await listImages(path)) }; }

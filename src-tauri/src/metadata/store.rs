@@ -55,11 +55,10 @@ pub fn migrate(conn: &Connection) -> Result<(), String> {
         )
         .unwrap_or(0);
     if has == 0 {
-        conn.execute(
+        crate::appdata::add_column(
+            conn,
             "ALTER TABLE book_metadata ADD COLUMN source_page_url TEXT",
-            [],
-        )
-        .map_err(|e| e.to_string())?;
+        )?;
     }
     for (name, decl) in [
         ("status", "TEXT"),
@@ -78,8 +77,10 @@ pub fn migrate(conn: &Connection) -> Result<(), String> {
             )
             .unwrap_or(0);
         if present == 0 {
-            conn.execute(&format!("ALTER TABLE book_metadata ADD COLUMN {name} {decl}"), [])
-                .map_err(|e| e.to_string())?;
+            crate::appdata::add_column(
+                conn,
+                &format!("ALTER TABLE book_metadata ADD COLUMN {name} {decl}"),
+            )?;
         }
     }
     Ok(())
@@ -446,6 +447,77 @@ pub fn cache_put(key: &str, body: &str, ttl_secs: i64) {
         )",
         params![now - 30 * 24 * 3600],
     );
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MetaShelfRow {
+    pub book_id: i64,
+    pub name: String,
+    pub kind: String,
+    pub page_count: i64,
+    pub favorite: bool,
+    pub updated_at: i64,
+    pub provider: Option<String>,
+    pub external_id: Option<String>,
+    pub match_kind: Option<String>,
+    pub locked: bool,
+    pub title_display: Option<String>,
+    pub bound_at: Option<i64>,
+}
+
+pub fn list_shelf_meta() -> Result<Vec<MetaShelfRow>, String> {
+    let conn = db_conn()?;
+    let mut stmt = conn
+        .prepare(
+            "SELECT s.id, s.name, s.kind, s.page_count, s.favorite, s.updated_at,
+                    m.provider, m.external_id, m.match_kind, m.locked, m.title_display, m.bound_at
+             FROM shelf s
+             LEFT JOIN book_metadata m ON m.book_id = s.id
+             ORDER BY s.updated_at DESC",
+        )
+        .map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map([], |r| {
+            let locked: Option<i64> = r.get(9)?;
+            Ok(MetaShelfRow {
+                book_id: r.get(0)?,
+                name: r.get(1)?,
+                kind: r.get(2)?,
+                page_count: r.get(3)?,
+                favorite: r.get::<_, i64>(4)? != 0,
+                updated_at: r.get(5)?,
+                provider: r.get(6)?,
+                external_id: r.get(7)?,
+                match_kind: r.get(8)?,
+                locked: locked.unwrap_or(0) != 0,
+                title_display: r.get(10)?,
+                bound_at: r.get(11)?,
+            })
+        })
+        .map_err(|e| e.to_string())?;
+    rows.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())
+}
+
+#[derive(Debug, Clone)]
+pub struct CacheStamp {
+    pub fetched_at: i64,
+    pub expires_at: i64,
+}
+
+pub fn cache_stamp(key: &str) -> Option<CacheStamp> {
+    let conn = db_conn().ok()?;
+    conn.query_row(
+        "SELECT fetched_at, expires_at FROM metadata_http_cache WHERE cache_key=?1",
+        [key],
+        |r| {
+            Ok(CacheStamp {
+                fetched_at: r.get(0)?,
+                expires_at: r.get(1)?,
+            })
+        },
+    )
+    .ok()
 }
 
 pub fn set_cover_cache(book_id: i64, cache_name: &str) -> Result<(), String> {

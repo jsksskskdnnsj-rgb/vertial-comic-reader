@@ -8,6 +8,7 @@ import { mountShell, coverUrl, wireCoverFallback } from './shell-ui.js';
 import { fetchEpisodeInfo } from './chapters.js';
 import * as act from './book-actions.js';
 import { readerOpenHref } from './reader-mode-store.js';
+import { openGroupEditor } from './group-ui.js';
 
 const $ = (id) => document.getElementById(id);
 bootPage('book');
@@ -29,6 +30,8 @@ async function load() {
     return;
   }
   $('notFound').hidden = true; $('hero').hidden = false; $('details').hidden = false;
+  const desk = $('metaDeskBtn');
+  if (desk) desk.href = `meta.html?book=${book.id}`;
   const [folders, eps, counts, miss, info] = await Promise.all([
     lib.folders().catch(() => []),
     fetchEpisodeInfo(invoke, [{ id: book.id, page: book.last_page ?? 0 }]).catch(() => []),
@@ -46,6 +49,8 @@ async function load() {
   delete $('cover').dataset.retried;
   $('cover').src = coverUrl(book.id, coverBust);
   $('name').textContent = book.name;
+  const groupBtn = $('groupBtn');
+  if (groupBtn) groupBtn.hidden = !(book.kind === 'folder' || book.merged);
   document.title = `${book.name} · ${t('app.name')}`;
   $('chips').innerHTML = [KIND_KEY[book.kind] ? t(KIND_KEY[book.kind]) : '', t('book.pages', { n: book.page_count })]
     .filter(Boolean).map((s) => `<span>${esc(s)}</span>`).join('');
@@ -154,6 +159,10 @@ $('startOverBtn').addEventListener('click', async () => after(await act.startOve
 $('renameBtn').addEventListener('click', async () => after(await act.renameBook(book)));
 $('relinkBtn').addEventListener('click', async () => after(await act.relinkBook(book), true));
 $('revealBtn').addEventListener('click', () => act.revealBook(book));
+$('groupBtn')?.addEventListener('click', () => {
+  if (!book) return;
+  openGroupEditor({ bookId: book.id, onDone: () => load() });
+});
 $('removeBtn').addEventListener('click', async () => { if (await act.removeBook(book)) location.href = 'library.html'; });
 $('resetEditBtn').addEventListener('click', async () => after(await act.resetEdits(book), true));
 $('folderSel').addEventListener('change', async () => {

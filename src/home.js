@@ -3,11 +3,12 @@
 // v0.6: history is a stack of progress cards (the chapter-list panel is gone); drag-over highlight
 // no longer flickers; reset errors are reported; banner changes re-apply without a reload.
 import { T, invoke, t, esc, ago, toast, bootPage } from './shell.js';
+import { onPage } from './page-life.js';
 import { lib } from './api.js';
 import { mountShell, coverUrl, wireCoverFallback, watchDrops, applyBackground } from './shell-ui.js';
 import { fetchEpisodeInfo } from './chapters.js';
 import { setBanner, resetBanner } from './theme-api.js';
-import { inspectFolder, looksLikeFile } from './folder-scan.js';
+import { inspectFolder, looksLikeFile, mapPool } from './folder-scan.js';
 import { archiveAndImageFilters, imageFilters } from './image-exts.js';
 import { readerOpenHref } from './reader-mode-store.js';
 
@@ -22,11 +23,16 @@ const skeletons = (n, kind) => Array.from({ length: n }, () => `<div class="skel
 async function doImport(paths) {
   if (!paths?.length) return;
   // folders are imported with all their subfolders; one with no images at any depth is refused, not added silently
-  const keep = []; let empty = 0;
-  for (const p of paths) {
-    if (looksLikeFile(p)) { keep.push(p); continue; }
+  const checked = await mapPool(paths, 4, async (p) => {
+    if (looksLikeFile(p)) return { path: p, keep: true, empty: false };
     const r = await inspectFolder(p, lib.listImages);
-    if (r.ok && r.empty) empty++; else keep.push(p);
+    if (r.ok && r.empty) return { path: p, keep: false, empty: true };
+    return { path: p, keep: true, empty: false };
+  });
+  const keep = []; let empty = 0;
+  for (const row of checked) {
+    if (row?.empty) empty++;
+    else if (row?.keep) keep.push(row.path);
   }
   const note = empty ? ' · ' + t('imp.emptySkipped') : '';
   if (!keep.length) { toast(t('imp.emptySkipped')); return; }
@@ -56,10 +62,10 @@ $('heroImport').addEventListener('click', () => (location.href = 'import.html'))
 // drag & drop anywhere on the page (native queue filled by Rust); enter/leave fire per child, so count
 const zone = $('zone');
 let dragDepth = 0;
-addEventListener('dragenter', (e) => { e.preventDefault(); dragDepth++; zone.classList.add('is-over'); });
-addEventListener('dragover', (e) => e.preventDefault());
-addEventListener('dragleave', () => { dragDepth = Math.max(0, dragDepth - 1); if (!dragDepth) zone.classList.remove('is-over'); });
-addEventListener('drop', (e) => { e.preventDefault(); dragDepth = 0; zone.classList.remove('is-over'); });
+onPage(window, 'dragenter', (e) => { e.preventDefault(); dragDepth++; zone.classList.add('is-over'); });
+onPage(window, 'dragover', (e) => e.preventDefault());
+onPage(window, 'dragleave', () => { dragDepth = Math.max(0, dragDepth - 1); if (!dragDepth) zone.classList.remove('is-over'); });
+onPage(window, 'drop', (e) => { e.preventDefault(); dragDepth = 0; zone.classList.remove('is-over'); });
 watchDrops(doImport);
 
 // ---- custom home banner (independent of the window background, which lives in Settings) -----------------
@@ -121,6 +127,6 @@ async function loadLists() {
   $('noAdded').hidden = added.length > 0;
 }
 const open = (el) => { const c = el?.closest('[data-open]'); if (c) location.href = readerOpenHref(c.dataset.open); };
-document.addEventListener('click', (e) => open(e.target));
-document.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { const c = e.target.closest?.('[data-open]'); if (c) { e.preventDefault(); open(c); } } });
+onPage(document, 'click', (e) => open(e.target));
+onPage(document, 'keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { const c = e.target.closest?.('[data-open]'); if (c) { e.preventDefault(); open(c); } } });
 loadLists();

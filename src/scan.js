@@ -2,6 +2,7 @@
 // The walk runs in the background. Cancelling or leaving the page keeps a checkpoint, so the next
 // scan of the same folder continues. Problems (empty files, unreadable directories, links) are listed.
 import { T, invoke, t, esc, toast, bootPage } from './shell.js';
+import { onPage } from './page-life.js';
 import { lib } from './api.js';
 import { mountShell } from './shell-ui.js';
 import { openMergeDialog } from './merge-ui.js';
@@ -140,7 +141,7 @@ $('scanPick').addEventListener('click', async () => {
   schedule();
 });
 $('scanCancel').addEventListener('click', () => { invoke('scan_cancel').catch(() => {}); });
-addEventListener('keydown', (e) => {
+onPage(window, 'keydown', (e) => {
   if (e.key === 'Escape' && snap?.phase === 'running') invoke('scan_cancel').catch(() => {});
 });
 $('scanList').addEventListener('change', (e) => {

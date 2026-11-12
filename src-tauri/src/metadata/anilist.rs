@@ -216,10 +216,12 @@ async fn gql<T: for<'de> Deserialize<'de>>(
     query: &str,
     variables: serde_json::Value,
 ) -> Result<T, String> {
-    let response = send_retry(cfg, HOST, 100, || {
+    let endpoint = super::endpoints::api_root(&cfg.bases.anilist_api, ENDPOINT);
+    let host = super::endpoints::host_of(&endpoint, HOST);
+    let response = send_retry(cfg, &host, 100, || {
         let client = build_client(cfg, Provider::Anilist)?;
         Ok(client
-            .post(ENDPOINT)
+            .post(&endpoint)
             .header("Content-Type", "application/json")
             .header("Accept", "application/json")
             .json(&serde_json::json!({ "query": query, "variables": variables })))

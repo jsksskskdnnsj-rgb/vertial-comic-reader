@@ -69,7 +69,7 @@ fn to_picked(path_str: String, rel: String) -> Option<PickedFile> {
     })
 }
 
-fn walk_dir(dir: &Path, base: &Path, out: &mut Vec<PickedFile>) {
+fn walk_dir(dir: &Path, base: &Path, out: &mut Vec<PickedFile>, parallel: bool) {
     let entries = match std::fs::read_dir(dir) {
         Ok(e) => e,
         Err(_) => return,
@@ -95,8 +95,32 @@ fn walk_dir(dir: &Path, base: &Path, out: &mut Vec<PickedFile>) {
         }
     }
     subs.sort();
+    // Sibling folders are independent. Only the top call fans out, so a deep tree
+    // does not spawn a thread per directory. Order stays "files here, then sorted subs".
+    if parallel && subs.len() >= 4 {
+        let parts = std::thread::scope(|scope| {
+            let mut handles = Vec::with_capacity(subs.len());
+            for s in &subs {
+                let s = s.clone();
+                let base = base.to_path_buf();
+                handles.push(scope.spawn(move || {
+                    let mut local = Vec::new();
+                    walk_dir(&s, &base, &mut local, false);
+                    local
+                }));
+            }
+            handles
+                .into_iter()
+                .map(|h| h.join().unwrap_or_default())
+                .collect::<Vec<_>>()
+        });
+        for part in parts {
+            out.extend(part);
+        }
+        return;
+    }
     for s in subs {
-        walk_dir(&s, base, out);
+        walk_dir(&s, base, out, false);
     }
 }
 
@@ -120,6 +144,6 @@ pub fn list_images(path: String) -> Result<Vec<PickedFile>, String> {
         return Err("文件夹不存在".to_string());
     }
     let mut out = Vec::new();
-    walk_dir(&base, &base, &mut out);
+    walk_dir(&base, &base, &mut out, true);
     Ok(out)
 }

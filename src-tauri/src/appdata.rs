@@ -12,6 +12,22 @@ pub(crate) fn now_secs() -> i64 {
         .unwrap_or(0)
 }
 
+/// Two connections can both see a missing column and both `ALTER`. The loser
+/// reports "duplicate column name", which means the column is already there.
+pub(crate) fn add_column(conn: &Connection, sql: &str) -> Result<(), String> {
+    match conn.execute(sql, []) {
+        Ok(_) => Ok(()),
+        Err(e) => {
+            let msg = e.to_string();
+            if msg.to_ascii_lowercase().contains("duplicate column") {
+                Ok(())
+            } else {
+                Err(msg)
+            }
+        }
+    }
+}
+
 /// 数据目录解析：exe 旁的 data-dir.txt 可指定自定义目录；默认就是 exe 所在目录
 pub(crate) fn data_dir() -> Result<PathBuf, String> {
     let exe_dir = std::env::current_exe()
@@ -183,8 +199,7 @@ pub(crate) fn db_conn() -> Result<Connection, String> {
         )
         .unwrap_or(0);
     if has_col == 0 {
-        conn.execute("ALTER TABLE shelf ADD COLUMN folder_id INTEGER", [])
-            .map_err(|e| e.to_string())?;
+        add_column(&conn, "ALTER TABLE shelf ADD COLUMN folder_id INTEGER")?;
     }
     // v0.4 轻量迁移（同一 pragma 检查风格）：reader 后端需要的三个新列
     // scan_sig: 扫描签名（变更检测）；finished: 是否读完；cover_ver: 封面版本号（mhcover 缓存失效）
@@ -207,7 +222,7 @@ pub(crate) fn db_conn() -> Result<Connection, String> {
             )
             .unwrap_or(0);
         if has == 0 {
-            conn.execute(ddl, []).map_err(|e| e.to_string())?;
+            add_column(&conn, ddl)?;
         }
     }
     let has_order: i64 = conn
@@ -218,8 +233,7 @@ pub(crate) fn db_conn() -> Result<Connection, String> {
         )
         .unwrap_or(0);
     if has_order == 0 {
-        conn.execute("ALTER TABLE folders ADD COLUMN sort_order INTEGER", [])
-            .map_err(|e| e.to_string())?;
+        add_column(&conn, "ALTER TABLE folders ADD COLUMN sort_order INTEGER")?;
         conn.execute("UPDATE folders SET sort_order = id WHERE sort_order IS NULL", [])
             .map_err(|e| e.to_string())?;
     }

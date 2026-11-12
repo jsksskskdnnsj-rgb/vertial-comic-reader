@@ -1,5 +1,6 @@
 // Lightweight page-turning view sharing Reader's backend and position contract.
 import { api, pageUrl } from './reader.js';
+import { createListenerBag } from './listener-bag.js';
 import { Layout, clampWidthPct } from './layout.js';
 import { applyCropStyle, cropCacheKey, detectCropFromImage, mergeCropInsets } from './reader-crop.js';
 import { flipWarmPages, flipTapZone } from './flip-adjacent.js';
@@ -75,8 +76,10 @@ export class FlipView {
     const start = opts.startPos?.page ?? this.info.resume?.page ?? 0;
     this.page = this.spread ? this.layout.spreadStart(start) : Math.max(0, Math.min(this.layout.realPages - 1, start));
     this.mountDom();
-    window.addEventListener('keydown', this._key);
-    this.host.addEventListener('wheel', this._onWheel, { passive: false });
+    this._listen?.clear();
+    this._listen = createListenerBag();
+    this._listen.add(window, 'keydown', this._key);
+    this._listen.add(this.host, 'wheel', this._onWheel, { passive: false });
     this.render();
     return this.info;
   }
@@ -321,8 +324,8 @@ export class FlipView {
   async close() {
     this._anim?.cancel();
     this._anim = null;
-    window.removeEventListener('keydown', this._key);
-    this.host.removeEventListener('wheel', this._onWheel);
+    this._listen?.clear();
+    this._listen = null;
     this._stageEl?.removeEventListener('click', this._tap);
     for (const img of this._warm.values()) img.removeAttribute('src');
     this._warm.clear();

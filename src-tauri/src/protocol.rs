@@ -50,6 +50,7 @@ fn err(e: &ReaderError) -> http::Response<Vec<u8>> {
 
 /// BLOCKING (call inside spawn_blocking). Tauri v2 response bodies are whole buffers - there is no
 /// chunked streaming - so a page is read fully; pages are <= a few MB, slices keep it bounded.
+/// The body is the image bytes (or a small JSON error). It is never base64.
 pub fn serve(ex: &Extractor, req: &http::Request<Vec<u8>>) -> http::Response<Vec<u8>> {
     if req.method() == http::Method::OPTIONS {
         return base()
@@ -211,4 +212,61 @@ pub fn serve_theme_file(req: &http::Request<Vec<u8>>) -> http::Response<Vec<u8>>
         .header("Cache-Control", "private, max-age=86400")
         .body(bytes)
         .unwrap()
+}
+
+#[cfg(test)]
+mod serve_tests {
+    use super::serve;
+    use crate::cache::PageCache;
+    use crate::extractor::Extractor;
+    use crate::model::*;
+    use std::sync::Arc;
+
+    #[test]
+    fn mhpage_serves_raw_jpeg_not_base64() {
+        let dir = std::env::temp_dir().join(format!("mh-proto-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("cache")).unwrap();
+        let img_path = dir.join("page.jpg");
+        let rgb = image::RgbImage::from_fn(8, 8, |x, y| image::Rgb([(x * 20) as u8, (y * 10) as u8, 30]));
+        let mut jpeg = Vec::new();
+        image::DynamicImage::ImageRgb8(rgb)
+            .write_to(&mut std::io::Cursor::new(&mut jpeg), image::ImageFormat::Jpeg)
+            .unwrap();
+        std::fs::write(&img_path, &jpeg).unwrap();
+        let cache = Arc::new(PageCache::open(dir.join("cache"), 8 << 20).unwrap());
+        let ex = Extractor::start(cache, 1);
+        ex.register_book(Arc::new(BookMeta {
+            id: 42,
+            kind: SourceKind::Images,
+            path: img_path.clone(),
+            sig: "t".into(),
+            pages: vec![PageMeta {
+                src_page: 0,
+                entry: 0,
+                name: img_path.to_string_lossy().to_string(),
+                w: 8,
+                h: 8,
+                full_h: 8,
+                y0: 0,
+                src_path: None,
+            }],
+            groups: vec![(0, 0)],
+        }));
+        let req = http::Request::builder()
+            .uri("http://mhpage.localhost/42/0?v=0&s=t")
+            .body(Vec::new())
+            .unwrap();
+        let resp = serve(&ex, &req);
+        ex.shutdown();
+        assert_eq!(resp.status(), 200);
+        let body = resp.body();
+        assert!(body.starts_with(&[0xFF, 0xD8, 0xFF]), "protocol body is the jpeg itself");
+        assert!(body.windows(6).all(|w| w != b"base64"));
+        assert_eq!(
+            resp.headers().get("content-type").unwrap().to_str().unwrap(),
+            "image/jpeg"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

@@ -5,6 +5,7 @@
 //           ImageWindow (IO-driven mount/unmount)   Prefetcher (-> Rust set_reading_window)
 //           ProgressSaver (debounced save)   Scrubber (bottom slider)   Reader (glue)
 import { Layout, clampWidthPct } from './layout.js';
+import { createListenerBag } from './listener-bag.js';
 import { tunePerf } from './decode-budget.js';
 import { applyCropStyle, cropCacheKey, detectCropFromImage, mergeCropInsets } from './reader-crop.js';
 import { rtlPageDelta } from './reader-rtl.js';
@@ -495,9 +496,15 @@ export class Scrubber {
   constructor(track, thumbImg, label, reader) {
     this.track = track; this.thumb = thumbImg; this.label = label; this.r = reader;
     this.dragging = false; this.thumbTimer = 0;
-    track.addEventListener('pointerdown', (e) => { this.dragging = true; track.setPointerCapture(e.pointerId); this.move(e); });
-    track.addEventListener('pointermove', (e) => { if (this.dragging) this.move(e); });
-    track.addEventListener('pointerup',   (e) => { if (!this.dragging) return; this.dragging = false; this.r.jumpTo({ page: this.pageAt(e), frac: 0 }); });
+    this._bag = createListenerBag();
+    this._bag.add(track, 'pointerdown', (e) => { this.dragging = true; track.setPointerCapture(e.pointerId); this.move(e); });
+    this._bag.add(track, 'pointermove', (e) => { if (this.dragging) this.move(e); });
+    this._bag.add(track, 'pointerup', (e) => { if (!this.dragging) return; this.dragging = false; this.r.jumpTo({ page: this.pageAt(e), frac: 0 }); });
+  }
+  destroy() {
+    clearTimeout(this.thumbTimer);
+    this._bag?.clear();
+    this._bag = null;
   }
   pageAt(e) {
     const n = this.r.strip?.layout?.realPages || 0;
@@ -585,18 +592,21 @@ export class Reader {
     });
     this.ro.observe(sc);
 
-    sc.addEventListener('wheel', (e) => this.onWheel(e), { passive: false });
-    sc.addEventListener('pointerdown', () => { this.stopGlide(); this.stopKeyScroll(); }, { passive: true });
+    // Replacing the bag drops the previous open's page/key listeners before new ones attach.
+    this._listen?.clear();
+    this._listen = createListenerBag();
+    this._listen.add(sc, 'wheel', (e) => this.onWheel(e), { passive: false });
+    this._listen.add(sc, 'pointerdown', () => { this.stopGlide(); this.stopKeyScroll(); }, { passive: true });
     // Scroll events from our own glide can arrive after the write flag clears.
     // Only a position we did not just apply cancels the chase (user grabbed it).
-    sc.addEventListener('scroll', () => {
+    this._listen.add(sc, 'scroll', () => {
       if (this._glideWrite || !this._glide) return;
       if (Math.abs(sc.scrollTop - this._glideWrittenY) < 1 && Math.abs(sc.scrollLeft - this._glideWrittenX) < 1) return;
       this.stopGlide();
     }, { passive: true });
-    window.addEventListener('keydown', this.keyHandler = (e) => this.onKey(e));
-    document.addEventListener('visibilitychange', this.visHandler = () => { if (document.hidden) this.saver.flush(); });
-    window.addEventListener('blur', this.blurHandler = () => this.saver.flush());
+    this._listen.add(window, 'keydown', this.keyHandler = (e) => this.onKey(e));
+    this._listen.add(document, 'visibilitychange', this.visHandler = () => { if (document.hidden) this.saver.flush(); });
+    this._listen.add(window, 'blur', this.blurHandler = () => this.saver.flush());
   }
 
   // Which virtual pages should Rust keep warm? Sized in viewport heights, not page counts,
@@ -894,9 +904,10 @@ export class Reader {
     this.stopKeyScroll();
     this.stopGlide();
     await this.saver?.flush();
-    window.removeEventListener('keydown', this.keyHandler);
-    document.removeEventListener('visibilitychange', this.visHandler);
-    window.removeEventListener('blur', this.blurHandler);
+    this._listen?.clear();
+    this._listen = null;
+    this.scrubber?.destroy();
+    this.scrubber = null;
     this.ro?.disconnect(); this.tracker?.destroy(); this.imageWindow?.destroy(); this.prefetcher?.destroy();
     this.strip.scroller.remove();                              // leave the host empty for the next view
     if (this.info) await api.closeBook(this.info.bookId).catch(() => {});

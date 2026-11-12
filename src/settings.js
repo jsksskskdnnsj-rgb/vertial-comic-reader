@@ -21,6 +21,7 @@ import { DEFAULT_CHROME_BLUR, DEFAULT_BG_BLUR, CHROME_BLUR_MAX, BG_BLUR_MAX } fr
 import { sanePages, DEFAULT_PAGES } from './chapters.js';
 import { setBackground, resetBackground, setBanner, resetBanner } from './theme-api.js';
 import { imageFilters } from './image-exts.js';
+import { mountNetworkEditor, readMountedNetwork } from './meta-net.js';
 import { WIDTH_PCT_MAX, WIDTH_PCT_MIN, clampWidthPct } from './layout.js';
 
 bootPage('settings');
@@ -331,6 +332,7 @@ $('backupImport').addEventListener('click', async () => {
   try { await lib.importBackup(picked); toast(t('settings.backupImportDone')); setTimeout(() => location.reload(), 800); }
   catch (e) { toast(errText(e)); }
 });
+let metaCfg = {};
 async function loadMetaNet() {
   const cfg = await lib.metadata.getConfig().catch(() => ({}));
   $('metaProxy').value = cfg.proxyUrl || '';
@@ -352,9 +354,13 @@ async function loadMetaNet() {
   $('metaProxyJk').checked = cfg.proxyPerSource?.jikan !== false;
   $('metaRate').value = String(cfg.rateLimitMs || 400);
   $('metaAutoBind').checked = cfg.autoBindConfident !== false;
+  metaCfg = cfg;
+  mountNetworkEditor($('metaNetExtra'), { cfg, onSaved: (next) => { metaCfg = next; } });
 }
 function metaNetPayload() {
   return {
+    ...metaCfg,
+    ...readMountedNetwork(),
     bangumiToken: $('metaBgmToken').value.trim(),
     proxyUrl: $('metaProxy').value.trim(),
     proxyPerSource: {
@@ -381,7 +387,12 @@ function metaNetPayload() {
   };
 }
 $('metaSave')?.addEventListener('click', async () => {
-  try { await lib.metadata.setConfig(metaNetPayload()); toast(t('common.saved')); }
+  try {
+    const next = metaNetPayload();
+    await lib.metadata.setConfig(next);
+    metaCfg = next;
+    toast(t('common.saved'));
+  }
   catch (e) { toast(errText(e)); }
 });
 $('metaAutomatch')?.addEventListener('click', async () => {

@@ -26,6 +26,11 @@ hero-custom.*
 # ---------- 生成的应用图标（python scripts/gen-icons.py 会覆盖重绘；文本快照见 scripts/restore-binaries.json） ----------
 src-tauri/icons/
 
+# mihomo sidecar. Windows builds fetch the pinned zip; other targets get a local placeholder from build.rs.
+src-tauri/binaries/mihomo-*
+src-tauri/binaries/*.exe
+src-tauri/binaries/.mihomo-*
+
 # ---------- 系统文件 ----------
 .DS_Store
 Thumbs.db

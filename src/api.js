@@ -75,6 +75,8 @@ export const lib = {
     openPage: (bookId) => invoke('metadata_open_source_page', { bookId }),
     saveManual: (bookId, patch) => invoke('metadata_save_manual', { bookId, patch }),
     refresh: (bookId) => invoke('metadata_refresh', { bookId }),
+    shelfIndex: () => invoke('metadata_shelf_index'),
+    cacheStatus: (bookId, query = null) => invoke('metadata_cache_status', { bookId, query }),
   },
 };
 

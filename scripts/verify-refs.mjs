@@ -20,11 +20,15 @@ append_pages reset_page_edits page_edit_info shelf_rename book_reset_progress ch
 library_stats set_banner_image reset_banner_image get_default_data_dir win_start_drag win_hide_if_tray app_exit
 scan_begin scan_status scan_cancel list_scan_issues folder_reorder import_scan_books
 merge_auto_get merge_auto_set list_merge_pending resolve_merge_pending merge_books unmerge_book
+group_describe group_remove_members group_reorder group_move_member group_add_books group_split group_undo group_restore_auto
+metadata_clash_import metadata_clash_nodes metadata_proxy_delay metadata_proxy_test metadata_proxy_stop metadata_proxy_status
+metadata_custom_parse metadata_custom_test
 list_tags tag_create tag_rename tag_delete book_set_tags book_set_favorite books_tags_bulk find_duplicate_books
 export_library_backup import_library_backup
 metadata_get_config metadata_set_config metadata_search metadata_detail metadata_get metadata_list_pending
 metadata_bind metadata_unbind metadata_automatch metadata_refresh_cover metadata_cover_local_path
-metadata_open_source_page metadata_comic18_search_url metadata_save_manual metadata_refresh`.split(/\s+/);
+metadata_open_source_page metadata_comic18_search_url metadata_save_manual metadata_refresh
+metadata_shelf_index metadata_cache_status`.split(/\s+/);
 
 const results = []; let failures = 0, warnings = 0;
 // Optional allow-list scripts/verify-refs.allow: lines "<text in message> :: <more text>" downgrade matching
