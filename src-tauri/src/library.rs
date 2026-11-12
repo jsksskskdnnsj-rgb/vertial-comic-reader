@@ -571,11 +571,11 @@ mod chain_tests {
             crate::cache::PageCache::open(base.join("cache"), 512 << 20).unwrap(),
         );
         let ex = crate::extractor::Extractor::start(cache.clone(), 2);
-        let state = crate::commands::ReaderState {
-            db: std::sync::Arc::new(parking_lot::Mutex::new(conn2)),
-            cache: cache.clone(),
-            extractor: ex.clone(),
-        };
+        let state = crate::commands::ReaderState::new(
+            std::sync::Arc::new(parking_lot::Mutex::new(conn2)),
+            cache.clone(),
+            ex.clone(),
+        );
 
         for (id, want) in [(merged_id, 6u32), (zip_id, 3), (folder_id, 3)] {
             let opened = crate::commands::open_blocking(&state, id, false)
@@ -676,11 +676,11 @@ mod chain_tests2 {
         let conn2 = crate::db_conn().unwrap();
         let cache = std::sync::Arc::new(crate::cache::PageCache::open(base.join("cache"), 512 << 20).unwrap());
         let ex = crate::extractor::Extractor::start(cache.clone(), 2);
-        let state = crate::commands::ReaderState {
-            db: std::sync::Arc::new(parking_lot::Mutex::new(conn2)),
-            cache: cache.clone(),
-            extractor: ex.clone(),
-        };
+        let state = crate::commands::ReaderState::new(
+            std::sync::Arc::new(parking_lot::Mutex::new(conn2)),
+            cache.clone(),
+            ex.clone(),
+        );
         // zip: 5 image pages (4 jpg + 1 webp), junk skipped; folder: 3 pages
         for (id, want) in [(zip_id, 5u32), (folder_id, 3)] {
             let opened = crate::commands::open_blocking(&state, id, false)

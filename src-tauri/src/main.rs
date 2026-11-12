@@ -68,11 +68,7 @@ fn main() {
             let cache =
                 std::sync::Arc::new(cache::PageCache::open(dir.join("cache"), 512 << 20)?);
             let extractor = extractor::Extractor::start(cache.clone(), extractor::worker_count());
-            app.manage(commands::ReaderState {
-                db: rdb,
-                cache,
-                extractor,
-            });
+            app.manage(commands::ReaderState::new(rdb, cache, extractor));
             let covers = dir.join("covers");
             cover_protocol::trim_covers(&covers, 512 << 20);
             app.manage(cover_protocol::CoversDir(std::sync::Arc::new(covers)));

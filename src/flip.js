@@ -1,5 +1,5 @@
 // Lightweight page-turning view sharing Reader's backend and position contract.
-import { api, pageUrl } from './reader.js';
+import { api, pageUrl, perfLog } from './reader.js';
 import { createListenerBag } from './listener-bag.js';
 import { Layout, clampWidthPct } from './layout.js';
 import { applyCropStyle, cropCacheKey, detectCropFromImage, mergeCropInsets } from './reader-crop.js';
@@ -29,6 +29,7 @@ export class FlipView {
     this._aimedPage = -1;
     this._lastDir = 1;
     this._keyAt = 0;
+    this._openToken = 0;
     this._key = (e) => {
       if (document.documentElement.dataset.modal === '1' || e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
       const forward = e.key === 'ArrowRight' || e.key === 'PageDown' || (e.key === ' ' && !e.shiftKey);
@@ -63,14 +64,28 @@ export class FlipView {
   }
 
   async open(bookId, opts = {}) {
-    this.info = await api.openBook(bookId);
+    const token = ++this._openToken;
+    const superseded = () => { throw { code: 'superseded', detail: 'superseded' }; };
+    const tOpen = performance.now();
+    let info;
+    try {
+      info = await api.openBook(bookId);
+    } catch (e) {
+      if (token !== this._openToken || e?.detail === 'superseded') superseded();
+      throw e;
+    }
+    if (token !== this._openToken) superseded();
+    this.info = info;
     this.bookId = bookId;
+    perfLog('openBook', tOpen, { bookId, pages: info?.realPages, mode: 'flip' });
     this.params = { widthPct: clampWidthPct(opts.widthPct ?? 100), spreadGap: opts.spreadGap ?? 8 };
     this.spread = !!opts.spread;
     if (opts.beforeMount) {
       const r = await opts.beforeMount(this.info);
+      if (token !== this._openToken) superseded();
       if (r === false) { await api.closeBook(bookId).catch(() => {}); throw { code: 'cancelled' }; }
     }
+    if (token !== this._openToken) superseded();
     this.layout.setBook(this.info.dims || [], this.info.src || []);
     this.layout.compute({ viewW: this.host.clientWidth || 800, widthPct: this.params.widthPct, gap: 0, spread: false });
     const start = opts.startPos?.page ?? this.info.resume?.page ?? 0;
@@ -96,6 +111,8 @@ export class FlipView {
     </div>`;
     this.imgA = this.host.querySelector('.flip-image--a');
     this.imgB = this.host.querySelector('.flip-image--b');
+    this.imgA.decoding = 'async';
+    this.imgB.decoding = 'async';
     this.host.querySelector('.flip-prev').onclick = () => this.prev();
     this.host.querySelector('.flip-next').onclick = () => this.next();
     const stage = this.host.querySelector('.flip-stage');
@@ -184,6 +201,7 @@ export class FlipView {
     slot.hidden = false;
     slot.style.maxWidth = maxW;
     slot.draggable = false;
+    slot.decoding = 'async';
     const warm = this._warm.get(page);
     if (warm && warm.complete && warm.naturalWidth > 0 && warm !== slot) {
       warm.className = slot.className;
@@ -322,6 +340,7 @@ export class FlipView {
     this.render();
   }
   async close() {
+    this._openToken = (this._openToken || 0) + 1;
     this._anim?.cancel();
     this._anim = null;
     this._listen?.clear();

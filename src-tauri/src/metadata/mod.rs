@@ -171,4 +171,4 @@ pub(crate) fn year_prefix(s: &str) -> Option<i32> {
 }
 
 pub(crate) const USER_AGENT: &str =
-    "MH-Reader/0.9.2 (https://github.com/jsksskskdnnsj-rgb/vertial-comic-reader; metadata)";
+    "MH-Reader/0.9.3 (https://github.com/jsksskskdnnsj-rgb/vertial-comic-reader; metadata)";

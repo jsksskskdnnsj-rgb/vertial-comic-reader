@@ -6,7 +6,7 @@ use crate::model::*;
 use std::{
     fs::File,
     io::{BufReader, Cursor, Read},
-    path::Path,
+    path::{Path, PathBuf},
     sync::Mutex,
 };
 
@@ -237,28 +237,277 @@ pub fn count_images_recursive(root: &Path) -> usize {
     scan_folder(root).len()
 }
 
-pub fn scan_folder(root: &Path) -> Vec<RealPage> {
-    let mut files: Vec<(String, u64)> = walkdir::WalkDir::new(root)
+fn mtime_ms(m: &std::fs::Metadata) -> u128 {
+    m.modified()
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_millis())
+        .unwrap_or(0)
+}
+
+/// One directory walk: image names in reading order, plus the folder signature
+/// (`f{count}:{total_len}:{max_mtime}`) that `quick_sig` has always used.
+/// Counting every file (not only images) keeps the signature comparable with
+/// books already stored in the shelf.
+fn walk_folder(root: &Path) -> (Vec<(String, u64)>, String) {
+    let (mut n, mut len, mut mx) = (0u64, 0u64, 0u128);
+    let mut files: Vec<(String, u64)> = Vec::new();
+    for e in walkdir::WalkDir::new(root)
         .follow_links(false)
         .into_iter()
         .filter_map(Result::ok)
         .filter(|e| e.file_type().is_file())
-        .filter_map(|e| {
-            let rel = e
-                .path()
-                .strip_prefix(root)
-                .ok()?
-                .to_string_lossy()
-                .replace('\\', "/");
-            if is_image(&rel) {
-                Some((rel, e.metadata().ok()?.len()))
+    {
+        let Ok(m) = e.metadata() else { continue };
+        n += 1;
+        len += m.len();
+        mx = mx.max(mtime_ms(&m));
+        let Ok(rel) = e.path().strip_prefix(root) else { continue };
+        let rel = rel.to_string_lossy().replace('\\', "/");
+        if is_image(&rel) {
+            files.push((rel, m.len()));
+        }
+    }
+    crate::shelf_scan::sort_by_comic_name(&mut files, |f| f.0.as_str());
+    (files, format!("f{n}:{len}:{mx}"))
+}
+
+pub fn scan_folder(root: &Path) -> Vec<RealPage> {
+    let (files, _) = walk_folder(root);
+    probe_folder_pages(root, files)
+}
+
+/// How many real pages around the resume point to header-probe before the
+/// reader is allowed to paint. The rest are filled in the background.
+pub(crate) const OPEN_PROBE_BEHIND: usize = 4;
+pub(crate) const OPEN_PROBE_AHEAD: usize = 24;
+
+pub(crate) fn probe_range(n: usize, around: usize) -> std::ops::Range<usize> {
+    if n == 0 {
+        return 0..0;
+    }
+    let around = around.min(n - 1);
+    let start = around.saturating_sub(OPEN_PROBE_BEHIND);
+    let end = (around + 1 + OPEN_PROBE_AHEAD).min(n);
+    start..end
+}
+
+/// Page list ready for `open_book`.
+///
+/// `full` reads every image header before returning (rescan, tests).
+/// The interactive open probes only `probe_range` so the first screen has
+/// real aspect ratios, and reports `pending` for the pages left at 0×0.
+pub struct FreshIndex {
+    pub pages: Vec<RealPage>,
+    pub sig: String,
+    pub pending: usize,
+}
+
+pub fn index_for_open(
+    kind: SourceKind,
+    paths: &[String],
+    around: usize,
+    full: bool,
+) -> Result<FreshIndex, ReaderError> {
+    match kind {
+        SourceKind::Zip => index_zip_open(paths, around, full),
+        SourceKind::Folder => index_folder_open(paths, around, full),
+        SourceKind::Images => index_images_open(paths, around, full),
+    }
+}
+
+fn blank_page(name: String, bytes: u64) -> RealPage {
+    RealPage {
+        entry: 0,
+        name,
+        w: 0,
+        h: 0,
+        bytes,
+        src_path: None,
+    }
+}
+
+fn zip_name_list(path: &Path) -> Result<Vec<RealPage>, ReaderError> {
+    let mut ar = open_zip(path)?;
+    let cands = zip_candidates(&mut ar);
+    Ok(cands
+        .into_iter()
+        .map(|(entry, name)| RealPage {
+            entry,
+            name,
+            w: 0,
+            h: 0,
+            bytes: 0,
+            src_path: None,
+        })
+        .collect())
+}
+
+fn probe_zip_indices(
+    path: &Path,
+    pages: &mut [RealPage],
+    range: std::ops::Range<usize>,
+) -> Result<(), ReaderError> {
+    if range.start >= range.end {
+        return Ok(());
+    }
+    let mut ar = open_zip(path)?;
+    for i in range {
+        let entry = pages[i].entry;
+        let name = pages[i].name.clone();
+        pages[i] = probe_zip_entry(&mut ar, entry, name);
+    }
+    Ok(())
+}
+
+fn index_zip_open(paths: &[String], around: usize, full: bool) -> Result<FreshIndex, ReaderError> {
+    let path = paths.first().map(PathBuf::from).unwrap_or_default();
+    let sig = quick_sig(SourceKind::Zip, &path)?;
+    if full {
+        return Ok(FreshIndex {
+            pages: scan_zip(&path)?,
+            sig,
+            pending: 0,
+        });
+    }
+    let mut pages = zip_name_list(&path)?;
+    let range = probe_range(pages.len(), around);
+    let pending = pages.len().saturating_sub(range.len());
+    probe_zip_indices(&path, &mut pages, range)?;
+    Ok(FreshIndex { pages, sig, pending })
+}
+
+fn folder_part_prefix(root: &Path, index: usize, total: usize) -> String {
+    let raw = root
+        .file_name()
+        .map(|s| s.to_string_lossy().replace(['/', '\\'], "／"))
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| format!("part{}", index + 1));
+    if total > 1 {
+        format!("{:02}-{}", index + 1, raw)
+    } else {
+        raw
+    }
+}
+
+fn prefix_folder_pages(root: &Path, prefix: &str, pages: &mut [RealPage]) {
+    for page in pages {
+        let abs = root.join(&page.name);
+        page.name = format!("{prefix}/{}", page.name);
+        page.src_path = Some(abs.to_string_lossy().to_string());
+    }
+}
+
+fn index_folder_open(paths: &[String], around: usize, full: bool) -> Result<FreshIndex, ReaderError> {
+    // Signature covers every root, including ones that are not directories
+    // (those contribute `f0:0:0`, matching `quick_sig` on an empty walk).
+    // Pages are only taken from real directories, and a multi-root book
+    // prefixes names the same way `scan_folder_parts` does.
+    let mut sigs = Vec::with_capacity(paths.len());
+    struct Part {
+        root: PathBuf,
+        files: Vec<(String, u64)>,
+        prefix: Option<String>,
+    }
+    let mut parts = Vec::new();
+    for (i, root_s) in paths.iter().enumerate() {
+        let root = PathBuf::from(root_s);
+        let (files, sig) = walk_folder(&root);
+        sigs.push(sig);
+        if root.is_dir() {
+            let prefix = if paths.len() > 1 {
+                Some(folder_part_prefix(&root, i, paths.len()))
             } else {
                 None
+            };
+            parts.push(Part { root, files, prefix });
+        }
+    }
+    let sig = if paths.len() > 1 {
+        sigs.join("|")
+    } else {
+        sigs.pop().unwrap_or_else(|| "f0:0:0".into())
+    };
+
+    if full {
+        let mut pages = Vec::new();
+        for part in parts {
+            let mut probed = probe_folder_pages(&part.root, part.files);
+            if let Some(prefix) = &part.prefix {
+                prefix_folder_pages(&part.root, prefix, &mut probed);
             }
+            pages.extend(probed);
+        }
+        return Ok(FreshIndex { pages, sig, pending: 0 });
+    }
+
+    let mut listed: Vec<(PathBuf, String, u64, Option<String>)> = Vec::new();
+    for part in parts {
+        for (rel, bytes) in part.files {
+            listed.push((part.root.clone(), rel, bytes, part.prefix.clone()));
+        }
+    }
+    let n = listed.len();
+    let range = probe_range(n, around);
+    let pending = n.saturating_sub(range.len());
+    let mut pages: Vec<RealPage> = listed
+        .iter()
+        .map(|(_, rel, bytes, _)| blank_page(rel.clone(), *bytes))
+        .collect();
+    // Probe each root's slice of the window with the original relative names,
+    // then apply the multi-root prefix to every page.
+    let mut cursor = 0;
+    while cursor < n {
+        let root = listed[cursor].0.clone();
+        let mut end = cursor + 1;
+        while end < n && listed[end].0 == root {
+            end += 1;
+        }
+        let lo = cursor.max(range.start);
+        let hi = end.min(range.end);
+        if lo < hi {
+            let files: Vec<(String, u64)> = (lo..hi)
+                .map(|i| (listed[i].1.clone(), listed[i].2))
+                .collect();
+            let probed = probe_folder_pages(&root, files);
+            for (page, slot) in probed.into_iter().zip(lo..hi) {
+                pages[slot] = page;
+            }
+        }
+        cursor = end;
+    }
+    for (i, item) in listed.iter().enumerate() {
+        if let Some(prefix) = &item.3 {
+            prefix_folder_pages(&item.0, prefix, &mut pages[i..i + 1]);
+        }
+    }
+    Ok(FreshIndex { pages, sig, pending })
+}
+
+fn index_images_open(paths: &[String], around: usize, full: bool) -> Result<FreshIndex, ReaderError> {
+    let sig = "i".into();
+    if full {
+        return Ok(FreshIndex {
+            pages: scan_images(paths),
+            sig,
+            pending: 0,
+        });
+    }
+    let mut pages: Vec<RealPage> = paths
+        .iter()
+        .map(|p| {
+            let bytes = std::fs::metadata(p).map(|m| m.len()).unwrap_or(0);
+            blank_page(p.clone(), bytes)
         })
         .collect();
-    crate::shelf_scan::sort_by_comic_name(&mut files, |f| f.0.as_str());
-    probe_folder_pages(root, files)
+    let range = probe_range(pages.len(), around);
+    let pending = pages.len().saturating_sub(range.len());
+    for i in range {
+        let name = pages[i].name.clone();
+        let bytes = pages[i].bytes;
+        pages[i] = loose_page(name, bytes);
+    }
+    Ok(FreshIndex { pages, sig, pending })
 }
 
 fn folder_page(root: &Path, name: String, bytes: u64) -> RealPage {
@@ -545,21 +794,7 @@ pub fn quick_sig(kind: SourceKind, path: &Path) -> Result<String, ReaderError> {
             let m = std::fs::metadata(path)?;
             Ok(format!("z{}:{}", m.len(), ms(&m)))
         }
-        SourceKind::Folder => {
-            let (mut n, mut len, mut mx) = (0u64, 0u64, 0u128);
-            for e in walkdir::WalkDir::new(path)
-                .into_iter()
-                .filter_map(Result::ok)
-                .filter(|e| e.file_type().is_file())
-            {
-                if let Ok(m) = e.metadata() {
-                    n += 1;
-                    len += m.len();
-                    mx = mx.max(ms(&m));
-                }
-            }
-            Ok(format!("f{n}:{len}:{mx}"))
-        }
+        SourceKind::Folder => Ok(walk_folder(path).1),
         SourceKind::Images => Ok("i".into()), // loose-image books: caller hashes the path list if needed
     }
 }
@@ -671,6 +906,68 @@ mod bench_tests {
         assert_eq!(folder_pages.last().unwrap().name, "040.jpg");
         assert_eq!(names_of(&folder_pages), names_of(&folder_warm));
         note(&format!("BENCH folder40 cold_ms={folder_cold} warm_ms={folder_warm_ms}"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn interactive_index_returns_before_the_tail_is_probed() {
+        let dir = std::env::temp_dir().join(format!("mh-fast-open-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let a = dir.join("a");
+        let b = dir.join("b");
+        std::fs::create_dir_all(&a).unwrap();
+        std::fs::create_dir_all(&b).unwrap();
+        let jpeg = jpeg(20, 28);
+        for i in 1..=40 {
+            let name = format!("{i:03}.jpg");
+            std::fs::write(a.join(&name), &jpeg).unwrap();
+            std::fs::write(b.join(&name), &jpeg).unwrap();
+        }
+        std::fs::write(a.join("notes.txt"), b"not a page").unwrap();
+        std::fs::write(b.join("notes.txt"), b"not a page").unwrap();
+
+        let t_fast = Instant::now();
+        let fast = index_for_open(SourceKind::Folder, &[a.to_string_lossy().to_string()], 0, false).unwrap();
+        let fast_ms = t_fast.elapsed().as_millis();
+        let t_full = Instant::now();
+        let full = index_for_open(SourceKind::Folder, &[b.to_string_lossy().to_string()], 0, true).unwrap();
+        let full_ms = t_full.elapsed().as_millis();
+
+        assert_eq!(fast.pages.len(), 40);
+        assert_eq!(full.pages.len(), 40);
+        assert!(fast.pending > 0, "tail should still be pending");
+        assert_eq!(full.pending, 0);
+        assert!(fast.pages[0].w > 0 && fast.pages[0].h > 0, "first page is probed");
+        assert_eq!(fast.pages[35].w, 0, "pages past the window stay unprobed");
+        assert!(full.pages[35].w > 0 && full.pages[35].h > 0);
+        assert_eq!(fast.sig, quick_sig(SourceKind::Folder, &a).unwrap());
+        assert_eq!(full.sig, quick_sig(SourceKind::Folder, &b).unwrap());
+        assert_ne!(fast.sig, "f40:0:0", "non-image files count toward the signature");
+        assert_eq!(names_of(&full.pages), names_of(&scan_folder(&b)));
+        if full_ms > 20 {
+            assert!(
+                fast_ms * 2 < full_ms,
+                "interactive {fast_ms}ms should beat a full probe {full_ms}ms"
+            );
+        }
+        note(&format!("BENCH open-index fast_ms={fast_ms} full_ms={full_ms} pending={}", fast.pending));
+
+        let multi = index_for_open(
+            SourceKind::Folder,
+            &[a.to_string_lossy().to_string(), b.to_string_lossy().to_string()],
+            0,
+            true,
+        )
+        .unwrap();
+        let expect_sig = format!(
+            "{}|{}",
+            quick_sig(SourceKind::Folder, &a).unwrap(),
+            quick_sig(SourceKind::Folder, &b).unwrap()
+        );
+        assert_eq!(multi.sig, expect_sig);
+        assert_eq!(multi.pages.len(), 80);
+        assert!(multi.pages[0].name.contains('/'));
+        assert!(multi.pages[0].src_path.is_some());
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

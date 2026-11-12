@@ -829,3 +829,15 @@ label.check{display:inline-flex;align-items:center;gap:6px;cursor:pointer}
 .meta-book .grow,.meta-job .grow{flex:1;min-width:0}
 .meta-book .muted,.meta-job .muted{display:block}
 @media(max-width:900px){.meta-desk{grid-template-columns:1fr}}
+
+/* v0.9.3: reader chrome and zoom stay on the compositor.
+   Layout/style containment keeps a panel update from dirtying the page list.
+   Paint containment is omitted so flyout and drawer shadows are not clipped.
+   Zoom writes one transform on the sizer; will-change lasts only for the gesture.
+   While the strip is moving, the floating pill and open panels drop backdrop-filter
+   (the fill underneath is already opaque) and put it back when scrolling stops. */
+.rg>.bp,.rg>.tb,.rg>.bb,.rg .flyout,.rg .drawer,.rg .mp__head{contain:layout style}
+#host .sizer.zoom-live{will-change:transform}
+#rg.is-scrolling .vp__pill,#rg.is-scrolling .vp__auto,#rg.is-scrolling .drawer,#rg.is-scrolling .flyout{
+  backdrop-filter:none;-webkit-backdrop-filter:none
+}

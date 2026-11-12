@@ -107,15 +107,22 @@ function paintScrub(page, realPages, frac = 0) {
   const tip = $('tiplabel');
   if (tip) tip.textContent = pageReadout(page, realPages).text;
 }
+function setText(node, text) {
+  if (node && node.textContent !== text) node.textContent = text;
+}
+function setTitle(node, title) {
+  if (node && title != null && node.title !== title) node.title = title;
+}
 function paintPageReadout(page, realPages, { commit = true } = {}) {
   const lab = positionLabels(page, realPages);
-  $('pgCount').textContent = lab.text; $('pgCount').title = lab.long;
-  $('vpText').textContent = lab.text;
-  $('bbCount').textContent = lab.text; $('bbCount').title = lab.long;
-  $('bbCount').dataset.page = String(lab.page); $('bbCount').dataset.total = String(lab.total);
-  $('bcEp').textContent = lab.crumb;
-  $('bbEp').textContent = lab.side; $('bbEp').title = lab.long;
-  $('bbEp').dataset.page = String(lab.page); $('bbEp').dataset.total = String(lab.total);
+  const pg = $('pgCount'), vp = $('vpText'), bb = $('bbCount'), crumb = $('bcEp'), side = $('bbEp');
+  setText(pg, lab.text); setTitle(pg, lab.long);
+  setText(vp, lab.text);
+  setText(bb, lab.text); setTitle(bb, lab.long);
+  if (bb) { bb.dataset.page = String(lab.page); bb.dataset.total = String(lab.total); }
+  setText(crumb, lab.crumb);
+  setText(side, lab.side); setTitle(side, lab.long);
+  if (side) { side.dataset.page = String(lab.page); side.dataset.total = String(lab.total); }
   if (!commit) return lab;
   shown = lab.total ? lab.page - 1 : 0;
   history_.updateCurrent({ page: shown, realPages: lab.total, epText: lab.crumb });
@@ -143,6 +150,14 @@ const readerBootFresh = document.documentElement.dataset.readerBoot !== '1';
 if (readerBootFresh) document.documentElement.dataset.readerBoot = '1';
 if (readerBootFresh) addEventListener('pointerup', () => $('track').classList.remove('is-drag'));
 const trackObserver = new ResizeObserver(() => renderChapterUi());
+let scrollIdle = 0;
+if (readerBootFresh) $('host')?.addEventListener('scroll', () => {
+  const rg = $('rg');
+  if (!rg) return;
+  rg.classList.add('is-scrolling');
+  clearTimeout(scrollIdle);
+  scrollIdle = setTimeout(() => rg.classList.remove('is-scrolling'), 160);
+}, { passive: true, capture: true });
 
 // ---- opening / switching views ----------------------------------------------------------------------------
 async function largeBookGuard(info) {
@@ -158,33 +173,41 @@ function showOpening(on) {
   const n = $('readerLoading');
   if (n) n.hidden = !on;
 }
+let bootGen = 0;
 async function startView({ startPos = null } = {}) {
+  const gen = ++bootGen;
   auto.stop(); $('endCard').hidden = true; $('err').hidden = true;
   showOpening(true);
   if (view) { await view.close(); view = null; }
+  if (gen !== bootGen) return;
   book = null;                                                  // drop stale info while the next open is in flight
   resetTrack(); strip.reset(); applyReaderSurface();
   const Mode = modeNow === 'flip' ? FlipView : Reader;
-  view = new Mode($('host'), { onPosition, scrubber: [$('track'), $('thumb'), $('tiplabel')] });
-  view.onScrubPreview = (page, n) => paintPageReadout(page, n, { commit: false });
+  const opened = new Mode($('host'), { onPosition, scrubber: [$('track'), $('thumb'), $('tiplabel')] });
+  view = opened;
+  opened.onScrubPreview = (page, n) => paintPageReadout(page, n, { commit: false });
   try {
     // Assign `book` in beforeMount (runs after openBook, before first onPosition from tick/render)
     // so pageText / ThumbStrip never see null during open.
-    await view.open(bookId, {
+    await opened.open(bookId, {
       perf: saverNow ? 'saver' : 'balanced', widthPct: rp.widthPct, gap: rp.gap, spread: rp.spread, startPos, wheelSpeed: rp.wheel,
       beforeMount: async (info) => { book = info; return largeBookGuard(info); },
     });
-    view.setCrop?.(cropOpts());
-    view.setRtl?.(rp.rtl);
-    applyReaderFit(rp.fitMode, view);
+    if (gen !== bootGen) return;
+    opened.setCrop?.(cropOpts());
+    opened.setRtl?.(rp.rtl);
+    applyReaderFit(rp.fitMode, opened);
   } catch (e) {
-    const dying = view;
-    view = null;
+    if (gen !== bootGen) return;
+    const lost = e?.code === 'superseded' || e?.detail === 'superseded';
+    if (view === opened) view = null;
     book = null;
     showOpening(false);
-    await dying?.close?.().catch(() => {});
+    if (!lost) await opened.close?.().catch(() => {});
+    if (lost) return;
     return openFailed(e);
   }
+  if (gen !== bootGen || view !== opened) return;
   book = view.info; endDismissed = false; endArmAt = performance.now() + 1500;
   chMode = book.chapterMode; chN = sanePages(book.chapterPages); $('chrem').checked = !!book.chapterOverridden;
   $('bpCover').src = coverUrl(bookId); $('bbThumb').src = coverUrl(bookId);
@@ -205,7 +228,12 @@ async function leave(url) {
 }
 
 // ---- chapters (navigation + display only) -----------------------------------------------------------------
+let chapterUiRaf = 0;
 function renderChapterUi() {
+  if (chapterUiRaf) return;
+  chapterUiRaf = requestAnimationFrame(() => { chapterUiRaf = 0; renderChapterUiNow(); });
+}
+function renderChapterUiNow() {
   $('epnav').hidden = chs.length === 0;
   const rail = $('track').querySelector('.scrub__rail');
   rail.querySelectorAll('.tick').forEach(n => n.remove());
@@ -518,6 +546,16 @@ if (readerBootFresh) win.onCloseRequested(async (e) => {
 });
 
 // ---- go ---------------------------------------------------------------------------------------------------------------
+if (readerBootFresh && T.event?.listen) {
+  T.event.listen('book-list-refreshed', (ev) => {
+    const p = ev?.payload || {};
+    if (!book || !view) return;
+    const id = Number(p.bookId);
+    if (!Number.isFinite(id) || id !== bookId) return;
+    if (!p.sig || p.sig === book.sig) return;
+    startView({ startPos: view.topPos?.() || null });
+  }).catch(() => {});
+}
 wireTrack(); trackObserver.observe($('track'));
 applyReaderChrome(!!prefs.get('reader.chromeHidden', false), { persist: false });
 invoke('get_chapter_defaults').then(d => { chDefaults = d; }).catch(() => {});
