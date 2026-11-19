@@ -53,7 +53,7 @@ export class FlipView {
       const now = e.timeStamp || performance.now();
       const step = flipWheelAdvance(this._wheelState, e, now);
       this._wheelState = step.state;
-      if (step.dir) this.stepPage(step.dir);
+      if (step.dir) this.stepPage(step.dir, { settle: false });
     };
     this._tap = (e) => {
       if (this._suppressClick) { this._suppressClick = false; return; }
@@ -62,6 +62,21 @@ export class FlipView {
       if (z < 0) this.prev();
       else if (z > 0) this.next();
     };
+  }
+
+  _mount(token, opts) {
+    if (token !== this._openToken) throw { code: 'superseded', detail: 'superseded' };
+    this.layout.setBook(this.info.dims || [], this.info.src || []);
+    this.layout.compute({ viewW: this.host.clientWidth || 800, widthPct: this.params.widthPct, gap: 0, spread: false });
+    const start = opts.startPos?.page ?? this.info.resume?.page ?? 0;
+    this.page = this.spread ? this.layout.spreadStart(start) : Math.max(0, Math.min(this.layout.realPages - 1, start));
+    this.mountDom();
+    this._listen?.clear();
+    this._listen = createListenerBag();
+    this._listen.add(window, 'keydown', this._key);
+    this._listen.add(this.host, 'wheel', this._onWheel, { passive: false });
+    this.saver = new ProgressSaver(this.bookId);
+    this.render();
   }
 
   async open(bookId, opts = {}) {
@@ -88,18 +103,19 @@ export class FlipView {
       if (token !== this._openToken) superseded();
       if (r === false) { await api.closeBook(bookId).catch(() => {}); throw { code: 'cancelled' }; }
     }
-    if (token !== this._openToken) superseded();
-    this.layout.setBook(this.info.dims || [], this.info.src || []);
-    this.layout.compute({ viewW: this.host.clientWidth || 800, widthPct: this.params.widthPct, gap: 0, spread: false });
-    const start = opts.startPos?.page ?? this.info.resume?.page ?? 0;
-    this.page = this.spread ? this.layout.spreadStart(start) : Math.max(0, Math.min(this.layout.realPages - 1, start));
-    this.mountDom();
-    this._listen?.clear();
-    this._listen = createListenerBag();
-    this._listen.add(window, 'keydown', this._key);
-    this._listen.add(this.host, 'wheel', this._onWheel, { passive: false });
-    this.saver = new ProgressSaver(bookId);
-    this.render();
+    this._mount(token, opts);
+    return this.info;
+  }
+
+  // Already-open book. Returns after the new page is in the host, with no await.
+  prepare(bookId, opts = {}) {
+    const token = ++this._openToken;
+    if (!opts.info) throw { code: 'no_info', detail: 'no_info' };
+    this.info = opts.info;
+    this.bookId = bookId;
+    this.params = { widthPct: clampWidthPct(opts.widthPct ?? 100), spreadGap: opts.spreadGap ?? 8 };
+    this.spread = !!opts.spread;
+    this._mount(token, opts);
     return this.info;
   }
 
@@ -117,6 +133,7 @@ export class FlipView {
     this.imgB = this.host.querySelector('.flip-image--b');
     this.imgA.decoding = 'async';
     this.imgB.decoding = 'async';
+    this.root = this.host.querySelector('.flip-view');
     this.host.querySelector('.flip-prev').onclick = () => this.prev();
     this.host.querySelector('.flip-next').onclick = () => this.next();
     const stage = this.host.querySelector('.flip-stage');
@@ -411,7 +428,7 @@ export class FlipView {
     if (!opts.keepDrag) this._clearDrag();
     const before = this.page;
     const indexDir = Math.sign(dir) || 0;
-    const settle = opts.settle !== false;
+    const settle = opts.settle === true;
     if (this.spread) {
       const n = this.layout.spreadStart(this.page) + (dir > 0 ? 2 : -2);
       this.page = Math.max(0, Math.min(this.layout.realPages - 1, n));
@@ -422,12 +439,14 @@ export class FlipView {
     if (indexDir) this._lastDir = indexDir;
     const changed = this.page !== before;
     const hot = this.render();
+    // Button, key, and wheel turns land on the page immediately. A settle
+    // slide after the swap reads as the control still catching up.
     if (!changed) this._resist(indexDir);
     else if (hot && settle) this._settle(indexDir);
   }
   setRtl(on) { this.rtl = !!on; }
-  prev() { this.stepPage(rtlStep(-1, this.rtl)); }
-  next() { this.stepPage(rtlStep(1, this.rtl)); }
+  prev() { this.stepPage(rtlStep(-1, this.rtl), { settle: false }); }
+  next() { this.stepPage(rtlStep(1, this.rtl), { settle: false }); }
   scrollable() { return false; }
   setFit() {
     this.params.widthPct = 100;
@@ -443,7 +462,10 @@ export class FlipView {
   setSpread(on) {
     const was = this.page;
     this.spread = !!on;
-    this.mountDom();
+    // The two images already exist. Rebuilding the stage reloaded them and
+    // flashed the empty host. The spread class only changes how they sit.
+    if (this.root) this.root.classList.toggle('flip-view--spread', this.spread);
+    else this.mountDom();
     this.page = this.spread ? this.layout.spreadStart(was) : was;
     this.render();
   }
@@ -452,7 +474,7 @@ export class FlipView {
     if (opts.enabled === false) this.crop.cache.clear();
     this.render();
   }
-  async close({ releaseBook = true } = {}) {
+  release({ releaseBook = true } = {}) {
     this._openToken = (this._openToken || 0) + 1;
     this._turn = 0;
     this._anim?.cancel();
@@ -464,8 +486,22 @@ export class FlipView {
     this._stageEl?.removeEventListener('click', this._tap);
     for (const img of this._warm.values()) img.removeAttribute('src');
     this._warm.clear();
-    if (releaseBook && this.bookId) await api.closeBook(this.bookId).catch(() => {});
-    this.host.replaceChildren();
-    await flush;
+    const closing = releaseBook ? this.bookId : 0;
+    return (async () => {
+      if (closing) await api.closeBook(closing).catch(() => {});
+      await flush;
+    })();
+  }
+  unmount() {
+    this.root?.remove();
+    this.root = null;
+    this.imgA = null;
+    this.imgB = null;
+    this._stageEl = null;
+  }
+  async close(opts) {
+    const tail = this.release(opts);
+    await tail;
+    this.unmount();
   }
 }

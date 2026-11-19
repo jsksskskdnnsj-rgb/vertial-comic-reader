@@ -190,12 +190,18 @@ if (readerBootFresh) document.documentElement.dataset.readerBoot = '1';
 if (readerBootFresh) addEventListener('pointerup', () => $('track').classList.remove('is-drag'));
 const trackObserver = new ResizeObserver(() => renderChapterUi());
 let scrollIdle = 0;
+let scrollResched = 0;
 if (readerBootFresh) $('host')?.addEventListener('scroll', () => {
   const rg = $('rg');
   if (!rg) return;
   rg.classList.add('is-scrolling');
+  const now = performance.now();
+  // The class only needs to outlive the last event. Resetting the timer on
+  // every scroll packet is work the frame cannot spare.
+  if (scrollIdle && now < scrollResched) return;
+  scrollResched = now + 50;
   clearTimeout(scrollIdle);
-  scrollIdle = setTimeout(() => rg.classList.remove('is-scrolling'), 160);
+  scrollIdle = setTimeout(() => { scrollIdle = 0; rg.classList.remove('is-scrolling'); }, 160);
 }, { passive: true, capture: true });
 
 // ---- opening / switching views ----------------------------------------------------------------------------
@@ -219,22 +225,42 @@ async function startView({ startPos = null, reuse = false } = {}) {
   resetPositionPaint();
   const kept = reuse ? liveBookInfo(view) : null;
   if (!kept) showOpening(true);
-  if (view) { await view.close({ releaseBook: !kept }); view = null; }
-  if (gen !== bootGen) return;
+  const old = view;
+  view = null;
+  // A reused book must not wait on the progress write: that await ran after
+  // the old surface was removed and the host painted empty. A real close
+  // (different book, or the first open) still finishes before the next openBook.
+  let tail = Promise.resolve();
+  if (old && kept) tail = old.release({ releaseBook: false });
+  else if (old) {
+    await old.close({ releaseBook: true });
+    if (gen !== bootGen) return;
+  }
   if (!kept) book = null;                                       // drop stale info while the next open is in flight
-  resetTrack(); strip.reset(); applyReaderSurface();
+  if (!kept) { resetTrack(); strip.reset(); }
+  applyReaderSurface();
   const Mode = modeNow === 'flip' ? FlipView : Reader;
   const opened = new Mode($('host'), { onPosition, scrubber: [$('track'), $('thumb'), $('tiplabel')] });
   view = opened;
   opened.onScrubPreview = (page, n) => paintPageReadout(page, n, { commit: false });
   try {
-    // Assign `book` in beforeMount (runs after openBook, before first onPosition from tick/render)
-    // so pageText / ThumbStrip never see null during open.
-    await opened.open(bookId, {
-      perf: saverNow ? 'saver' : 'balanced', widthPct: rp.widthPct, gap: rp.gap, spread: rp.spread, startPos, wheelSpeed: rp.wheel,
-      info: kept || undefined,
-      beforeMount: async (info) => { book = info; return kept ? undefined : largeBookGuard(info); },
-    });
+    if (kept) {
+      // Paint the next surface, then drop the previous nodes. No await sits
+      // between those two, so the browser never paints an empty host.
+      opened.prepare(bookId, {
+        perf: saverNow ? 'saver' : 'balanced', widthPct: rp.widthPct, gap: rp.gap, spread: rp.spread, startPos, wheelSpeed: rp.wheel,
+        info: kept,
+      });
+      book = opened.info;
+      old.unmount();
+    } else {
+      // Assign `book` in beforeMount (runs after openBook, before first onPosition from tick/render)
+      // so pageText / ThumbStrip never see null during open.
+      await opened.open(bookId, {
+        perf: saverNow ? 'saver' : 'balanced', widthPct: rp.widthPct, gap: rp.gap, spread: rp.spread, startPos, wheelSpeed: rp.wheel,
+        beforeMount: async (info) => { book = info; return largeBookGuard(info); },
+      });
+    }
     if (gen !== bootGen) return;
     opened.setCrop?.(cropOpts());
     opened.setRtl?.(rp.rtl);
@@ -245,7 +271,10 @@ async function startView({ startPos = null, reuse = false } = {}) {
     if (view === opened) view = null;
     book = null;
     showOpening(false);
-    if (!lost) await opened.close?.().catch(() => {});
+    if (!lost) {
+      old?.unmount?.();
+      await opened.close?.().catch(() => {});
+    }
     if (lost) return;
     return openFailed(e);
   }
@@ -255,7 +284,7 @@ async function startView({ startPos = null, reuse = false } = {}) {
   $('bpCover').src = coverUrl(bookId); $('bbThumb').src = coverUrl(bookId);
   $('bpTitle').textContent = book.title; $('bcBook').textContent = book.title; $('bbBook').textContent = book.title;
   $('bpChips').innerHTML = `<span class="chip">${esc(t('book.pages', { n: book.realPages }))}</span>`;
-  view.refresh(); recompute(); syncControls(); showOpening(false); await Promise.all([loadBookmarks(), loadHistory()]);
+  view.refresh(); recompute(); syncControls(); showOpening(false); await Promise.all([loadBookmarks(), loadHistory(), tail]);
 }
 function openFailed(e) {
   if (e?.code === 'cancelled') return leave('library.html');

@@ -168,18 +168,32 @@ export class Layout {
     this.spreadGap = Math.max(0, Math.round(spreadGap));
 
     if (!this.spread) {
-      this.sizerW = Math.max(this.colW, viewW);
-      this.left = Math.round((this.sizerW - this.colW) / 2);
+      // Local bindings: a shorter book runs this on every zoom frame, and a
+      // long book runs it once when the gesture commits. Locals avoid a
+      // method call per page.
+      const n = this.n;
+      const colW = this.colW;
+      const ar = this.ar;
+      const src = this.src;
+      const vTop = this.vTop;
+      const vH = this.vH;
+      const vLeft = this.vLeft;
+      const vW = this.vW;
+      this.sizerW = Math.max(colW, viewW);
+      const left = Math.round((this.sizerW - colW) / 2);
+      this.left = left;
       let y = 0;
-      for (let i = 0; i < this.n; i++) {
-        const H = this._sliceHeight(i, this.colW);
-        this.vTop[i] = y;
-        this.vH[i] = H;
-        this.vLeft[i] = this.left;
-        this.vW[i] = this.colW;
-        y += H + (this.isGroupEnd(i) && i < this.n - 1 ? gap : 0);
+      for (let i = 0; i < n; i++) {
+        const a = ar[i] > 0 ? ar[i] : FALLBACK_AR;
+        const H = Math.max(1, Math.round(colW * a));
+        vTop[i] = y;
+        vH[i] = H;
+        vLeft[i] = left;
+        vW[i] = colW;
+        y += H;
+        if (i < n - 1 && src[i + 1] !== src[i]) y += gap;
       }
-      this.contentH = this.n ? this.vTop[this.n - 1] + this.vH[this.n - 1] : 0;
+      this.contentH = n ? vTop[n - 1] + vH[n - 1] : 0;
       this.sizerH = this.contentH + endPad;
       return;
     }

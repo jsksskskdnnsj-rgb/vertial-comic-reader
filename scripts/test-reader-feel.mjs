@@ -14,7 +14,7 @@ import {
   flipDragRelease, flipSettleMs, flipSwipeDir, flipVisualSign, flipWheelAdvance, glideChase, glideTauMs, keyReleaseSpeed, latchWheelKind,
   pageKeyDistance, pageScrollSegment, pageSeamCover, samplePageScroll, stepPageKey,
 } from '../src/reader-feel.js';
-import { keyScrollPlan } from '../src/reader.js';
+import { keyScrollPlan, ProgressSaver, zoomDefersLayout, ZOOM_LAYOUT_EVERY_FRAME_MAX } from '../src/reader.js';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -262,6 +262,40 @@ const boot = fs.readFileSync(path.join(root, 'src/reader-boot.js'), 'utf8');
 assert.match(boot, /reuse:\s*true/);
 assert.match(boot, /liveBookInfo/);
 assert.match(boot, /paintKey/);
+{
+  const prepAt = boot.indexOf('opened.prepare(bookId');
+  const unmountAt = boot.indexOf('old.unmount()');
+  const releaseAt = boot.indexOf('release({ releaseBook: false })');
+  assert.ok(releaseAt > 0 && prepAt > releaseAt, 'progress flush starts without tearing the page down');
+  assert.ok(unmountAt > prepAt, 'the next surface is built before the previous one is removed');
+}
+assert.match(reader, /prepare\(bookId/);
+assert.match(reader, /unmount\(\)/);
+assert.match(reader, /zoomDefersLayout/);
+assert.match(reader, /_reschedAt/);
+assert.equal(/stepPage\(dir\)[\s\S]{0,240}smooth:\s*true/.test(reader), false);
+assert.equal(zoomDefersLayout(ZOOM_LAYOUT_EVERY_FRAME_MAX - 1), false);
+assert.equal(zoomDefersLayout(ZOOM_LAYOUT_EVERY_FRAME_MAX), true);
+assert.match(flip, /prepare\(bookId/);
+assert.match(flip, /this\.root\?\.remove\(\)/);
+assert.match(flip, /opts\.settle === true/);
+assert.match(flip, /flip-view--spread/);
+{
+  const orig = globalThis.setTimeout;
+  const calls = [];
+  globalThis.setTimeout = (fn, ms) => { calls.push(ms); return orig(fn, ms); };
+  try {
+    const saver = new ProgressSaver(7);
+    saver.mark({ page: 3, frac: 0.1 }, false);
+    saver.mark({ page: 3, frac: 0.4 }, false);
+    saver.mark({ page: 3, frac: 0.8 }, false);
+    assert.equal(calls.length, 1, 'a fling must not reset the save timer every frame');
+    assert.equal(saver.dirty.pos.frac, 0.8);
+    clearTimeout(saver.timer);
+  } finally {
+    globalThis.setTimeout = orig;
+  }
+}
 assert.match(flip, /pointermove/);
 assert.match(flip, /set_reading_window|setWindow/);
 assert.match(css, /\.scroller\{overflow-anchor:none\}/);
@@ -441,6 +475,74 @@ if (feel) {
   assert.equal(feel.h1, (feel.vH1 + 1) + 'px');
   assert.equal(feel.h0, feel.vH1 + 'px');
   console.log('chrome feel', { y: feel.y, sizerFilter: feel.sizerFilter });
+}
+
+function chromeHandoff() {
+  const chrome = ['google-chrome', 'chromium', 'chromium-browser'].find((b) => spawnSync('which', [b]).status === 0);
+  if (!chrome) return null;
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mh-handoff-'));
+  const file = path.join(dir, 'index.html');
+  const readerUrl = pathToFileURL(path.join(root, 'src/reader.js')).href;
+  const flipUrl = pathToFileURL(path.join(root, 'src/flip.js')).href;
+  fs.writeFileSync(file, `<!doctype html><html><body>
+<div id="host" style="position:relative;width:420px;height:520px"></div>
+<pre id="out"></pre>
+<script type="module">
+import { Reader } from ${JSON.stringify(readerUrl)};
+import { FlipView } from ${JSON.stringify(flipUrl)};
+const host = document.getElementById('host');
+const info = {
+  bookId: 1, sig: 's', title: 't', realPages: 4,
+  dims: [[800,1200],[800,1200],[800,1200],[800,1200]],
+  src: [0, 1, 2, 3],
+  resume: { page: 1, frac: 0 },
+};
+const a = new Reader(host);
+a.prepare(1, { info, perf: 'balanced', widthPct: 100, gap: 0, spread: false });
+const before = host.querySelectorAll('.page').length;
+const b = new Reader(host);
+b.prepare(1, { info, perf: 'saver', widthPct: 100, gap: 0, spread: false, startPos: { page: 1, frac: 0 } });
+const midCount = host.querySelectorAll('.scroller').length;
+const midPages = b.strip.liveCount;
+a.unmount();
+const after = host.querySelectorAll('.scroller').length;
+const flip = new FlipView(host);
+flip.prepare(1, { info, widthPct: 100, spread: false, startPos: { page: 1 } });
+b.unmount();
+document.getElementById('out').textContent = JSON.stringify({
+  before,
+  midCount,
+  midPages,
+  after,
+  oldGone: !a.strip.scroller.isConnected,
+  kept: b.strip.scroller.isConnected === false,
+  flipUp: !!host.querySelector('.flip-view img.flip-image--a')?.getAttribute('src'),
+  scrollers: host.querySelectorAll('.scroller').length,
+});
+</script></body></html>`);
+  const run = spawnSync(chrome, [
+    '--headless=new', '--disable-gpu', '--no-sandbox', '--disable-dev-shm-usage',
+    '--allow-file-access-from-files', `--user-data-dir=${path.join(dir, 'profile')}`,
+    '--window-size=800,700', '--virtual-time-budget=1000', '--dump-dom', `file://${file}`,
+  ], { encoding: 'utf8', timeout: 20000 });
+  const text = run.stdout || '';
+  const m = text.match(/<pre id="out">([^<]*)<\/pre>/);
+  if (!m) throw new Error('chrome handoff fixture produced no measurements:\n' + text.slice(0, 800));
+  return JSON.parse(m[1].replaceAll('&quot;', '"').replaceAll('&amp;', '&'));
+}
+
+const handoff = chromeHandoff();
+if (handoff) {
+  assert.ok(handoff.before > 0, 'the first surface had pages');
+  assert.equal(handoff.midCount, 2, 'the next surface is mounted before the previous one is removed');
+  assert.ok(handoff.midPages > 0, 'the next surface already has boxes');
+  assert.equal(handoff.after, 1);
+  assert.equal(handoff.oldGone, true);
+  assert.equal(handoff.scrollers, 0);
+  assert.ok(handoff.flipUp, 'flip mode paints a page before the scroll surface is dropped');
+  console.log('chrome handoff', handoff);
+} else {
+  console.log('chrome handoff skipped (no chrome)');
 }
 
 console.log('reader feel checks passed');

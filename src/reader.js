@@ -86,6 +86,14 @@ export function sameScroll(current, next) {
 // Zoom lays out on the next frame. The gap stays the configured pixel size
 // instead of being scaled by a CSS transform and then snapped back.
 export const ZOOM_COMMIT_MS = 0;
+/** Virtual pages at or above this defer a zoom gesture to one compositor scale.
+ *  Shorter books still lay the column out every frame, so a non-zero gap never snaps. */
+export const ZOOM_LAYOUT_EVERY_FRAME_MAX = 800;
+/** How long a long-book zoom may sit on the compositor before the real column lands. */
+export const ZOOM_SETTLE_MS = 72;
+export function zoomDefersLayout(pageCount) {
+  return (pageCount | 0) >= ZOOM_LAYOUT_EVERY_FRAME_MAX;
+}
 export const PAGE_WINDOW_CAP = 96;
 export function clampZoom(z) {
   const n = Number(z);
@@ -688,19 +696,27 @@ class Prefetcher {
 // Writes (page, frac) when it changed: 1.5 s after scrolling pauses, but never less often
 // than every 4 s during continuous reading. flush() is awaited on close/blur/hide.
 export class ProgressSaver {
-  constructor(bookId) { this.bookId = bookId; this.dirty = null; this.saved = null; this.lastAt = performance.now(); this.timer = 0; }
+  constructor(bookId) {
+    this.bookId = bookId; this.dirty = null; this.saved = null; this.lastAt = performance.now();
+    this.timer = 0; this._reschedAt = 0;
+  }
 
   mark(pos, reachedEnd) {
     const s = this.saved;
     if (!reachedEnd && s && s.page === pos.page && Math.abs(s.frac - pos.frac) < 0.002) return;
     this.dirty = { pos, reachedEnd: !!(reachedEnd || this.dirty?.reachedEnd) };
     const now = performance.now();
+    // A fling calls this every frame. The latest position is already in `dirty`;
+    // resetting the timer 60 times a second only stole time from the scroll.
+    if (this.timer && now < this._reschedAt) return;
+    this._reschedAt = now + 80;
     const delay = Math.max(0, Math.min(CFG.saveDebounceMs, this.lastAt + CFG.saveMaxWaitMs - now));
     clearTimeout(this.timer);
     this.timer = setTimeout(() => this.flush(), delay);
   }
   async flush() {
     clearTimeout(this.timer);
+    this.timer = 0;
     const d = this.dirty; if (!d) return;
     this.dirty = null;
     try {
@@ -788,40 +804,26 @@ export class Reader {
 
   layoutParams() { return { viewW: this.strip.viewW, ...this.params }; }
 
-  // opts: perf, widthPct, gap, startPos ({page,frac}: overrides the saved resume point),
-  //       beforeMount(info) -> false (cancel) | {perf} | undefined   (used for the large-book warning)
-  async open(bookId, { perf = 'balanced', widthPct = 100, gap = 0, spread = false, startPos = null, beforeMount = null, wheelSpeed = WHEEL_GEAR_DEFAULT, info: knownInfo = null } = {}) {
-    const token = ++this._openToken;
-    const superseded = () => {
-      const err = { code: 'superseded', detail: 'superseded' };
-      throw err;
-    };
-    this.perfName = perf; this.perf = PERF[perf];
-    this.wheelGear = wheelGear(wheelSpeed);
-    Object.assign(this.params, { widthPct: clampWidthPct(widthPct), gap, spread: !!spread });
-    const tOpen = performance.now();
-    let info = knownInfo;
-    if (!info) {
-      try {
-        info = await api.openBook(bookId);          // { bookId, sig, dims, src, realPages, chapters, resume, ... }
-      } catch (e) {
-        if (token !== this._openToken || e?.detail === 'superseded') superseded();
-        throw e;
-      }
-    }
-    if (token !== this._openToken) superseded();
-    this.info = info;
-    perfLog('openBook', tOpen, { bookId, pages: info?.realPages });
-    if (beforeMount) {
-      const r = await beforeMount(this.info);
-      if (token !== this._openToken) superseded();
-      if (r === false) { await api.closeBook(bookId).catch(() => {}); throw { code: 'cancelled' }; }
-      if (r?.perf) { this.perfName = r.perf; this.perf = PERF[r.perf]; }
-    }
-    if (token !== this._openToken) superseded();
+  _begin(opts) {
+    const perf = opts.perf || 'balanced';
+    this.perfName = perf;
+    this.perf = PERF[perf] || PERF.balanced;
+    this.wheelGear = wheelGear(opts.wheelSpeed);
+    Object.assign(this.params, {
+      widthPct: clampWidthPct(opts.widthPct ?? 100),
+      gap: opts.gap ?? 0,
+      spread: !!opts.spread,
+    });
+  }
+
+  // Synchronous: the boxes exist before this returns. Mode switches call this
+  // while the previous surface is still on screen, then unmount that surface.
+  _mount(token, startPos) {
+    if (token !== this._openToken) throw { code: 'superseded', detail: 'superseded' };
     this.perf = tunePerf(this.perf, this.info?.realPages);
     this.strip.padVh = this.perf.farVh || 5;
     const { dims, src } = this.info, resume = startPos ?? this.info.resume;
+    const bookId = this.info.bookId;
 
     const tDom = performance.now();
     this.strip.build(dims, src);
@@ -870,6 +872,49 @@ export class Reader {
     this._listen.add(window, 'blur', this.blurHandler = () => this.saver.flush());
   }
 
+  // opts: perf, widthPct, gap, startPos ({page,frac}: overrides the saved resume point),
+  //       beforeMount(info) -> false (cancel) | {perf} | undefined   (used for the large-book warning)
+  async open(bookId, { perf = 'balanced', widthPct = 100, gap = 0, spread = false, startPos = null, beforeMount = null, wheelSpeed = WHEEL_GEAR_DEFAULT, info: knownInfo = null } = {}) {
+    const token = ++this._openToken;
+    const superseded = () => {
+      const err = { code: 'superseded', detail: 'superseded' };
+      throw err;
+    };
+    this._begin({ perf, widthPct, gap, spread, wheelSpeed });
+    const tOpen = performance.now();
+    let info = knownInfo;
+    if (!info) {
+      try {
+        info = await api.openBook(bookId);          // { bookId, sig, dims, src, realPages, chapters, resume, ... }
+      } catch (e) {
+        if (token !== this._openToken || e?.detail === 'superseded') superseded();
+        throw e;
+      }
+    }
+    if (token !== this._openToken) superseded();
+    this.info = info;
+    perfLog('openBook', tOpen, { bookId, pages: info?.realPages });
+    if (beforeMount) {
+      const r = await beforeMount(this.info);
+      if (token !== this._openToken) superseded();
+      if (r === false) { await api.closeBook(bookId).catch(() => {}); throw { code: 'cancelled' }; }
+      if (r?.perf) { this.perfName = r.perf; this.perf = PERF[r.perf] || PERF.balanced; }
+    }
+    this._mount(token, startPos);
+    return this.info;
+  }
+
+  // Already-open book: no IPC and no await, so the caller can paint this
+  // surface before dropping the previous one.
+  prepare(bookId, { perf = 'balanced', widthPct = 100, gap = 0, spread = false, startPos = null, wheelSpeed = WHEEL_GEAR_DEFAULT, info: knownInfo = null } = {}) {
+    const token = ++this._openToken;
+    this._begin({ perf, widthPct, gap, spread, wheelSpeed });
+    if (!knownInfo) throw { code: 'no_info', detail: 'no_info' };
+    this.info = knownInfo;
+    this._mount(token, startPos);
+    return this.info;
+  }
+
   // Which virtual pages should Rust keep warm? Sized in viewport heights, not page counts,
   // so 8000px slices and 300px strips both get sensible windows.
   computeWindow(y, dir) {
@@ -886,7 +931,7 @@ export class Reader {
   get viewH() { return this.strip.viewH; }
   topPos() { return this.strip.layout.getPosition(this.strip.scroller.scrollTop); }                       // what is saved
   centerPos() { return this.strip.layout.getPosition(this.strip.scroller.scrollTop + this.strip.viewH / 2); }   // what B bookmarks
-  stepPage(dir) { const p = this.topPos(); const to = clamp(p.page + dir, 0, this.strip.layout.realPages - 1); this.jumpTo({ page: to, frac: 0 }, { smooth: true }); }
+  stepPage(dir) { const p = this.topPos(); const to = clamp(p.page + dir, 0, this.strip.layout.realPages - 1); this.jumpTo({ page: to, frac: 0 }); }
   refresh() { this.tracker?.tick(); }
   setRtl(on) { this.rtl = !!on; }
   setFit() {                                                                   // "fit to panel"
@@ -909,8 +954,16 @@ export class Reader {
     this.prefetcher.jumpNow({ ...this.computeWindow(y, y >= sc.scrollTop ? 1 : -1), center });
     if (smooth) { this.glideTo(y); return; }
     this.stopGlide();
-    this.tracker.expectJump(y);
-    sc.scrollTop = y;                                        // observers fire next frame -> demand requests
+    if (!sameScroll(sc.scrollTop, y)) {
+      this.tracker?.expectJump(y);
+      sc.scrollTop = y;
+    }
+    // Mount the destination in this turn. Waiting for the scroll event left
+    // a blank frame between the click and the page.
+    if (this.tracker) {
+      cancelAnimationFrame(this.tracker.raf);
+      this.tracker.tick();
+    }
   }
 
   // Notch scrolling and keyboard page jumps share one chase. The target moves
@@ -1108,22 +1161,37 @@ export class Reader {
     cancelAnimationFrame(hold.raf);
     if (hold.onUp) window.removeEventListener('keyup', hold.onUp);
   }
-  // Ctrl+wheel: one real layout per frame, anchored on the pointer. The column
-  // gap stays the configured pixel size (a CSS scale used to grow it, then snap).
+  // Ctrl+wheel, anchored on the pointer. A shorter book lays the column out
+  // every frame so the gap stays the configured pixel size. A very long book
+  // would relayout a huge scroll height on each notch, so the gesture scales
+  // on the compositor and the real column (same gap) lands once the wheel pauses.
   previewZoom(nextZoom, anchorY) {
     const live = clampZoom(nextZoom);
-    if (!this._zoom) this._zoom = { live, anchorY, raf: 0 };
+    const heavy = zoomDefersLayout(this.strip?.layout?.n || 0);
+    if (!this._zoom) this._zoom = { live, base: this.params.zoom || 1, anchorY, raf: 0, timer: 0, heavy };
     else {
       this._zoom.live = live;
       this._zoom.anchorY = anchorY;
     }
     const z = this._zoom;
+    if (z.heavy) {
+      const s = zoomPreviewScale(z.base, z.live);
+      const sizer = this.strip.sizer;
+      sizer.style.transformOrigin = `50% ${zoomOriginY(this.strip.scroller.scrollTop, z.anchorY)}px`;
+      sizer.style.transform = s === 1 ? '' : `scale(${s})`;
+      sizer.classList.toggle('zoom-live', s !== 1);
+      if (!z.timer) z.timer = setTimeout(() => this.flushZoom(), ZOOM_SETTLE_MS);
+      return;
+    }
     if (!z.raf) z.raf = requestAnimationFrame(() => this.flushZoom());
   }
   flushZoom() {
     const z = this._zoom;
     if (!z) return;
+    cancelAnimationFrame(z.raf);
+    clearTimeout(z.timer);
     z.raf = 0;
+    z.timer = 0;
     this._zoom = null;
     this.clearZoomStyle();
     const anchor = z.anchorY;
@@ -1144,6 +1212,7 @@ export class Reader {
     const z = this._zoom;
     if (!z) return;
     cancelAnimationFrame(z.raf);
+    clearTimeout(z.timer);
     this._zoom = null;
     this.clearZoomStyle();
   }
@@ -1156,6 +1225,7 @@ export class Reader {
     if (this._zoom) {
       const z = this._zoom;
       cancelAnimationFrame(z.raf);
+      clearTimeout(z.timer);
       this._zoom = null;
       this.clearZoomStyle();
       this.params.zoom = z.live;
@@ -1272,7 +1342,7 @@ export class Reader {
       case 'ArrowRight':
       case 'ArrowLeft': {
         const d = rtlPageDelta(e.key, this.rtl);
-        if (d) this.jumpTo({ page: page + d, frac: 0 }, { smooth: true });
+        if (d) this.jumpTo({ page: page + d, frac: 0 });
         break;
       }
       case 'Home': this.jumpTo({ page: 0, frac: 0 }); break;
@@ -1286,7 +1356,9 @@ export class Reader {
     e.preventDefault();
   }
 
-  async close({ releaseBook = true } = {}) {
+  // Stop input and start the save. The scroller stays until unmount(), so a
+  // mode switch can paint the next surface first.
+  release({ releaseBook = true } = {}) {
     this._openToken = (this._openToken || 0) + 1;
     this.dismissZoomPreview();
     if (this._layoutRaf) { cancelAnimationFrame(this._layoutRaf); this._layoutRaf = 0; }
@@ -1294,14 +1366,32 @@ export class Reader {
     this.stopKeyScroll();
     this.stopGlide();
     const flush = this.saver?.flush();
+    this.saver = null;
     this._listen?.clear();
     this._listen = null;
     this.scrubber?.destroy();
     this.scrubber = null;
-    this.ro?.disconnect(); this.tracker?.destroy(); this.imageWindow?.destroy(); this.prefetcher?.destroy();
-    this.strip.scroller.remove();                              // leave the host empty for the next view
-    if (releaseBook && this.info) await api.closeBook(this.info.bookId).catch(() => {});
-    await flush;
+    this.ro?.disconnect();
+    this.ro = null;
+    this.tracker?.destroy();
+    this.tracker = null;
+    this.imageWindow?.destroy();
+    this.imageWindow = null;
+    this.prefetcher?.destroy();
+    this.prefetcher = null;
+    const closing = releaseBook ? this.info?.bookId : 0;
+    return (async () => {
+      if (closing) await api.closeBook(closing).catch(() => {});
+      await flush;
+    })();
+  }
+  unmount() {
+    this.strip?.scroller?.remove();
+  }
+  async close(opts) {
+    const tail = this.release(opts);
+    await tail;
+    this.unmount();
   }
 }
 
