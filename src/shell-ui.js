@@ -13,7 +13,7 @@ export const COVER_BASE = T.core?.convertFileSrc
   : '';
 export const coverUrl = (id, v = 0) => `${COVER_BASE}/${id}?v=${v ?? 0}`;
 
-const SHELL_PAGES = new Set(['home.html', 'library.html', 'meta.html', 'import.html', 'settings.html', 'scan.html', 'book.html', 'cosers.html']);
+const SHELL_PAGES = new Set(['home.html', 'library.html', 'meta.html', 'import.html', 'settings.html', 'scan.html', 'book.html']);
 
 let coverWired = false;
 /** Cover <img data-cover="id"> fallback: a 404 means "not generated yet" -> ask Rust once
@@ -39,7 +39,6 @@ const RAIL = [
   { key: 'recent', href: 'library.html?view=recent', icon: 'clock', label: 'reader.history' },
   { key: 'marked', href: 'library.html?view=marked', icon: 'star', label: 'bookmarks.title' },
   { key: 'import', href: 'import.html', icon: 'download', label: 'nav.import' },
-  { key: 'cosers', href: 'cosers.html', icon: 'image', label: 'nav.cosers' },
 ];
 
 const searchCtx = { onSearch: null, searchTimer: 0 };
@@ -61,7 +60,6 @@ export function railActiveFromUrl(url = location) {
   if (base === 'meta.html') return 'meta';
   if (base === 'settings.html') return 'settings';
   if (base === 'import.html' || base === 'scan.html') return 'import';
-  if (base === 'cosers.html') return 'cosers';
   if (base === 'book.html') return 'library';
   if (base === 'home.html') return 'home';
   return '';
@@ -84,7 +82,6 @@ const PAGE_LABEL = {
   scan: 'nav.scan',
   settings: 'nav.settings',
   meta: 'nav.meta',
-  cosers: 'nav.cosers',
   book: 'nav.book',
   reader: 'nav.reader',
 };
@@ -104,12 +101,11 @@ function syncRailActive(active) {
   rail.querySelectorAll('a[href]').forEach((a) => {
     const key = a.href.includes('settings.html') ? 'settings'
       : a.href.includes('view=recent') ? 'recent'
-      : a.href.includes('view=marked') ? 'marked'
-      : a.href.includes('import.html') ? 'import'
-      : a.href.includes('cosers.html') ? 'cosers'
-      : a.href.includes('meta.html') ? 'meta'
-      : a.href.includes('library.html') ? 'library'
-      : a.href.includes('home.html') ? 'home' : '';
+        : a.href.includes('view=marked') ? 'marked'
+          : a.href.includes('import.html') ? 'import'
+            : a.href.includes('meta.html') ? 'meta'
+              : a.href.includes('library.html') ? 'library'
+                : a.href.includes('home.html') ? 'home' : '';
     a.classList.toggle('is-on', key === active);
   });
 }

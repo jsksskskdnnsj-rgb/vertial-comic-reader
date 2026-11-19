@@ -841,7 +841,3 @@ label.check{display:inline-flex;align-items:center;gap:6px;cursor:pointer}
 #rg.is-scrolling .vp__pill,#rg.is-scrolling .vp__auto,#rg.is-scrolling .drawer,#rg.is-scrolling .flyout{
   backdrop-filter:none;-webkit-backdrop-filter:none
 }
-/* Embedded site host. Other pages keep their padding; this only applies on the cosers page. */
-body[data-page="cosers"] .page-main{display:flex;flex-direction:column;min-height:0;padding:0;overflow:hidden}
-body[data-page="cosers"] .cosers-host{flex:1;min-height:0;position:relative}
-body[data-page="cosers"] .cosers-note{margin:0;padding:24px 32px;color:var(--muted,#5d7a78)}

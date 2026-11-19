@@ -29,7 +29,6 @@ mod protocol;
 mod scan;
 mod shelf;
 mod shelf_scan;
-mod site_view;
 mod tags;
 mod window;
 
@@ -143,8 +142,6 @@ fn main() {
             window::win_hide_if_tray,
             window::app_exit,
             window::take_drop_queue,
-            site_view::site_view_place,
-            site_view::site_view_close,
             shelf::folder_add,
             shelf::folder_list,
             shelf::folder_rename,

@@ -565,8 +565,6 @@ export default {
   'meta.tagsPh': 'Tags, separated by commas',
   'meta.locked': 'Locked',
   'nav.meta': 'Online metadata',
-  'nav.cosers': 'Cosers',
-  'cosers.note': 'Opens the official site inside the app. The page is shown as published.',
   'meta.deskTitle': 'Online metadata',
   'meta.deskHelp': 'Look up books already on the shelf. No new-comic search, no downloads, no online reading.',
   'meta.deskLink': 'Open in Online metadata',
