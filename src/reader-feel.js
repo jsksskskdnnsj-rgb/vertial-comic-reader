@@ -311,6 +311,19 @@ export function flipWheelAdvance(state, e, now) {
  *
  * @returns {{ action: 'back' | 'turn', from: number, sign: -1 | 0 | 1 }}
  */
+/**
+ * How long a committed flip drag takes to settle under the finger.
+ * A fast flick is short; a slow drag is capped so the turn does not sit there.
+ */
+export function flipSettleMs(offsetPx, elapsedMs, travelPx) {
+  const dist = Math.abs(Number(offsetPx) || 0);
+  const elapsed = Math.max(1, Number(elapsedMs) || 1);
+  const speed = Math.abs(Number(travelPx) || dist) / elapsed;
+  const ms = dist / Math.max(0.35, speed);
+  if (!Number.isFinite(ms)) return 90;
+  return Math.max(60, Math.min(140, Math.round(ms)));
+}
+
 export function flipDragRelease(visual, dir, canTurn) {
   const from = Number(visual) || 0;
   if (!dir || !canTurn || !from) return { action: 'back', from, sign: 0 };

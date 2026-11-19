@@ -265,6 +265,7 @@ class Strip {
     this.layoutGen = 0;
     this._winFrom = 0;
     this._winTo = -1;
+    this._placedGen = -1;
   }
   get viewW() { return this.scroller.clientWidth; }  // excludes the scrollbar
   get viewH() { return this.scroller.clientHeight; }
@@ -280,6 +281,7 @@ class Strip {
     this.layoutGen = 0;
     this._winFrom = 0;
     this._winTo = -1;
+    this._placedGen = -1;
     this.sizer.replaceChildren();
   }
 
@@ -308,8 +310,18 @@ class Strip {
     this.syncBoxes();                                              // boxes at the restored scroll
   }
 
+  // One height change: write the sizer and the live boxes. The scroll anchor
+  // is applied by the caller before this, so the window matches the new offset.
+  commitShift() {
+    this.layoutGen = (this.layoutGen + 1) | 0;
+    this.sizer.style.height = this.layout.sizerH + 'px';
+    this._placedGen = -1;
+    this.syncBoxes();
+  }
+
   syncBoxes() {
     const win = pageWindow(this.layout, this.scroller.scrollTop, this.viewH, this.padVh);
+    if (win.from === this._winFrom && win.to === this._winTo && this._placedGen === this.layoutGen) return;
     const prevFrom = this._winFrom | 0;
     const prevTo = this._winTo ?? -1;
     if (prevTo >= prevFrom) {
@@ -321,6 +333,7 @@ class Strip {
     for (let i = win.from; i <= win.to; i++) this.ensureBox(i);
     this._winFrom = win.from;
     this._winTo = win.to;
+    this._placedGen = this.layoutGen;
   }
 
   ensureBox(i) {
@@ -455,6 +468,7 @@ class ImageWindow {
       const i = +e.target.dataset.i;
       if (e.isIntersecting) this.near.add(i); else this.near.delete(i);
     }
+    this._nearGen = (this._nearGen | 0) + 1;
     this.flush();
   }
   onFar(entries) { for (const e of entries) if (!e.isIntersecting) this.release(+e.target.dataset.i); }
@@ -467,18 +481,29 @@ class ImageWindow {
     if (!L.n) return;
     const vh = strip.viewH;
     const top = strip.scroller.scrollTop;
+    const vis0 = vh > 0 ? L.findVirtual(top) : 0;
+    const vis1 = vh > 0 ? L.findVirtual(top + vh) : 0;
+    // Same visible pages and the same near-set already have their bitmaps.
+    // Scrolling inside one tall page must not walk the mount list every frame.
+    if (vis0 === this._vis0 && vis1 === this._vis1 && (this._nearGen | 0) === (this._flushGen | 0) && this._flushDone) return;
     const c = top + vh / 2;
     const dist = (i) => Math.abs(L.vTop[i] + L.vH[i] / 2 - c);
     const want = pagesToMount(L, top, vh, this.perf, this.near);
     let urgent = false;
+    let pending = false;
     for (const i of want) {
       if (this.mounted.has(i)) continue;
+      pending = true;
       // Priority only. A synchronous decode on the scroll frame freezes the
       // strip for a whole page bitmap — that hitch reads as a seam stutter.
       const high = !urgent && dist(i) <= vh;
       this.mount(i, high);
       if (high) urgent = true;
     }
+    this._vis0 = vis0;
+    this._vis1 = vis1;
+    this._flushGen = this._nearGen | 0;
+    this._flushDone = !pending;
   }
 
   // Start fetches for the next few pages before they enter the mount margin.
@@ -490,6 +515,10 @@ class ImageWindow {
     const y = strip.scroller.scrollTop, vh = strip.viewH;
     const center = L.findVirtual(y + vh * 0.5);
     const step = dir < 0 ? -1 : 1;
+    // The center page has not changed, so the warm set is already the one we want.
+    if (this._warmAt === center && this._warmStep === step) return;
+    this._warmAt = center;
+    this._warmStep = step;
     const want = [];
     for (let k = 1; want.length < nWarm && k < L.n; k++) {
       const i = center + step * k;
@@ -497,8 +526,14 @@ class ImageWindow {
       if (!this.mounted.has(i)) want.push(i);
     }
     const keep = new Set(want);
+    const slack = nWarm + 2;
     for (const [i, img] of this.warm) {
-      if (!keep.has(i)) { img.removeAttribute('src'); this.warm.delete(i); }
+      if (keep.has(i)) continue;
+      const ahead = step > 0 ? i - center : center - i;
+      // A one-page wobble must not cancel a decode and start it again.
+      if (ahead > 0 && ahead <= slack) { keep.add(i); continue; }
+      img.removeAttribute('src');
+      this.warm.delete(i);
     }
     for (const i of want) {
       if (this.warm.has(i)) continue;
@@ -714,8 +749,13 @@ export class Scrubber {
   }
   setValue(page, realPages, frac = 0) {                     // from tracker, when not dragging
     if (this.dragging) return;
-    this.track.style.setProperty('--p', String(scrubProgress(page, realPages, frac)));
-    this.label.textContent = pageReadout(page, realPages).text;
+    const p = String(scrubProgress(page, realPages, frac));
+    const txt = pageReadout(page, realPages).text;
+    if (this._p === p && this._label === txt) return;
+    this._p = p;
+    this._label = txt;
+    this.track.style.setProperty('--p', p);
+    if (this.label.textContent !== txt) this.label.textContent = txt;
   }
 }
 
@@ -741,13 +781,16 @@ export class Reader {
     this._layoutRaf = 0;
     this._layoutAnchor = 0;
     this._inLayout = false;
+    this._fixFull = false;
+    this._fixMoved = false;
+    this._fixPos = null;
   }
 
   layoutParams() { return { viewW: this.strip.viewW, ...this.params }; }
 
   // opts: perf, widthPct, gap, startPos ({page,frac}: overrides the saved resume point),
   //       beforeMount(info) -> false (cancel) | {perf} | undefined   (used for the large-book warning)
-  async open(bookId, { perf = 'balanced', widthPct = 100, gap = 0, spread = false, startPos = null, beforeMount = null, wheelSpeed = WHEEL_GEAR_DEFAULT } = {}) {
+  async open(bookId, { perf = 'balanced', widthPct = 100, gap = 0, spread = false, startPos = null, beforeMount = null, wheelSpeed = WHEEL_GEAR_DEFAULT, info: knownInfo = null } = {}) {
     const token = ++this._openToken;
     const superseded = () => {
       const err = { code: 'superseded', detail: 'superseded' };
@@ -757,12 +800,14 @@ export class Reader {
     this.wheelGear = wheelGear(wheelSpeed);
     Object.assign(this.params, { widthPct: clampWidthPct(widthPct), gap, spread: !!spread });
     const tOpen = performance.now();
-    let info;
-    try {
-      info = await api.openBook(bookId);            // { bookId, sig, dims, src, realPages, chapters, resume, ... }
-    } catch (e) {
-      if (token !== this._openToken || e?.detail === 'superseded') superseded();
-      throw e;
+    let info = knownInfo;
+    if (!info) {
+      try {
+        info = await api.openBook(bookId);          // { bookId, sig, dims, src, realPages, chapters, resume, ... }
+      } catch (e) {
+        if (token !== this._openToken || e?.detail === 'superseded') superseded();
+        throw e;
+      }
     }
     if (token !== this._openToken) superseded();
     this.info = info;
@@ -1162,17 +1207,42 @@ export class Reader {
   }
 
   // Corrections for pages whose real size differs from the header (batched per frame).
+  // One page slides the tail. A spread row still recomputes, because the two
+  // pages share a height. The anchor is read once, before any of those slides.
   fixDim(i, w, h) {
     const L = this.strip.layout;
     const [cw, ch] = L.dims[i] || [0, 0];
     if (cw === w && ch === h) return;
+    if (!this.fixRaf) this._fixPos = L.getPosition(this.strip.scroller.scrollTop);
     L.setDim(i, w, h);
     const g = L.src[i];
     if (L.gFirst[g] === L.gLast[g]) this.fixes.set(g, { page: g, w, h });   // sliced pages: ignore
+    if (L.spread) this._fixFull = true;
+    else if (!this._fixFull) {
+      const col = L.vW[i] || L.colW || 1;
+      const nextH = Math.max(1, Math.round(col * (h / w)));
+      const delta = L.shiftHeight(i, nextH);
+      if (delta) this._fixMoved = true;
+    }
     if (this.fixRaf) return;
     this.fixRaf = requestAnimationFrame(() => {
       this.fixRaf = 0;
-      this.relayoutNow(0);                                    // anchored on viewport top (page, frac)
+      const full = this._fixFull;
+      const moved = this._fixMoved;
+      const pos = this._fixPos;
+      this._fixFull = false;
+      this._fixMoved = false;
+      this._fixPos = null;
+      if (full) this.relayoutNow(0);
+      else if (moved && pos) {
+        const sc = this.strip.scroller;
+        const next = L.posToY(pos);
+        if (!sameScroll(sc.scrollTop, next)) {
+          this.tracker?.expectJump(next);
+          sc.scrollTop = next;
+        }
+        this.strip.commitShift();
+      }
       const batch = [...this.fixes.values()]; this.fixes.clear();
       if (batch.length) api.fixDims(this.info.bookId, batch).catch(() => {});
     });
@@ -1216,20 +1286,22 @@ export class Reader {
     e.preventDefault();
   }
 
-  async close() {
+  async close({ releaseBook = true } = {}) {
     this._openToken = (this._openToken || 0) + 1;
     this.dismissZoomPreview();
     if (this._layoutRaf) { cancelAnimationFrame(this._layoutRaf); this._layoutRaf = 0; }
+    if (this.fixRaf) { cancelAnimationFrame(this.fixRaf); this.fixRaf = 0; }
     this.stopKeyScroll();
     this.stopGlide();
-    await this.saver?.flush();
+    const flush = this.saver?.flush();
     this._listen?.clear();
     this._listen = null;
     this.scrubber?.destroy();
     this.scrubber = null;
     this.ro?.disconnect(); this.tracker?.destroy(); this.imageWindow?.destroy(); this.prefetcher?.destroy();
     this.strip.scroller.remove();                              // leave the host empty for the next view
-    if (this.info) await api.closeBook(this.info.bookId).catch(() => {});
+    if (releaseBook && this.info) await api.closeBook(this.info.bookId).catch(() => {});
+    await flush;
   }
 }
 

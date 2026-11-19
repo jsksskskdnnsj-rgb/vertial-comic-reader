@@ -43,6 +43,22 @@ function layout(dims, src, opts = {}) {
 }
 
 {
+  const L = layout([[800, 1000], [800, 1000], [800, 1000]], null, { gap: 16 });
+  const pos = L.getPosition(L.vTop[2] + 40);
+  assert.equal(L.shiftHeight(0, 500), -500);
+  assert.equal(L.vH[0], 500);
+  assert.equal(L.vTop[1] - (L.vTop[0] + L.vH[0]), 16, 'the gap stays the configured pixels');
+  assert.equal(L.vTop[0], 0);
+  const y = L.posToY(pos);
+  const back = L.getPosition(y);
+  assert.equal(back.page, pos.page);
+  assert.ok(Math.abs(back.frac - pos.frac) < 0.02, `${pos.frac} -> ${back.frac}`);
+  assert.equal(L.shiftHeight(1, L.vH[1]), 0);
+  const spread = layout([[800, 1000], [800, 1000]], [0, 1], { spread: true });
+  assert.equal(spread.shiftHeight(0, 400), null);
+}
+
+{
   const L = layout([[800, 8000], [800, 8000], [0, 0]], [0, 0, 1]);
   assert.equal(applyRealDims(L, [[800, 20000], [900, 1200]]), 1);
   assert.deepEqual(L.dims[0], [800, 8000]);

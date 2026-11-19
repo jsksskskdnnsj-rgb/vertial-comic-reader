@@ -11,7 +11,7 @@ import {
   FLIP_WHEEL_NOTCH_LOCK_MS, FLIP_WHEEL_TRACK_PX, KEY_PAGE_DURATION_MS, KEY_PAGE_FRACTION,
   KEY_PAGE_OVERLAP_PX,
   chainPageScroll, classifyWheel, createFlipWheelState, createPageKey, extendPageKey,
-  flipDragRelease, flipSwipeDir, flipVisualSign, flipWheelAdvance, glideChase, glideTauMs, keyReleaseSpeed, latchWheelKind,
+  flipDragRelease, flipSettleMs, flipSwipeDir, flipVisualSign, flipWheelAdvance, glideChase, glideTauMs, keyReleaseSpeed, latchWheelKind,
   pageKeyDistance, pageScrollSegment, pageSeamCover, samplePageScroll, stepPageKey,
 } from '../src/reader-feel.js';
 import { keyScrollPlan } from '../src/reader.js';
@@ -229,6 +229,9 @@ function book(n, w = 800, h = 1200) {
   assert.deepEqual(flipDragRelease(90, -1, true), { action: 'turn', from: 90, sign: 1 });
   assert.deepEqual(flipDragRelease(-120, 1, false), { action: 'back', from: -120, sign: 0 });
   assert.deepEqual(flipDragRelease(-40, 0, true), { action: 'back', from: -40, sign: 0 });
+  assert.equal(flipSettleMs(200, 40, 200), 60, 'a fast flick settles on the short end of the range');
+  assert.equal(flipSettleMs(200, 800, 200), 140, 'a slow drag does not sit on the screen');
+  assert.equal(flipSettleMs(0, 30, 0), 60);
 }
 
 const reader = fs.readFileSync(path.join(root, 'src/reader.js'), 'utf8');
@@ -248,6 +251,17 @@ assert.equal(/scrollTo\(\{[^}]*behavior:\s*'smooth'/.test(reader), false);
 assert.match(flip, /flipWheelAdvance/);
 assert.match(flip, /flipSwipeDir/);
 assert.match(flip, /flipDragRelease/);
+assert.match(flip, /flipSettleMs/);
+assert.match(flip, /ProgressSaver/);
+assert.match(flip, /saver\?\.mark/);
+assert.match(flip, /keepDrag:\s*true/);
+assert.match(reader, /shiftHeight/);
+assert.match(reader, /releaseBook/);
+assert.match(reader, /knownInfo/);
+const boot = fs.readFileSync(path.join(root, 'src/reader-boot.js'), 'utf8');
+assert.match(boot, /reuse:\s*true/);
+assert.match(boot, /liveBookInfo/);
+assert.match(boot, /paintKey/);
 assert.match(flip, /pointermove/);
 assert.match(flip, /set_reading_window|setWindow/);
 assert.match(css, /\.scroller\{overflow-anchor:none\}/);

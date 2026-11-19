@@ -1,11 +1,11 @@
 // Lightweight page-turning view sharing Reader's backend and position contract.
-import { api, pageUrl, perfLog } from './reader.js';
+import { api, pageUrl, perfLog, ProgressSaver } from './reader.js';
 import { createListenerBag } from './listener-bag.js';
 import { Layout, clampWidthPct } from './layout.js';
 import { applyCropStyle, cropCacheKey, detectCropFromImage, mergeCropInsets } from './reader-crop.js';
 import { flipWarmPages, flipTapZone } from './flip-adjacent.js';
 import { rtlStep, rtlTapZone } from './reader-rtl.js';
-import { createFlipWheelState, flipDragRelease, flipSwipeDir, flipVisualSign, flipWheelAdvance } from './reader-feel.js';
+import { createFlipWheelState, flipDragRelease, flipSettleMs, flipSwipeDir, flipVisualSign, flipWheelAdvance } from './reader-feel.js';
 
 export class FlipView {
   constructor(host, { onPosition = () => {}, scrubber = null } = {}) {
@@ -68,12 +68,14 @@ export class FlipView {
     const token = ++this._openToken;
     const superseded = () => { throw { code: 'superseded', detail: 'superseded' }; };
     const tOpen = performance.now();
-    let info;
-    try {
-      info = await api.openBook(bookId);
-    } catch (e) {
-      if (token !== this._openToken || e?.detail === 'superseded') superseded();
-      throw e;
+    let info = opts.info;
+    if (!info) {
+      try {
+        info = await api.openBook(bookId);
+      } catch (e) {
+        if (token !== this._openToken || e?.detail === 'superseded') superseded();
+        throw e;
+      }
     }
     if (token !== this._openToken) superseded();
     this.info = info;
@@ -96,6 +98,7 @@ export class FlipView {
     this._listen = createListenerBag();
     this._listen.add(window, 'keydown', this._key);
     this._listen.add(this.host, 'wheel', this._onWheel, { passive: false });
+    this.saver = new ProgressSaver(bookId);
     this.render();
     return this.info;
   }
@@ -199,40 +202,38 @@ export class FlipView {
     const dx = e.clientX - p.x;
     const dy = e.clientY - p.y;
     const visual = this._dragX(dx);
-    this._clearDrag();
-    if (!p.dragged) return;
+    if (!p.dragged) { this._clearDrag(); return; }
     this._suppressClick = true;
     const dir = flipSwipeDir(dx, dy, performance.now() - p.t, this.rtl);
     const release = flipDragRelease(visual, dir, !!dir && this._canTurn(dir));
     const from = `translate3d(${Math.round(release.from)}px,0,0)`;
     if (release.action === 'back') {
-      this._play([{ transform: from }, { transform: 'translate3d(0,0,0)' }], 180);
+      this._clearDrag();
+      this._play([{ transform: from }, { transform: 'translate3d(0,0,0)' }], 160);
       return;
     }
+    // The next page is already the one under the finger. It slides to center
+    // instead of waiting out an exit and then popping in.
+    this.stepPage(dir, { settle: false, keepDrag: true });
     if (this._reduceMotion()) {
-      this.stepPage(dir, { settle: false });
+      this._clearDrag();
       return;
     }
-    const width = this._stageEl?.clientWidth || 1;
-    const off = Math.round(release.sign * width * 0.92);
-    this._turn = dir;
+    const ms = flipSettleMs(release.from, Math.max(1, performance.now() - p.t), dx);
     const anim = this._play(
-      [{ transform: from }, { transform: `translate3d(${off}px,0,0)` }],
-      150,
+      [{ transform: from }, { transform: 'translate3d(0,0,0)' }],
+      ms,
       'forwards',
     );
     if (!anim) {
-      this._turn = 0;
-      this.stepPage(dir, { settle: false });
+      this._clearDrag();
       return;
     }
     anim.onfinish = () => {
-      if (this._turn !== dir) return;
-      this._turn = 0;
-      this.stepPage(dir, { settle: false });
-      this._anim?.cancel();
+      if (this._anim !== anim) return;
       this._anim = null;
       this._clearDrag();
+      anim.cancel();
     };
   }
 
@@ -360,6 +361,7 @@ export class FlipView {
       realPages: this.layout.realPages,
       atEnd,
     });
+    this.saver?.mark({ page: shown, frac: 0 }, atEnd);
     this.warmAdjacent();
     return hot;
   }
@@ -403,6 +405,10 @@ export class FlipView {
     this.render();
   }
   stepPage(dir, opts = {}) {
+    this._turn = 0;
+    this._anim?.cancel();
+    this._anim = null;
+    if (!opts.keepDrag) this._clearDrag();
     const before = this.page;
     const indexDir = Math.sign(dir) || 0;
     const settle = opts.settle !== false;
@@ -446,16 +452,20 @@ export class FlipView {
     if (opts.enabled === false) this.crop.cache.clear();
     this.render();
   }
-  async close() {
+  async close({ releaseBook = true } = {}) {
     this._openToken = (this._openToken || 0) + 1;
+    this._turn = 0;
     this._anim?.cancel();
     this._anim = null;
+    const flush = this.saver?.flush();
+    this.saver = null;
     this._listen?.clear();
     this._listen = null;
     this._stageEl?.removeEventListener('click', this._tap);
     for (const img of this._warm.values()) img.removeAttribute('src');
     this._warm.clear();
-    if (this.bookId) await api.closeBook(this.bookId).catch(() => {});
+    if (releaseBook && this.bookId) await api.closeBook(this.bookId).catch(() => {});
     this.host.replaceChildren();
+    await flush;
   }
 }

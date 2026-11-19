@@ -206,6 +206,25 @@ export class Layout {
     this._arDirty = true;
   }
 
+  /**
+   * Change one virtual page's box height and slide every page after it by the
+   * same amount. Gaps already stored between tops stay put. Spread rows share
+   * a height, so that mode returns null and the caller recomputes the row.
+   * @returns {number | null} pixel delta, or null when a slide is not valid
+   */
+  shiftHeight(i, nextH) {
+    if (this.spread || i < 0 || i >= this.n) return null;
+    const h = Math.max(1, Math.round(Number(nextH) || 0));
+    const prev = this.vH[i] || 0;
+    if (prev === h) return 0;
+    const delta = h - prev;
+    this.vH[i] = h;
+    for (let j = i + 1; j < this.n; j++) this.vTop[j] += delta;
+    this.contentH += delta;
+    this.sizerH += delta;
+    return delta;
+  }
+
   // Largest i with vTop[i] <= y  (y inside a gap -> the page above it)
   findVirtual(y) {
     let lo = 0, hi = this.n - 1;
