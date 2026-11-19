@@ -2,7 +2,7 @@
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
-use tauri::AppHandle;
+use tauri::{AppHandle, Manager};
 
 use crate::appdata::data_dir;
 use crate::config::get_reader_config;
@@ -130,6 +130,9 @@ pub fn win_hide_if_tray(window: tauri::Window) -> Result<bool, String> {
 /// 真正退出程序（设置页"立即关闭程序"用；win_close 在关闭到托盘时只会隐藏窗口）
 #[tauri::command]
 pub fn app_exit(app: AppHandle) -> Result<(), String> {
+    if let Some(state) = app.try_state::<crate::commands::ReaderState>() {
+        state.extractor.shutdown();
+    }
     crate::metadata::proxy::shutdown_core();
     app.exit(0);
     Ok(())

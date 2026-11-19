@@ -39,6 +39,20 @@ pub fn get_reader_config() -> Result<ReaderConfig, String> {
     Ok(ReaderConfig::default())
 }
 
+#[cfg(test)]
+mod tests {
+    use super::ReaderConfig;
+
+    #[test]
+    fn existing_reader_config_still_parses_without_a_cache_field() {
+        let cfg: ReaderConfig =
+            serde_json::from_str(r#"{"memory_saver":false,"mode":"scroll"}"#).unwrap();
+        assert!(!cfg.memory_saver);
+        assert_eq!(cfg.mode, "scroll");
+        assert!(cfg.close_to_tray);
+    }
+}
+
 #[tauri::command]
 pub fn set_reader_config(cfg: ReaderConfig) -> Result<(), String> {
     let p = data_dir()?.join("reader-config.json");

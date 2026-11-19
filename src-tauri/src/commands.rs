@@ -903,7 +903,10 @@ pub async fn cache_stats(state: State<'_, ReaderState>) -> Result<CacheStats, Re
 }
 #[tauri::command]
 pub async fn cache_set_limit(state: State<'_, ReaderState>, bytes: u64) -> Result<(), ReaderError> {
-    state.cache.set_limit(bytes.max(64 << 20));
+    let bytes = crate::cache::clamp_limit(bytes);
+    let dir = crate::data_dir()?;
+    crate::cache::store_limit(&dir, bytes)?;
+    state.cache.set_limit(bytes);
     let win = state.extractor.window();
     state
         .cache
@@ -921,18 +924,10 @@ pub async fn cache_clear(
             Some(id) => s.cache.purge_book(id),
             None => {
                 let win = s.extractor.window();
-                let n = s
-                    .cache
-                    .clear(&|k| win.map_or(false, |w| w.pins(k)));
-                // v0.3 `zip_extract_page` wrote data/page_cache. The reader no longer
-                // uses that folder; a full clear removes it along with the page cache.
-                if let Ok(dir) = crate::data_dir() {
-                    let legacy = dir.join("page_cache");
-                    if legacy.is_dir() {
-                        let _ = std::fs::remove_dir_all(legacy);
-                    }
-                }
-                n
+                // Indexed cache files only. The old `page_cache` tree has no index, so
+                // a clear cannot prove those files are ours and leaves them alone.
+                s.cache
+                    .clear(&|k| win.map_or(false, |w| w.pins(k)))
             }
         })
     })

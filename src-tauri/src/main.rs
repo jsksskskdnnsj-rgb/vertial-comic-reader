@@ -67,8 +67,11 @@ fn main() {
             bookmarks::migrate(&conn)?;
             metadata::store::migrate(&conn).map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
             let rdb: db::Db = std::sync::Arc::new(parking_lot::Mutex::new(conn));
-            let cache =
-                std::sync::Arc::new(cache::PageCache::open(dir.join("cache"), 512 << 20)?);
+            let limit = cache::load_limit(&dir);
+            let cache = std::sync::Arc::new(cache::PageCache::open(dir.join("cache"), limit)?);
+            // No book is open yet, so every indexed cache file may be trimmed to the
+            // saved budget. Files that are not in the index are not touched.
+            cache.evict_if_needed(&|_| false);
             let extractor = extractor::Extractor::start(cache.clone(), extractor::worker_count());
             app.manage(commands::ReaderState::new(rdb, cache, extractor));
             let covers = dir.join("covers");
@@ -262,8 +265,11 @@ fn main() {
         })
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
-        .run(|_app, event| {
+        .run(|app, event| {
             if matches!(event, tauri::RunEvent::Exit) {
+                if let Some(state) = app.try_state::<commands::ReaderState>() {
+                    state.extractor.shutdown();
+                }
                 metadata::proxy::shutdown_core();
             }
         });
