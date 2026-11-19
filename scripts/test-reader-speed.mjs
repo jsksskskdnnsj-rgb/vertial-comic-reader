@@ -9,12 +9,14 @@ import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { Layout } from '../src/layout.js';
 import {
-  PAGE_WINDOW_CAP, ZOOM_COMMIT_MS, clampZoom, pageWindow, zoomOriginY, zoomPreviewScale,
+  PAGE_WINDOW_CAP, ZOOM_COMMIT_MS, ZOOM_LAYOUT_EVERY_FRAME_MAX, clampZoom, pageWindow, zoomDefersLayout, zoomOriginY, zoomPreviewScale,
 } from '../src/reader.js';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
-assert.equal(ZOOM_COMMIT_MS, 140);
+assert.equal(ZOOM_COMMIT_MS, 0);
+assert.equal(zoomDefersLayout(ZOOM_LAYOUT_EVERY_FRAME_MAX - 1), false);
+assert.equal(zoomDefersLayout(ZOOM_LAYOUT_EVERY_FRAME_MAX), true);
 assert.equal(clampZoom(9), 3);
 assert.equal(clampZoom(0.01), 0.5);
 assert.equal(clampZoom(1.234), 1.23);
@@ -62,6 +64,20 @@ function book(n) {
   assert.ok(winMs < allMs, `window walk ${winMs}ms should beat a full walk ${allMs}ms`);
 }
 
+{
+  const L = book(4000);
+  const reps = 20;
+  const t0 = performance.now();
+  for (let i = 0; i < reps; i++) {
+    L.compute({ viewW: 900, widthPct: 100, maxW: Infinity, zoom: 1 + (i % 5) * 0.05, gap: 8, endPad: 0, spread: false });
+  }
+  const ms = (performance.now() - t0) / reps;
+  const gap = L.vTop[1] - (L.vTop[0] + L.vH[0]);
+  console.log(`BENCH compute pages=${L.n} ms=${ms.toFixed(3)} gap=${gap}`);
+  assert.ok(ms < 8, `non-spread layout ${ms}ms should stay inside a frame`);
+  assert.equal(gap, 8);
+}
+
 function chromeBench() {
   const chrome = ['google-chrome', 'chromium', 'chromium-browser'].find((b) => spawnSync('which', [b]).status === 0);
   if (!chrome) return null;
@@ -84,7 +100,7 @@ window.setTimeout = (fn) => { window.__timers.push(fn); return window.__timers.l
 window.clearTimeout = () => {};
 </script>
 <script type="module">
-import { Reader } from ${JSON.stringify(readerUrl)};
+import { Reader, ZOOM_LAYOUT_EVERY_FRAME_MAX } from ${JSON.stringify(readerUrl)};
 const host = document.getElementById('host');
 const reader = new Reader(host);
 const dims = Array.from({ length: ${n} }, () => [800, 1200]);
@@ -97,6 +113,7 @@ reader.strip.apply(reader.layoutParams());
 const live = reader.strip.liveCount;
 const sample = reader.strip.pages.find((p) => p);
 const topBefore = sample ? sample.style.top : '';
+const hBefore = sample ? sample.style.height : '';
 const tPreview = performance.now();
 for (let k = 0; k < 8; k++) {
   reader.previewZoom(1 + (k + 1) * 0.08, 80);
@@ -106,6 +123,7 @@ for (let k = 0; k < 8; k++) {
 const previewMs = performance.now() - tPreview;
 const transform = reader.strip.sizer.style.transform;
 const topDuring = sample.style.top;
+const hDuring = sample.style.height;
 const tCommit = performance.now();
 reader.commitZoom();
 const commitMs = performance.now() - tCommit;
@@ -133,11 +151,31 @@ const oldWriteMs = performance.now() - tOld;
 const tNew = performance.now();
 for (let k = 0; k < 8; k++) reader.strip.sizer.style.transform = 'scale(' + (1 + k * 0.08) + ')';
 const newWriteMs = performance.now() - tNew;
+const host2 = document.createElement('div');
+host2.style.cssText = 'position:relative;width:420px;height:520px';
+document.body.append(host2);
+const heavy = new Reader(host2);
+const nHeavy = ZOOM_LAYOUT_EVERY_FRAME_MAX;
+heavy.params.maxW = Infinity;
+heavy.params.gap = 12;
+heavy.strip.build(Array.from({ length: nHeavy }, () => [800, 1200]), Array.from({ length: nHeavy }, (_, i) => i));
+heavy.strip.apply(heavy.layoutParams());
+const sample2 = heavy.strip.pages.find((p) => p);
+const h2Before = sample2 ? sample2.style.height : '';
+heavy.previewZoom(1.4, 40);
+const transform2 = heavy.strip.sizer.style.transform;
+const h2During = sample2 ? sample2.style.height : '';
+heavy.commitZoom();
 document.getElementById('out').textContent = JSON.stringify({
-  live, n: ${n}, topBefore, topDuring, transform,
+  live, n: ${n}, topBefore, topDuring, hBefore, hDuring, transform,
   previewMs, commitMs, fullMs, oldWriteMs, newWriteMs,
   zoom: reader.params.zoom,
   boxes: reader.strip.liveCount,
+  h2Before, h2During, transform2,
+  h2After: sample2 ? sample2.style.height : '',
+  transform2After: heavy.strip.sizer.style.transform,
+  zoom2: heavy.params.zoom,
+  gap2: heavy.strip.layout.gap,
 });
 </script></body></html>`);
   const run = spawnSync(chrome, [
@@ -155,10 +193,17 @@ const dom = chromeBench();
 if (dom) {
   console.log(`BENCH dom live=${dom.live}/${dom.n} preview_ms=${dom.previewMs.toFixed(2)} commit_ms=${dom.commitMs.toFixed(2)} relayout8_ms=${dom.fullMs.toFixed(2)} writeAll_ms=${dom.oldWriteMs.toFixed(2)} writeTransform_ms=${dom.newWriteMs.toFixed(2)} transform=${dom.transform}`);
   assert.ok(dom.live > 0 && dom.live < dom.n / 2, `expected a window of boxes, got ${dom.live}/${dom.n}`);
-  assert.equal(dom.topBefore, dom.topDuring, 'a zoom preview must not rewrite page boxes');
-  assert.match(dom.transform, /^scale\(/);
+  assert.notEqual(dom.hBefore, dom.hDuring, 'zoom lays the column out on the frame instead of scaling it');
+  assert.equal(dom.transform, '');
+  assert.ok(dom.boxes > 0 && dom.boxes < dom.n / 2, `zoom keeps a window, got ${dom.boxes}`);
   assert.ok(dom.newWriteMs < dom.oldWriteMs, `one transform ${dom.newWriteMs}ms should beat rewriting every page ${dom.oldWriteMs}ms`);
   assert.ok(Math.abs(dom.zoom - 1.64) < 0.02, `commit should land on the last live zoom, got ${dom.zoom}`);
+  assert.equal(dom.h2Before, dom.h2During, 'a long book does not relayout on the zoom notch');
+  assert.match(dom.transform2, /scale\(/);
+  assert.equal(dom.transform2After, '');
+  assert.notEqual(dom.h2After, dom.h2Before, 'committing the gesture lays the column out');
+  assert.ok(Math.abs(dom.zoom2 - 1.4) < 0.02, `long-book zoom ${dom.zoom2}`);
+  assert.equal(dom.gap2, 12);
 } else {
   console.log('BENCH dom skipped (no chrome)');
 }

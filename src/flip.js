@@ -1,11 +1,11 @@
 // Lightweight page-turning view sharing Reader's backend and position contract.
-import { api, pageUrl, perfLog } from './reader.js';
+import { api, pageUrl, perfLog, ProgressSaver } from './reader.js';
 import { createListenerBag } from './listener-bag.js';
 import { Layout, clampWidthPct } from './layout.js';
 import { applyCropStyle, cropCacheKey, detectCropFromImage, mergeCropInsets } from './reader-crop.js';
 import { flipWarmPages, flipTapZone } from './flip-adjacent.js';
 import { rtlStep, rtlTapZone } from './reader-rtl.js';
-import { createFlipWheelState, flipSwipeDir, flipVisualSign, flipWheelAdvance } from './reader-feel.js';
+import { createFlipWheelState, flipDragRelease, flipSettleMs, flipSwipeDir, flipVisualSign, flipWheelAdvance } from './reader-feel.js';
 
 export class FlipView {
   constructor(host, { onPosition = () => {}, scrubber = null } = {}) {
@@ -26,6 +26,7 @@ export class FlipView {
     this._ptr = null;
     this._suppressClick = false;
     this._anim = null;
+    this._turn = 0;
     this._aimedPage = -1;
     this._lastDir = 1;
     this._keyAt = 0;
@@ -52,7 +53,7 @@ export class FlipView {
       const now = e.timeStamp || performance.now();
       const step = flipWheelAdvance(this._wheelState, e, now);
       this._wheelState = step.state;
-      if (step.dir) this.stepPage(step.dir);
+      if (step.dir) this.stepPage(step.dir, { settle: false });
     };
     this._tap = (e) => {
       if (this._suppressClick) { this._suppressClick = false; return; }
@@ -63,16 +64,33 @@ export class FlipView {
     };
   }
 
+  _mount(token, opts) {
+    if (token !== this._openToken) throw { code: 'superseded', detail: 'superseded' };
+    this.layout.setBook(this.info.dims || [], this.info.src || []);
+    this.layout.compute({ viewW: this.host.clientWidth || 800, widthPct: this.params.widthPct, gap: 0, spread: false });
+    const start = opts.startPos?.page ?? this.info.resume?.page ?? 0;
+    this.page = this.spread ? this.layout.spreadStart(start) : Math.max(0, Math.min(this.layout.realPages - 1, start));
+    this.mountDom();
+    this._listen?.clear();
+    this._listen = createListenerBag();
+    this._listen.add(window, 'keydown', this._key);
+    this._listen.add(this.host, 'wheel', this._onWheel, { passive: false });
+    this.saver = new ProgressSaver(this.bookId);
+    this.render();
+  }
+
   async open(bookId, opts = {}) {
     const token = ++this._openToken;
     const superseded = () => { throw { code: 'superseded', detail: 'superseded' }; };
     const tOpen = performance.now();
-    let info;
-    try {
-      info = await api.openBook(bookId);
-    } catch (e) {
-      if (token !== this._openToken || e?.detail === 'superseded') superseded();
-      throw e;
+    let info = opts.info;
+    if (!info) {
+      try {
+        info = await api.openBook(bookId);
+      } catch (e) {
+        if (token !== this._openToken || e?.detail === 'superseded') superseded();
+        throw e;
+      }
     }
     if (token !== this._openToken) superseded();
     this.info = info;
@@ -85,17 +103,19 @@ export class FlipView {
       if (token !== this._openToken) superseded();
       if (r === false) { await api.closeBook(bookId).catch(() => {}); throw { code: 'cancelled' }; }
     }
-    if (token !== this._openToken) superseded();
-    this.layout.setBook(this.info.dims || [], this.info.src || []);
-    this.layout.compute({ viewW: this.host.clientWidth || 800, widthPct: this.params.widthPct, gap: 0, spread: false });
-    const start = opts.startPos?.page ?? this.info.resume?.page ?? 0;
-    this.page = this.spread ? this.layout.spreadStart(start) : Math.max(0, Math.min(this.layout.realPages - 1, start));
-    this.mountDom();
-    this._listen?.clear();
-    this._listen = createListenerBag();
-    this._listen.add(window, 'keydown', this._key);
-    this._listen.add(this.host, 'wheel', this._onWheel, { passive: false });
-    this.render();
+    this._mount(token, opts);
+    return this.info;
+  }
+
+  // Already-open book. Returns after the new page is in the host, with no await.
+  prepare(bookId, opts = {}) {
+    const token = ++this._openToken;
+    if (!opts.info) throw { code: 'no_info', detail: 'no_info' };
+    this.info = opts.info;
+    this.bookId = bookId;
+    this.params = { widthPct: clampWidthPct(opts.widthPct ?? 100), spreadGap: opts.spreadGap ?? 8 };
+    this.spread = !!opts.spread;
+    this._mount(token, opts);
     return this.info;
   }
 
@@ -113,13 +133,15 @@ export class FlipView {
     this.imgB = this.host.querySelector('.flip-image--b');
     this.imgA.decoding = 'async';
     this.imgB.decoding = 'async';
+    this.root = this.host.querySelector('.flip-view');
     this.host.querySelector('.flip-prev').onclick = () => this.prev();
     this.host.querySelector('.flip-next').onclick = () => this.next();
     const stage = this.host.querySelector('.flip-stage');
     stage.addEventListener('click', this._tap);
     stage.addEventListener('pointerdown', (e) => this._pointerDown(e));
+    stage.addEventListener('pointermove', (e) => this._pointerMove(e));
     stage.addEventListener('pointerup', (e) => this._pointerUp(e));
-    stage.addEventListener('pointercancel', () => { this._ptr = null; });
+    stage.addEventListener('pointercancel', () => this._pointerCancel());
     this._stageEl = stage;
   }
 
@@ -127,29 +149,131 @@ export class FlipView {
 
   _pointerDown(e) {
     if (e.button !== 0) return;
-    this._ptr = { id: e.pointerId, x: e.clientX, y: e.clientY, t: performance.now() };
+    this._finishTurn();
+    this._anim?.cancel();
+    this._anim = null;
+    this._clearDrag();
+    this._ptr = { id: e.pointerId, x: e.clientX, y: e.clientY, t: performance.now(), dragged: false };
     try { e.currentTarget.setPointerCapture(e.pointerId); } catch { /* not a captor */ }
+  }
+
+  _dragX(dx) {
+    const width = this._stageEl?.clientWidth || 1;
+    const max = width * 0.92;
+    let x = Math.max(-max, Math.min(max, dx));
+    const last = this.spread
+      ? this.layout.spreadStart(Math.max(0, this.layout.realPages - 1))
+      : Math.max(0, this.layout.realPages - 1);
+    const forward = this.rtl ? x > 0 : x < 0;
+    const back = this.rtl ? x < 0 : x > 0;
+    if ((forward && this.page >= last) || (back && this.page <= 0)) x *= 0.3;
+    return x;
+  }
+
+  _setDrag(x) {
+    const stage = this._stageEl;
+    if (!stage) return;
+    stage.style.transform = `translate3d(${Math.round(x)}px,0,0)`;
+  }
+
+  _clearDrag() {
+    if (this._stageEl) this._stageEl.style.transform = '';
+  }
+
+  _pointerMove(e) {
+    const p = this._ptr;
+    if (!p || p.id !== e.pointerId) return;
+    const dx = e.clientX - p.x;
+    const dy = e.clientY - p.y;
+    if (!p.dragged && Math.hypot(dx, dy) < 8) return;
+    p.dragged = true;
+    this._setDrag(this._dragX(dx));
+  }
+
+  _canTurn(dir) {
+    const indexDir = Math.sign(dir) || 0;
+    if (!indexDir || !this.layout?.realPages) return false;
+    if (this.spread) {
+      const n = this.layout.spreadStart(this.page) + (indexDir > 0 ? 2 : -2);
+      const next = this.layout.spreadStart(Math.max(0, Math.min(this.layout.realPages - 1, n)));
+      return next !== this.page;
+    }
+    const next = Math.max(0, Math.min(this.layout.realPages - 1, this.page + indexDir));
+    return next !== this.page;
+  }
+
+  _finishTurn() {
+    const dir = this._turn;
+    if (!dir) return;
+    this._turn = 0;
+    this._anim?.cancel();
+    this._anim = null;
+    this._clearDrag();
+    this.stepPage(dir, { settle: false });
   }
 
   _pointerUp(e) {
     const p = this._ptr;
     this._ptr = null;
     if (!p || p.id !== e.pointerId) return;
-    const dir = flipSwipeDir(e.clientX - p.x, e.clientY - p.y, performance.now() - p.t, this.rtl);
-    if (!dir) return;
+    const dx = e.clientX - p.x;
+    const dy = e.clientY - p.y;
+    const visual = this._dragX(dx);
+    if (!p.dragged) { this._clearDrag(); return; }
     this._suppressClick = true;
-    this.stepPage(dir);
+    const dir = flipSwipeDir(dx, dy, performance.now() - p.t, this.rtl);
+    const release = flipDragRelease(visual, dir, !!dir && this._canTurn(dir));
+    const from = `translate3d(${Math.round(release.from)}px,0,0)`;
+    if (release.action === 'back') {
+      this._clearDrag();
+      this._play([{ transform: from }, { transform: 'translate3d(0,0,0)' }], 160);
+      return;
+    }
+    // The next page is already the one under the finger. It slides to center
+    // instead of waiting out an exit and then popping in.
+    this.stepPage(dir, { settle: false, keepDrag: true });
+    if (this._reduceMotion()) {
+      this._clearDrag();
+      return;
+    }
+    const ms = flipSettleMs(release.from, Math.max(1, performance.now() - p.t), dx);
+    const anim = this._play(
+      [{ transform: from }, { transform: 'translate3d(0,0,0)' }],
+      ms,
+      'forwards',
+    );
+    if (!anim) {
+      this._clearDrag();
+      return;
+    }
+    anim.onfinish = () => {
+      if (this._anim !== anim) return;
+      this._anim = null;
+      this._clearDrag();
+      anim.cancel();
+    };
+  }
+
+  _pointerCancel() {
+    if (this._turn) {
+      this._finishTurn();
+      return;
+    }
+    if (!this._ptr) return;
+    this._ptr = null;
+    this._clearDrag();
   }
 
   _reduceMotion() {
     return typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches;
   }
 
-  _play(keyframes, duration) {
+  _play(keyframes, duration, fill = 'none') {
     const stage = this._stageEl;
-    if (!stage || this._reduceMotion()) return;
+    if (!stage || this._reduceMotion()) return null;
     this._anim?.cancel();
-    this._anim = stage.animate(keyframes, { duration, easing: 'cubic-bezier(0.16, 0.84, 0.22, 1)', fill: 'none' });
+    this._anim = stage.animate(keyframes, { duration, easing: 'cubic-bezier(0.16, 0.84, 0.22, 1)', fill });
+    return this._anim;
   }
 
   _settle(indexDir) {
@@ -254,6 +378,7 @@ export class FlipView {
       realPages: this.layout.realPages,
       atEnd,
     });
+    this.saver?.mark({ page: shown, frac: 0 }, atEnd);
     this.warmAdjacent();
     return hot;
   }
@@ -296,9 +421,14 @@ export class FlipView {
     this.page = this.spread ? this.layout.spreadStart(p) : p;
     this.render();
   }
-  stepPage(dir) {
+  stepPage(dir, opts = {}) {
+    this._turn = 0;
+    this._anim?.cancel();
+    this._anim = null;
+    if (!opts.keepDrag) this._clearDrag();
     const before = this.page;
     const indexDir = Math.sign(dir) || 0;
+    const settle = opts.settle === true;
     if (this.spread) {
       const n = this.layout.spreadStart(this.page) + (dir > 0 ? 2 : -2);
       this.page = Math.max(0, Math.min(this.layout.realPages - 1, n));
@@ -309,12 +439,14 @@ export class FlipView {
     if (indexDir) this._lastDir = indexDir;
     const changed = this.page !== before;
     const hot = this.render();
+    // Button, key, and wheel turns land on the page immediately. A settle
+    // slide after the swap reads as the control still catching up.
     if (!changed) this._resist(indexDir);
-    else if (hot) this._settle(indexDir);
+    else if (hot && settle) this._settle(indexDir);
   }
   setRtl(on) { this.rtl = !!on; }
-  prev() { this.stepPage(rtlStep(-1, this.rtl)); }
-  next() { this.stepPage(rtlStep(1, this.rtl)); }
+  prev() { this.stepPage(rtlStep(-1, this.rtl), { settle: false }); }
+  next() { this.stepPage(rtlStep(1, this.rtl), { settle: false }); }
   scrollable() { return false; }
   setFit() {
     this.params.widthPct = 100;
@@ -330,7 +462,10 @@ export class FlipView {
   setSpread(on) {
     const was = this.page;
     this.spread = !!on;
-    this.mountDom();
+    // The two images already exist. Rebuilding the stage reloaded them and
+    // flashed the empty host. The spread class only changes how they sit.
+    if (this.root) this.root.classList.toggle('flip-view--spread', this.spread);
+    else this.mountDom();
     this.page = this.spread ? this.layout.spreadStart(was) : was;
     this.render();
   }
@@ -339,16 +474,34 @@ export class FlipView {
     if (opts.enabled === false) this.crop.cache.clear();
     this.render();
   }
-  async close() {
+  release({ releaseBook = true } = {}) {
     this._openToken = (this._openToken || 0) + 1;
+    this._turn = 0;
     this._anim?.cancel();
     this._anim = null;
+    const flush = this.saver?.flush();
+    this.saver = null;
     this._listen?.clear();
     this._listen = null;
     this._stageEl?.removeEventListener('click', this._tap);
     for (const img of this._warm.values()) img.removeAttribute('src');
     this._warm.clear();
-    if (this.bookId) await api.closeBook(this.bookId).catch(() => {});
-    this.host.replaceChildren();
+    const closing = releaseBook ? this.bookId : 0;
+    return (async () => {
+      if (closing) await api.closeBook(closing).catch(() => {});
+      await flush;
+    })();
+  }
+  unmount() {
+    this.root?.remove();
+    this.root = null;
+    this.imgA = null;
+    this.imgB = null;
+    this._stageEl = null;
+  }
+  async close(opts) {
+    const tail = this.release(opts);
+    await tail;
+    this.unmount();
   }
 }
