@@ -9,7 +9,7 @@ edition = "2021"
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-# `unstable` enables the embedded child webview (Window::add_child). App version stays 0.9.3.
+# `unstable` enables the embedded child webview (Window::add_child). Does not set the app version.
 tauri = { version = "2", features = ["tray-icon", "unstable"] }
 tauri-plugin-dialog = "2"
 tauri-plugin-single-instance = "2"
