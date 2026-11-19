@@ -566,6 +566,8 @@ export default {
   'meta.tagsPh': '标签，用顿号或逗号分隔',
   'meta.locked': '已锁定',
   'nav.meta': '联网资料',
+  'nav.cosers': 'Coser站',
+  'cosers.note': '在应用内打开官网。页面按原样显示，不把图片存进书库。',
   'meta.deskTitle': '联网资料',
   'meta.deskHelp': '只查询书架里已经导入的书。不搜索新漫画，不下载，不在线阅读。',
   'meta.deskLink': '在联网资料中打开',

@@ -14,7 +14,7 @@ import {
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
-assert.equal(ZOOM_COMMIT_MS, 140);
+assert.equal(ZOOM_COMMIT_MS, 0);
 assert.equal(clampZoom(9), 3);
 assert.equal(clampZoom(0.01), 0.5);
 assert.equal(clampZoom(1.234), 1.23);
@@ -97,6 +97,7 @@ reader.strip.apply(reader.layoutParams());
 const live = reader.strip.liveCount;
 const sample = reader.strip.pages.find((p) => p);
 const topBefore = sample ? sample.style.top : '';
+const hBefore = sample ? sample.style.height : '';
 const tPreview = performance.now();
 for (let k = 0; k < 8; k++) {
   reader.previewZoom(1 + (k + 1) * 0.08, 80);
@@ -106,6 +107,7 @@ for (let k = 0; k < 8; k++) {
 const previewMs = performance.now() - tPreview;
 const transform = reader.strip.sizer.style.transform;
 const topDuring = sample.style.top;
+const hDuring = sample.style.height;
 const tCommit = performance.now();
 reader.commitZoom();
 const commitMs = performance.now() - tCommit;
@@ -134,7 +136,7 @@ const tNew = performance.now();
 for (let k = 0; k < 8; k++) reader.strip.sizer.style.transform = 'scale(' + (1 + k * 0.08) + ')';
 const newWriteMs = performance.now() - tNew;
 document.getElementById('out').textContent = JSON.stringify({
-  live, n: ${n}, topBefore, topDuring, transform,
+  live, n: ${n}, topBefore, topDuring, hBefore, hDuring, transform,
   previewMs, commitMs, fullMs, oldWriteMs, newWriteMs,
   zoom: reader.params.zoom,
   boxes: reader.strip.liveCount,
@@ -155,8 +157,9 @@ const dom = chromeBench();
 if (dom) {
   console.log(`BENCH dom live=${dom.live}/${dom.n} preview_ms=${dom.previewMs.toFixed(2)} commit_ms=${dom.commitMs.toFixed(2)} relayout8_ms=${dom.fullMs.toFixed(2)} writeAll_ms=${dom.oldWriteMs.toFixed(2)} writeTransform_ms=${dom.newWriteMs.toFixed(2)} transform=${dom.transform}`);
   assert.ok(dom.live > 0 && dom.live < dom.n / 2, `expected a window of boxes, got ${dom.live}/${dom.n}`);
-  assert.equal(dom.topBefore, dom.topDuring, 'a zoom preview must not rewrite page boxes');
-  assert.match(dom.transform, /^scale\(/);
+  assert.notEqual(dom.hBefore, dom.hDuring, 'zoom lays the column out on the frame instead of scaling it');
+  assert.equal(dom.transform, '');
+  assert.ok(dom.boxes > 0 && dom.boxes < dom.n / 2, `zoom keeps a window, got ${dom.boxes}`);
   assert.ok(dom.newWriteMs < dom.oldWriteMs, `one transform ${dom.newWriteMs}ms should beat rewriting every page ${dom.oldWriteMs}ms`);
   assert.ok(Math.abs(dom.zoom - 1.64) < 0.02, `commit should land on the last live zoom, got ${dom.zoom}`);
 } else {

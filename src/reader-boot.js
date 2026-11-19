@@ -555,6 +555,12 @@ if (readerBootFresh && T.event?.listen) {
     if (!p.sig || p.sig === book.sig) return;
     startView({ startPos: view.topPos?.() || null });
   }).catch(() => {});
+  T.event.listen('book-dims', (ev) => {
+    const p = ev?.payload || {};
+    const id = Number(p.bookId);
+    if (!view?.applyRealDims || !Number.isFinite(id) || id !== bookId) return;
+    view.applyRealDims(p.dims);
+  }).catch(() => {});
 }
 wireTrack(); trackObserver.observe($('track'));
 applyReaderChrome(!!prefs.get('reader.chromeHidden', false), { persist: false });

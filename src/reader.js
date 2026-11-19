@@ -4,14 +4,14 @@
 // Objects:  Strip (DOM + layout)   ViewportTracker (scroll -> position/direction/speed)
 //           ImageWindow (IO-driven mount/unmount)   Prefetcher (-> Rust set_reading_window)
 //           ProgressSaver (debounced save)   Scrubber (bottom slider)   Reader (glue)
-import { Layout, clampWidthPct } from './layout.js';
+import { Layout, applyRealDims as applyRealPageDims, clampWidthPct } from './layout.js';
 import { createListenerBag } from './listener-bag.js';
 import { tunePerf } from './decode-budget.js';
 import { applyCropStyle, cropCacheKey, detectCropFromImage, mergeCropInsets } from './reader-crop.js';
 import { rtlPageDelta } from './reader-rtl.js';
 import {
-  KEY_PAGE_DURATION_MS, KEY_SOFT_LAND_PX, classifyWheel, createPageKey, extendPageKey,
-  glideChase, glideTauMs, keyReleaseSpeed, pageKeyDistance, pageSeamCover, stepPageKey,
+  KEY_PAGE_DURATION_MS, KEY_SOFT_LAND_PX, createPageKey, extendPageKey,
+  glideChase, glideTauMs, keyReleaseSpeed, latchWheelKind, pageKeyDistance, pageSeamCover, stepPageKey,
 } from './reader-feel.js';
 
 const T = globalThis.window?.__TAURI__;
@@ -43,8 +43,8 @@ export const api = {
 // not-yet-mounted pages in the reading direction get a browser fetch started early.
 // Saver still uses the width-variant decode path; balanced non-slice pages do not.
 export const PERF = {
-  balanced: { nearVh: 2, farVh: 4.2, maxMounted: 18,
-              aheadVh: 7, behindVh: 2, maxAhead: 14, maxBehind: 4, variant: 0, warm: 4 },
+  balanced: { nearVh: 2.4, farVh: 5, maxMounted: 18,
+              aheadVh: 8, behindVh: 2.5, maxAhead: 18, maxBehind: 6, variant: 0, warm: 6 },
   saver:    { nearVh: 1, farVh: 2.2, maxMounted: 8,
               aheadVh: 3.5, behindVh: 0.5, maxAhead: 6, maxBehind: 1, variant: 1600, warm: 2 },
 };
@@ -59,8 +59,33 @@ export function virtualsNear(layout, scrollTop, viewH, nearVh) {
   for (let i = i0; i <= i1 && i < layout.n; i++) out.push(i);
   return out;
 }
-// How long a Ctrl+wheel burst stays on the composited scale before one real layout.
-export const ZOOM_COMMIT_MS = 140;
+/**
+ * Bitmaps to keep. Pages that intersect the viewport are always included;
+ * `maxMounted` only limits extras outside that screen.
+ */
+export function pagesToMount(layout, scrollTop, viewH, perf, extraNear) {
+  const vh = viewH > 0 ? viewH : 0;
+  const top = Number(scrollTop) || 0;
+  const must = vh > 0 ? virtualsNear(layout, top, vh, 0) : [];
+  const mustSet = new Set(must);
+  const near = new Set(must);
+  if (extraNear) for (const i of extraNear) near.add(i);
+  for (const i of virtualsNear(layout, top, vh, perf?.nearVh || 0)) near.add(i);
+  const c = top + vh / 2;
+  const dist = (i) => Math.abs((layout.vTop[i] || 0) + (layout.vH[i] || 0) / 2 - c);
+  const rest = [];
+  for (const i of near) if (!mustSet.has(i)) rest.push(i);
+  rest.sort((a, b) => dist(a) - dist(b));
+  const cap = Math.max(must.length, Number(perf?.maxMounted) || must.length);
+  return must.concat(rest.slice(0, Math.max(0, cap - must.length)));
+}
+/** A programmatic scroll write this close to the current offset is a no-op, so a fling survives. */
+export function sameScroll(current, next) {
+  return Math.abs((Number(current) || 0) - (Number(next) || 0)) < 1;
+}
+// Zoom lays out on the next frame. The gap stays the configured pixel size
+// instead of being scaled by a CSS transform and then snapped back.
+export const ZOOM_COMMIT_MS = 0;
 export const PAGE_WINDOW_CAP = 96;
 export function clampZoom(z) {
   const n = Number(z);
@@ -85,19 +110,36 @@ export function pageWindow(layout, scrollTop, viewH, padVh) {
   const n = layout?.n | 0;
   if (!n) return { from: 0, to: -1, count: 0 };
   if (!(viewH > 0)) return { from: 0, to: n - 1, count: n };
+  const yTop = Math.max(0, Number(scrollTop) || 0);
+  const yBot = yTop + viewH;
+  let visFrom = layout.findVirtual(yTop);
+  let visTo = layout.findVirtual(yBot);
+  visFrom = Math.max(0, Math.min(visFrom, n - 1));
+  visTo = Math.max(visFrom, Math.min(n - 1, visTo));
   const pad = Math.max(0, Number(padVh) || 0) * viewH;
-  const y0 = Math.max(0, (Number(scrollTop) || 0) - pad);
-  const y1 = (Number(scrollTop) || 0) + viewH + pad;
-  let from = layout.findVirtual(y0);
-  let to = layout.findVirtual(Math.max(0, y1));
+  let from = layout.findVirtual(Math.max(0, yTop - pad));
+  let to = layout.findVirtual(yBot + pad);
   from = Math.max(0, from - 1);
   to = Math.min(n - 1, to + 1);
   if (to < from) to = from;
+  const visCount = visTo - visFrom + 1;
   if (to - from + 1 > PAGE_WINDOW_CAP) {
-    const mid = layout.findVirtual(Math.max(0, (Number(scrollTop) || 0) + viewH / 2));
-    from = Math.max(0, mid - Math.floor(PAGE_WINDOW_CAP / 2));
-    to = Math.min(n - 1, from + PAGE_WINDOW_CAP - 1);
-    from = Math.max(0, to - PAGE_WINDOW_CAP + 1);
+    if (visCount <= PAGE_WINDOW_CAP) {
+      let budget = PAGE_WINDOW_CAP - visCount;
+      let lo = visFrom;
+      let hi = visTo;
+      while (budget > 0 && (lo > from || hi < to)) {
+        if (lo > from) { lo--; budget--; }
+        if (budget > 0 && hi < to) { hi++; budget--; }
+      }
+      from = lo;
+      to = hi;
+    } else {
+      const mid = layout.findVirtual(yTop + viewH / 2);
+      from = Math.max(0, mid - Math.floor(PAGE_WINDOW_CAP / 2));
+      to = Math.min(n - 1, from + PAGE_WINDOW_CAP - 1);
+      from = Math.max(0, to - PAGE_WINDOW_CAP + 1);
+    }
   }
   return { from, to, count: to - from + 1 };
 }
@@ -218,9 +260,11 @@ class Strip {
     host.append(this.scroller);
     this.layout = new Layout();
     this.pages = [];               // sparse: only the live window has elements
-    this.padVh = 4.2;              // matches PERF.balanced.farVh; open() copies the active preset
+    this.padVh = 5;                // matches PERF.balanced.farVh; open() copies the active preset
     this.onBox = null;             // (index, el, 'add'|'remove') — ImageWindow observes live boxes
     this.layoutGen = 0;
+    this._winFrom = 0;
+    this._winTo = -1;
   }
   get viewW() { return this.scroller.clientWidth; }  // excludes the scrollbar
   get viewH() { return this.scroller.clientHeight; }
@@ -234,6 +278,8 @@ class Strip {
     this.layout.setBook(dims, src);
     this.pages = new Array(dims.length);
     this.layoutGen = 0;
+    this._winFrom = 0;
+    this._winTo = -1;
     this.sizer.replaceChildren();
   }
 
@@ -256,19 +302,25 @@ class Strip {
     this.layoutGen = (this.layoutGen + 1) | 0;
     this.sizer.style.width = this.layout.sizerW + 'px';
     this.sizer.style.height = this.layout.sizerH + 'px';
-    // The scroll event this assignment fires is not the reader scrolling.
-    this.ignoreChromeScroll = true;
-    sc.scrollTop = this.layout.posToY(pos) - anchorY;              // 2. restore in the same task
-    this.ignoreChromeScroll = false;
-    this.syncBoxes();                                              // 3. boxes at the restored scroll
+    const next = this.layout.posToY(pos) - anchorY;
+    // Writing an unchanged scrollTop cancels a trackpad fling.
+    if (!sameScroll(sc.scrollTop, next)) sc.scrollTop = next;
+    this.syncBoxes();                                              // boxes at the restored scroll
   }
 
   syncBoxes() {
     const win = pageWindow(this.layout, this.scroller.scrollTop, this.viewH, this.padVh);
-    for (let i = 0; i < this.pages.length; i++) {
-      if (i < win.from || i > win.to) this.dropBox(i);
+    const prevFrom = this._winFrom | 0;
+    const prevTo = this._winTo ?? -1;
+    if (prevTo >= prevFrom) {
+      const dropTo = Math.min(prevTo, win.from - 1);
+      for (let i = prevFrom; i <= dropTo; i++) this.dropBox(i);
+      const dropFrom = Math.max(prevFrom, win.to + 1);
+      for (let i = dropFrom; i <= prevTo; i++) this.dropBox(i);
     }
     for (let i = win.from; i <= win.to; i++) this.ensureBox(i);
+    this._winFrom = win.from;
+    this._winTo = win.to;
   }
 
   ensureBox(i) {
@@ -303,15 +355,24 @@ class Strip {
 
   placeBox(i, d) {
     const L = this.layout;
-    const s = d.style;
     const cover = pageSeamCover(L, i);
-    s.left = (L.vLeft[i] ?? L.left) + 'px';
-    s.width = (L.vW[i] || L.colW) + 'px';
+    const left = (L.vLeft[i] ?? L.left);
+    const width = (L.vW[i] || L.colW);
+    const top = L.vTop[i] - cover;
+    const height = L.vH[i] + cover;
+    d._placeGen = this.layoutGen;
+    if (d._boxL === left && d._boxW === width && d._boxT === top && d._boxH === height) return;
+    d._boxL = left;
+    d._boxW = width;
+    d._boxT = top;
+    d._boxH = height;
+    const s = d.style;
+    s.left = left + 'px';
+    s.width = width + 'px';
     // One extra pixel upward, painted by this later page, hides the hairline
     // the compositor flashes between abutting boxes. Gap > 0 does not abut.
-    s.top = (L.vTop[i] - cover) + 'px';
-    s.height = (L.vH[i] + cover) + 'px';
-    d._placeGen = this.layoutGen;
+    s.top = top + 'px';
+    s.height = height + 'px';
   }
 }
 
@@ -408,9 +469,7 @@ class ImageWindow {
     const top = strip.scroller.scrollTop;
     const c = top + vh / 2;
     const dist = (i) => Math.abs(L.vTop[i] + L.vH[i] / 2 - c);
-    const candidates = new Set(this.near);
-    for (const i of virtualsNear(L, top, vh, this.perf.nearVh)) candidates.add(i);
-    const want = [...candidates].sort((a, b) => dist(a) - dist(b)).slice(0, this.perf.maxMounted);
+    const want = pagesToMount(L, top, vh, this.perf, this.near);
     let urgent = false;
     for (const i of want) {
       if (this.mounted.has(i)) continue;
@@ -446,7 +505,10 @@ class ImageWindow {
       const img = new Image();
       img.className = 'pg'; img.decoding = 'async'; img.draggable = false; img.alt = '';
       if ('fetchPriority' in img) img.fetchPriority = 'low';
+      const note = () => this.r.notePageSize(i, img.naturalWidth, img.naturalHeight);
+      img.addEventListener('load', note, { once: true });
       img.src = this.url(i);
+      if (img.complete && img.naturalWidth > 0) note();
       this.warm.set(i, img);
     }
   }
@@ -549,11 +611,7 @@ class ImageWindow {
 
   // Real size differs from what the header said (EXIF-rotated JPEG, unknown dims, lying header)
   checkDims(i, img) {
-    const L = this.r.strip.layout, [w, h] = L.dims[i];
-    const nw = img.naturalWidth, nh = img.naturalHeight;
-    if (!nw || !nh) return;
-    const known = w > 0 && h > 0;
-    if (!known || Math.abs((nh / nw) / (h / w) - 1) > 0.01) this.r.fixDim(i, nw, nh);
+    this.r.notePageSize(i, img.naturalWidth, img.naturalHeight);
   }
 
   destroy() {
@@ -677,9 +735,9 @@ export class Reader {
     this._glideWrite = false;
     this._glideWrittenY = 0;
     this._glideWrittenX = 0;
-    this._wheelAt = 0;
+    this._wheelGesture = null;
     this._openToken = 0;
-    this._zoom = null;          // { base, live, anchorY, originY, raf, timer } while a gesture is composited
+    this._zoom = null;          // { live, anchorY, raf } until the frame lays the column out
     this._layoutRaf = 0;
     this._layoutAnchor = 0;
     this._inLayout = false;
@@ -717,7 +775,7 @@ export class Reader {
     }
     if (token !== this._openToken) superseded();
     this.perf = tunePerf(this.perf, this.info?.realPages);
-    this.strip.padVh = this.perf.farVh || 4.2;
+    this.strip.padVh = this.perf.farVh || 5;
     const { dims, src } = this.info, resume = startPos ?? this.info.resume;
 
     const tDom = performance.now();
@@ -898,15 +956,22 @@ export class Reader {
     }
     this.stopKeyScroll();
     const now = e.timeStamp || performance.now();
-    const kind = classifyWheel(e, this._wheelAt, now);
-    this._wheelAt = now;
+    // Notch bursts stay notches. classifyWheel alone treats a fast second detent as a trackpad.
+    const kind = latchWheelKind(e, this._wheelGesture, now);
+    this._wheelGesture = { kind, t: now };
     // Trackpad and other pixel streams keep the platform's own inertia.
     // Multiplying those and calling preventDefault is what made a flick step.
     if (kind !== 'notch') return;
     const d = wheelScrollDelta(e, this.wheelGear, { w: this.strip.viewW, h: this.strip.viewH });
     if (!d) return;
     e.preventDefault();
-    this.glideBy(d.dx, d.dy);
+    this.stopGlide();
+    const sc = this.strip.scroller;
+    if (typeof sc.scrollBy === 'function') sc.scrollBy(d.dx, d.dy);
+    else {
+      sc.scrollLeft += d.dx;
+      sc.scrollTop += d.dy;
+    }
   }
   setWheelSpeed(gear) { this.wheelGear = wheelGear(gear); }
 
@@ -998,36 +1063,30 @@ export class Reader {
     cancelAnimationFrame(hold.raf);
     if (hold.onUp) window.removeEventListener('keyup', hold.onUp);
   }
-  // Ctrl+wheel: one transform per frame. The origin stays at the pointer from the
-  // first event of the burst. Layout (every page's top/height) runs once, after idle.
+  // Ctrl+wheel: one real layout per frame, anchored on the pointer. The column
+  // gap stays the configured pixel size (a CSS scale used to grow it, then snap).
   previewZoom(nextZoom, anchorY) {
     const live = clampZoom(nextZoom);
-    if (!this._zoom) {
-      const sc = this.strip.scroller;
-      this._zoom = {
-        base: this.params.zoom || 1,
-        live,
-        anchorY,
-        originY: zoomOriginY(sc.scrollTop, anchorY),
-        raf: 0,
-        timer: 0,
-      };
-    } else {
+    if (!this._zoom) this._zoom = { live, anchorY, raf: 0 };
+    else {
       this._zoom.live = live;
+      this._zoom.anchorY = anchorY;
     }
     const z = this._zoom;
-    if (!z.raf) z.raf = requestAnimationFrame(() => this.paintZoom());
-    clearTimeout(z.timer);
-    z.timer = setTimeout(() => this.commitZoom(), ZOOM_COMMIT_MS);
+    if (!z.raf) z.raf = requestAnimationFrame(() => this.flushZoom());
   }
-  paintZoom() {
+  flushZoom() {
     const z = this._zoom;
     if (!z) return;
     z.raf = 0;
-    const sizer = this.strip.sizer;
-    sizer.classList.add('zoom-live');
-    sizer.style.transformOrigin = `50% ${z.originY}px`;
-    sizer.style.transform = `scale(${zoomPreviewScale(z.base, z.live)})`;
+    this._zoom = null;
+    this.clearZoomStyle();
+    const anchor = z.anchorY;
+    if (z.live !== this.params.zoom) this.params.zoom = z.live;
+    if (this._inLayout) return;
+    this._inLayout = true;
+    try { this.strip.relayout(this.layoutParams(), anchor); }
+    finally { this._inLayout = false; }
   }
   clearZoomStyle() {
     const sizer = this.strip?.sizer;
@@ -1040,24 +1099,10 @@ export class Reader {
     const z = this._zoom;
     if (!z) return;
     cancelAnimationFrame(z.raf);
-    clearTimeout(z.timer);
     this._zoom = null;
     this.clearZoomStyle();
   }
-  commitZoom() {
-    const z = this._zoom;
-    if (!z) return;
-    const anchor = z.anchorY;
-    const live = z.live;
-    const same = live === this.params.zoom;
-    cancelAnimationFrame(z.raf);
-    clearTimeout(z.timer);
-    this._zoom = null;
-    this.clearZoomStyle();
-    if (same) return;
-    this.params.zoom = live;
-    this.relayoutNow(anchor);
-  }
+  commitZoom() { this.flushZoom(); }
   relayoutNow(anchorY = 0) {
     if (this._layoutRaf) {
       cancelAnimationFrame(this._layoutRaf);
@@ -1066,7 +1111,6 @@ export class Reader {
     if (this._zoom) {
       const z = this._zoom;
       cancelAnimationFrame(z.raf);
-      clearTimeout(z.timer);
       this._zoom = null;
       this.clearZoomStyle();
       this.params.zoom = z.live;
@@ -1101,9 +1145,27 @@ export class Reader {
   }
   refreshCropAll() { this.imageWindow?.refreshCrop(); }
 
+  // Real pixel size from a decode, including a warm image that is still off screen.
+  notePageSize(i, w, h) {
+    if (!(w > 0) || !(h > 0)) return;
+    const L = this.strip.layout;
+    const [cw, ch] = L.dims[i] || [0, 0];
+    const known = cw > 0 && ch > 0;
+    if (!known || Math.abs((h / w) / (ch / cw) - 1) > 0.01) this.fixDim(i, w, h);
+  }
+
+  // Header sizes that arrived after open, one [w, h] per real page.
+  applyRealDims(realDims) {
+    const n = applyRealPageDims(this.strip.layout, realDims);
+    if (n > 0) this.relayoutNow(0);
+    return n;
+  }
+
   // Corrections for pages whose real size differs from the header (batched per frame).
   fixDim(i, w, h) {
     const L = this.strip.layout;
+    const [cw, ch] = L.dims[i] || [0, 0];
+    if (cw === w && ch === h) return;
     L.setDim(i, w, h);
     const g = L.src[i];
     if (L.gFirst[g] === L.gLast[g]) this.fixes.set(g, { page: g, w, h });   // sliced pages: ignore

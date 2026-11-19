@@ -8,7 +8,56 @@
 //   { page, frac }  page = real page index, frac in [0,1) = how far down the page's whole
 //   height (all its slices, no gaps) the viewport top is.
 
-const FALLBACK_AR = 1.5; // h/w used while a page's true size is unknown (dims 0,0)
+const FALLBACK_AR = 1.5; // h/w used only when a page and its neighbors are all still unknown
+
+/**
+ * Aspect (h/w) for every virtual page. A known header wins. A run of unknown
+ * pages keeps the previous known page, and pages before the first known size
+ * take that first known size. 1.5 is only the last resort, so a long book does
+ * not jump from a square placeholder to the real strip as each file decodes.
+ */
+export function fillAspects(dims) {
+  const n = dims?.length || 0;
+  const ar = new Array(n).fill(0);
+  let carry = 0;
+  for (let i = 0; i < n; i++) {
+    const [w, h] = dims[i] || [0, 0];
+    if (w > 0 && h > 0) carry = h / w;
+    ar[i] = carry;
+  }
+  let back = 0;
+  for (let i = n - 1; i >= 0; i--) {
+    const [w, h] = dims[i] || [0, 0];
+    if (w > 0 && h > 0) back = h / w;
+    else if (!(ar[i] > 0) && back > 0) ar[i] = back;
+  }
+  for (let i = 0; i < n; i++) if (!(ar[i] > 0)) ar[i] = FALLBACK_AR;
+  return ar;
+}
+
+/**
+ * Copy known real-page sizes onto virtual boxes that are still one box per page.
+ * A sliced page (several boxes, one file) keeps the slicing from open. Returns
+ * how many virtual boxes changed. A length mismatch means the page list itself
+ * changed; the caller reopens instead of splicing boxes mid-session.
+ */
+export function applyRealDims(layout, realDims) {
+  if (!layout || !Array.isArray(realDims)) return 0;
+  if (realDims.length !== layout.realPages) return 0;
+  let changed = 0;
+  for (let g = 0; g < realDims.length; g++) {
+    const a = layout.gFirst[g];
+    const b = layout.gLast[g];
+    if (a === undefined || a !== b) continue;
+    const wh = realDims[g];
+    if (!wh || !(wh[0] > 0) || !(wh[1] > 0)) continue;
+    const cur = layout.dims[a];
+    if (cur && cur[0] === wh[0] && cur[1] === wh[1]) continue;
+    layout.setDim(a, wh[0], wh[1]);
+    changed++;
+  }
+  return changed;
+}
 
 /** Page-width slider. 100% is the full pane. 20% is a narrow strip. */
 export const WIDTH_PCT_MIN = 20;
@@ -36,6 +85,8 @@ export class Layout {
     this.colW = 0; this.left = 0; this.sizerW = 0; this.contentH = 0; this.sizerH = 0; this.gap = 0;
     this.spread = false;
     this.spreadGap = 8;
+    this.ar = [];
+    this._arDirty = true;
   }
 
   get realPages() { return this.gFirst.length; }
@@ -54,13 +105,18 @@ export class Layout {
     this.vH = new Float64Array(this.n);
     this.vLeft = new Float64Array(this.n);
     this.vW = new Float64Array(this.n);
+    this._arDirty = true;
   }
 
   isGroupEnd(i) { return i === this.n - 1 || this.src[i + 1] !== this.src[i]; }
 
+  _rebuildAr() {
+    this.ar = fillAspects(this.dims);
+    this._arDirty = false;
+  }
+
   _sliceHeight(i, colW) {
-    const [w, h] = this.dims[i];
-    const ar = w > 0 && h > 0 ? h / w : FALLBACK_AR;
+    const ar = this.ar[i] > 0 ? this.ar[i] : FALLBACK_AR;
     return Math.max(1, Math.round(colW * ar));
   }
 
@@ -94,6 +150,7 @@ export class Layout {
   // the side bars tuck away. widthPct still scales that pane (the 20–100 slider).
   // spread: pairs of real pages side by side (vertical scroll only).
   compute({ viewW, widthPct = 100, maxW = 1000, zoom = 1, gap = 0, endPad = 0, spread = false, spreadGap = 8 }) {
+    if (this._arDirty) this._rebuildAr();
     const scaled = Math.round(viewW * widthPct / 100);
     const base = Number.isFinite(maxW) ? Math.min(scaled, maxW) : scaled;
     this.colW = Math.max(COL_MIN_PX, Math.round(base * zoom));
@@ -135,7 +192,10 @@ export class Layout {
     this.sizerH = this.contentH + endPad;
   }
 
-  setDim(i, w, h) { this.dims[i] = [w, h]; }
+  setDim(i, w, h) {
+    this.dims[i] = [w, h];
+    this._arDirty = true;
+  }
 
   // Largest i with vTop[i] <= y  (y inside a gap -> the page above it)
   findVirtual(y) {

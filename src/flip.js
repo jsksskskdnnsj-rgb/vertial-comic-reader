@@ -118,8 +118,9 @@ export class FlipView {
     const stage = this.host.querySelector('.flip-stage');
     stage.addEventListener('click', this._tap);
     stage.addEventListener('pointerdown', (e) => this._pointerDown(e));
+    stage.addEventListener('pointermove', (e) => this._pointerMove(e));
     stage.addEventListener('pointerup', (e) => this._pointerUp(e));
-    stage.addEventListener('pointercancel', () => { this._ptr = null; });
+    stage.addEventListener('pointercancel', () => this._pointerCancel());
     this._stageEl = stage;
   }
 
@@ -127,18 +128,69 @@ export class FlipView {
 
   _pointerDown(e) {
     if (e.button !== 0) return;
-    this._ptr = { id: e.pointerId, x: e.clientX, y: e.clientY, t: performance.now() };
+    this._anim?.cancel();
+    this._ptr = { id: e.pointerId, x: e.clientX, y: e.clientY, t: performance.now(), dragged: false };
     try { e.currentTarget.setPointerCapture(e.pointerId); } catch { /* not a captor */ }
+  }
+
+  _dragX(dx) {
+    const width = this._stageEl?.clientWidth || 1;
+    const max = width * 0.92;
+    let x = Math.max(-max, Math.min(max, dx));
+    const last = this.spread
+      ? this.layout.spreadStart(Math.max(0, this.layout.realPages - 1))
+      : Math.max(0, this.layout.realPages - 1);
+    const forward = this.rtl ? x > 0 : x < 0;
+    const back = this.rtl ? x < 0 : x > 0;
+    if ((forward && this.page >= last) || (back && this.page <= 0)) x *= 0.3;
+    return x;
+  }
+
+  _setDrag(x) {
+    const stage = this._stageEl;
+    if (!stage) return;
+    stage.style.transform = `translate3d(${Math.round(x)}px,0,0)`;
+  }
+
+  _clearDrag() {
+    if (this._stageEl) this._stageEl.style.transform = '';
+  }
+
+  _pointerMove(e) {
+    const p = this._ptr;
+    if (!p || p.id !== e.pointerId) return;
+    const dx = e.clientX - p.x;
+    const dy = e.clientY - p.y;
+    if (!p.dragged && Math.hypot(dx, dy) < 8) return;
+    p.dragged = true;
+    this._setDrag(this._dragX(dx));
   }
 
   _pointerUp(e) {
     const p = this._ptr;
     this._ptr = null;
     if (!p || p.id !== e.pointerId) return;
-    const dir = flipSwipeDir(e.clientX - p.x, e.clientY - p.y, performance.now() - p.t, this.rtl);
-    if (!dir) return;
+    const dx = e.clientX - p.x;
+    const dy = e.clientY - p.y;
+    const visual = this._dragX(dx);
+    this._clearDrag();
+    if (!p.dragged) return;
     this._suppressClick = true;
-    this.stepPage(dir);
+    const dir = flipSwipeDir(dx, dy, performance.now() - p.t, this.rtl);
+    if (!dir) {
+      this._play(
+        [{ transform: `translate3d(${Math.round(visual)}px,0,0)` }, { transform: 'translate3d(0,0,0)' }],
+        180,
+      );
+      return;
+    }
+    this.stepPage(dir, { settle: false });
+  }
+
+  _pointerCancel() {
+    if (!this._ptr) return;
+    this._ptr = null;
+    this._clearDrag();
   }
 
   _reduceMotion() {
@@ -296,9 +348,10 @@ export class FlipView {
     this.page = this.spread ? this.layout.spreadStart(p) : p;
     this.render();
   }
-  stepPage(dir) {
+  stepPage(dir, opts = {}) {
     const before = this.page;
     const indexDir = Math.sign(dir) || 0;
+    const settle = opts.settle !== false;
     if (this.spread) {
       const n = this.layout.spreadStart(this.page) + (dir > 0 ? 2 : -2);
       this.page = Math.max(0, Math.min(this.layout.realPages - 1, n));
@@ -310,7 +363,7 @@ export class FlipView {
     const changed = this.page !== before;
     const hot = this.render();
     if (!changed) this._resist(indexDir);
-    else if (hot) this._settle(indexDir);
+    else if (hot && settle) this._settle(indexDir);
   }
   setRtl(on) { this.rtl = !!on; }
   prev() { this.stepPage(rtlStep(-1, this.rtl)); }

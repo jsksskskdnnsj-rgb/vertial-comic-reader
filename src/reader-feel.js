@@ -40,6 +40,34 @@ export function classifyWheel(e, prevT = 0, now = 0) {
   return 'trackpad';
 }
 
+/** How long a notch burst may keep arriving before a sample is a trackpad again. */
+export const WHEEL_NOTCH_LATCH_MS = 90;
+
+/**
+ * A fast second detent is closer together than WHEEL_NOTCH_GAP_MS, so
+ * classifyWheel alone calls it a trackpad. While the previous sample was a
+ * notch, another large axis-aligned integer stays a notch. Fractional
+ * trackpad packets are left on the platform.
+ *
+ * @param {{ deltaX?: number, deltaY?: number, deltaMode?: number }} e
+ * @param {{ kind?: string, t?: number } | null} prev
+ * @param {number} now
+ * @returns {'notch' | 'trackpad'}
+ */
+export function latchWheelKind(e, prev, now) {
+  const raw = classifyWheel(e, prev?.t || 0, now);
+  if (raw === 'notch') return 'notch';
+  const dt = prev?.t ? now - prev.t : 1000;
+  if (prev?.kind !== 'notch' || dt > WHEEL_NOTCH_LATCH_MS) return raw;
+  const dy = Number(e?.deltaY) || 0;
+  const dx = Number(e?.deltaX) || 0;
+  const integer = dy === Math.trunc(dy) && dx === Math.trunc(dx);
+  const vertical = Math.abs(dy) >= WHEEL_NOTCH_PX && Math.abs(dy) >= Math.abs(dx) * 2;
+  const horizontal = Math.abs(dx) >= WHEEL_NOTCH_PX && Math.abs(dx) >= Math.abs(dy) * 2;
+  if (integer && (vertical || horizontal)) return 'notch';
+  return raw;
+}
+
 /**
  * Exponential chase. Stacked notches move the target; the position follows
  * without restarting an ease (which stutters on a fast spin) and without overshoot.

@@ -11,7 +11,7 @@ import {
   FLIP_WHEEL_NOTCH_LOCK_MS, FLIP_WHEEL_TRACK_PX, KEY_PAGE_DURATION_MS, KEY_PAGE_FRACTION,
   KEY_PAGE_OVERLAP_PX,
   chainPageScroll, classifyWheel, createFlipWheelState, createPageKey, extendPageKey,
-  flipSwipeDir, flipVisualSign, flipWheelAdvance, glideChase, glideTauMs, keyReleaseSpeed,
+  flipSwipeDir, flipVisualSign, flipWheelAdvance, glideChase, glideTauMs, keyReleaseSpeed, latchWheelKind,
   pageKeyDistance, pageScrollSegment, pageSeamCover, samplePageScroll, stepPageKey,
 } from '../src/reader-feel.js';
 import { keyScrollPlan } from '../src/reader.js';
@@ -35,6 +35,11 @@ function book(n, w = 800, h = 1200) {
   assert.equal(classifyWheel({ deltaY: 12, deltaX: -6, deltaMode: 0 }, 1000, 1010), 'trackpad');
   assert.equal(classifyWheel({ deltaY: 80, deltaX: 0, deltaMode: 0 }, 1000, 1020), 'trackpad');
   assert.equal(classifyWheel({ deltaY: 16, deltaX: 0, deltaMode: 0 }, 1000, 2000), 'trackpad');
+  const fastNotch = { deltaY: 100, deltaX: 0, deltaMode: 0 };
+  assert.equal(latchWheelKind(fastNotch, { kind: 'notch', t: 1000 }, 1030), 'notch');
+  assert.equal(classifyWheel(fastNotch, 1000, 1030), 'trackpad');
+  assert.equal(latchWheelKind({ deltaY: 8.5, deltaX: 0.5, deltaMode: 0 }, { kind: 'notch', t: 1000 }, 1020), 'trackpad');
+  assert.equal(latchWheelKind(fastNotch, null, 5000), 'notch');
 }
 
 // One notch eases most of the way inside a short tau and then snaps.
@@ -229,13 +234,16 @@ const css = fs.readFileSync(path.join(root, 'src/mh-ui.css'), 'utf8');
 assert.equal(/cruise/.test(reader), false);
 assert.equal(/cruise/.test(fs.readFileSync(path.join(root, 'src/reader-feel.js'), 'utf8')), false);
 assert.match(reader, /classifyWheel/);
+assert.match(reader, /latchWheelKind/);
 assert.match(reader, /glideBy/);
+assert.match(reader, /scrollBy/);
 assert.match(reader, /pageSeamCover/);
 assert.match(reader, /keyReleaseSpeed/);
 assert.equal(reader.includes("decoding = syncDecode ? 'sync' : 'async'"), false);
 assert.equal(/scrollTo\(\{[^}]*behavior:\s*'smooth'/.test(reader), false);
 assert.match(flip, /flipWheelAdvance/);
 assert.match(flip, /flipSwipeDir/);
+assert.match(flip, /pointermove/);
 assert.match(flip, /set_reading_window|setWindow/);
 assert.match(css, /\.scroller\{overflow-anchor:none\}/);
 assert.match(css, /#host \.scroller\{filter:none\}/);
@@ -273,6 +281,7 @@ reader.strip.sizer.append(box);
 reader.wheelGear = 2;
 const notch = new WheelEvent('wheel', { deltaY: 100, deltaX: 0, deltaMode: 0, bubbles: true, cancelable: true });
 reader.onWheel(notch);
+const yNow = Math.round(sc.scrollTop);
 const track = new WheelEvent('wheel', { deltaY: 8.5, deltaX: 1.25, deltaMode: 0, bubbles: true, cancelable: true });
 reader.onWheel(track);
 let now = performance.now();
@@ -353,6 +362,7 @@ reader.strip.apply(reader.layoutParams());
 const page = (i) => reader.strip.pages[i].style;
 document.getElementById('out').textContent = JSON.stringify({
   y,
+  yNow,
   viewH,
   spaceY,
   spaceMs,
@@ -391,7 +401,8 @@ const feel = chromeFeel();
 if (feel) {
   assert.equal(feel.notchPrevented, true);
   assert.equal(feel.trackPrevented, false);
-  assert.ok(feel.y > 40 && feel.y < 220, `glide distance ${feel.y}`);
+  assert.ok(feel.yNow >= 180 && feel.yNow <= 210, `notch distance ${feel.yNow}`);
+  assert.ok(Math.abs(feel.y - feel.yNow) <= 1, `notch should stay put (${feel.yNow} -> ${feel.y})`);
   const page = pageKeyDistance(feel.viewH);
   assert.ok(Math.abs(feel.spaceY - page) <= 2, `space ${feel.spaceY} vs ${page} (view ${feel.viewH})`);
   assert.ok(feel.spaceMs >= 150 && feel.spaceMs <= 250, `space duration ${feel.spaceMs}`);
