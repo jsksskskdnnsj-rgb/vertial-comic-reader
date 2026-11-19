@@ -5,16 +5,11 @@ export function tunePerf(perf, pageCount) {
   const src = perf || {};
   const next = { ...src };
   const n = Number(pageCount) || 0;
-  if (n >= 4000) {
-    next.warm = Math.min(src.warm ?? 0, 1);
-    next.maxMounted = Math.min(src.maxMounted ?? 8, 8);
-    next.maxAhead = Math.min(src.maxAhead ?? 6, 6);
-    next.maxBehind = Math.min(src.maxBehind ?? 2, 2);
-  } else if (n >= 1500) {
-    next.warm = Math.min(src.warm ?? 0, 2);
-    next.maxMounted = Math.min(src.maxMounted ?? 12, 12);
-    next.maxAhead = Math.min(src.maxAhead ?? 8, 8);
-  }
+  // The viewport is mounted separately. Shrinking warm / ahead used to leave
+  // a long book as empty slabs past the first screen, so only the bitmap cap
+  // tightens here.
+  if (n >= 4000) next.maxMounted = Math.min(src.maxMounted ?? 8, 14);
+  else if (n >= 1500) next.maxMounted = Math.min(src.maxMounted ?? 12, 16);
   return next;
 }
 

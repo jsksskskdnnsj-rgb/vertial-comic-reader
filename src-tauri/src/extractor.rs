@@ -226,12 +226,18 @@ impl Extractor {
         for mut j in old {
             let other_variant = j.key.2 != w.variant; // e.g. scrubber thumbnails: never auto-cancelled
             let inside = j.key.0 == w.book && (lo..=hi).contains(&j.key.1);
-            if inside || other_variant {
+            // An <img> already waiting on this slot must not be cancelled into a 503.
+            let demanded = st
+                .slots
+                .get(&j.key)
+                .map(|slot| slot.demanded.load(SeqCst))
+                .unwrap_or(false);
+            if inside || other_variant || demanded {
                 j.cost = w.cost(j.key.1);
                 st.heap.push(j);
             } else {
                 Self::cancel(&mut st, j.key);
-            } // outside window: waiters get Cancelled (-> HTTP 503)
+            } // outside window and not yet displayed: waiters get Cancelled (-> HTTP 503)
         }
         // 2) enqueue what is missing
         for idx in lo..=hi {

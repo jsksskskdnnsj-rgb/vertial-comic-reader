@@ -129,14 +129,53 @@ function paintPageReadout(page, realPages, { commit = true } = {}) {
   strip.update(shown, lab.total);
   return lab;
 }
+let paintKey = '';
+let paintScrubKey = '';
+let paintBmKey = '';
+function resetPositionPaint() {
+  paintKey = '';
+  paintScrubKey = '';
+  paintBmKey = '';
+}
 function onPosition(p) {
   // open() emits position before it returns; sync book from view.info if boot has not assigned it yet
   if (!book && view?.info) book = view.info;
   lastPos = p;
-  paintPageReadout(p.shownPage, p.realPages);
-  paintScrub(p.shownPage, p.realPages, p.shownFrac || 0);
-  updateBmButton();
+  const page = p.shownPage | 0;
+  const n = p.realPages | 0;
+  const dragging = $('track')?.classList.contains('is-drag');
+  // The track moves with the finger. Page numbers, history, and thumbs do not:
+  // rewriting them on every scroll event is what dropped frames in a long book.
+  if (!dragging) {
+    const scrubKey = scrubProgress(page, n, p.shownFrac || 0).toFixed(4);
+    if (scrubKey !== paintScrubKey) {
+      paintScrubKey = scrubKey;
+      paintScrub(page, n, p.shownFrac || 0);
+    }
+  }
+  const bmKey = `${page}|${Math.round((p.shownFrac || 0) * 16)}`;
+  if (bmKey !== paintBmKey) {
+    paintBmKey = bmKey;
+    updateBmButton();
+  }
+  const key = `${page}|${n}|${p.atEnd ? 1 : 0}`;
+  if (key === paintKey) return;
+  paintKey = key;
+  paintPageReadout(page, n);
   if (p.atEnd && !endDismissed && performance.now() > endArmAt && $('endCard').hidden) showEnd();
+}
+/** Dimensions already measured in this session, so a mode switch does not reopen on 0×0. */
+function liveBookInfo(current) {
+  const info = current?.info;
+  if (!info) return null;
+  const dims = current.layout?.dims;
+  if (!dims?.length) return info;
+  const src = current.layout?.src;
+  return {
+    ...info,
+    dims: dims.map((d) => [d[0], d[1]]),
+    src: src ? Array.from(src) : info.src,
+  };
 }
 
 // ---- scrubber track: a fresh element per view (drops the old Scrubber's listeners) -----------------------
@@ -151,12 +190,18 @@ if (readerBootFresh) document.documentElement.dataset.readerBoot = '1';
 if (readerBootFresh) addEventListener('pointerup', () => $('track').classList.remove('is-drag'));
 const trackObserver = new ResizeObserver(() => renderChapterUi());
 let scrollIdle = 0;
+let scrollResched = 0;
 if (readerBootFresh) $('host')?.addEventListener('scroll', () => {
   const rg = $('rg');
   if (!rg) return;
   rg.classList.add('is-scrolling');
+  const now = performance.now();
+  // The class only needs to outlive the last event. Resetting the timer on
+  // every scroll packet is work the frame cannot spare.
+  if (scrollIdle && now < scrollResched) return;
+  scrollResched = now + 50;
   clearTimeout(scrollIdle);
-  scrollIdle = setTimeout(() => rg.classList.remove('is-scrolling'), 160);
+  scrollIdle = setTimeout(() => { scrollIdle = 0; rg.classList.remove('is-scrolling'); }, 160);
 }, { passive: true, capture: true });
 
 // ---- opening / switching views ----------------------------------------------------------------------------
@@ -174,25 +219,48 @@ function showOpening(on) {
   if (n) n.hidden = !on;
 }
 let bootGen = 0;
-async function startView({ startPos = null } = {}) {
+async function startView({ startPos = null, reuse = false } = {}) {
   const gen = ++bootGen;
   auto.stop(); $('endCard').hidden = true; $('err').hidden = true;
-  showOpening(true);
-  if (view) { await view.close(); view = null; }
-  if (gen !== bootGen) return;
-  book = null;                                                  // drop stale info while the next open is in flight
-  resetTrack(); strip.reset(); applyReaderSurface();
+  resetPositionPaint();
+  const kept = reuse ? liveBookInfo(view) : null;
+  if (!kept) showOpening(true);
+  const old = view;
+  view = null;
+  // A reused book must not wait on the progress write: that await ran after
+  // the old surface was removed and the host painted empty. A real close
+  // (different book, or the first open) still finishes before the next openBook.
+  let tail = Promise.resolve();
+  if (old && kept) tail = old.release({ releaseBook: false });
+  else if (old) {
+    await old.close({ releaseBook: true });
+    if (gen !== bootGen) return;
+  }
+  if (!kept) book = null;                                       // drop stale info while the next open is in flight
+  if (!kept) { resetTrack(); strip.reset(); }
+  applyReaderSurface();
   const Mode = modeNow === 'flip' ? FlipView : Reader;
   const opened = new Mode($('host'), { onPosition, scrubber: [$('track'), $('thumb'), $('tiplabel')] });
   view = opened;
   opened.onScrubPreview = (page, n) => paintPageReadout(page, n, { commit: false });
   try {
-    // Assign `book` in beforeMount (runs after openBook, before first onPosition from tick/render)
-    // so pageText / ThumbStrip never see null during open.
-    await opened.open(bookId, {
-      perf: saverNow ? 'saver' : 'balanced', widthPct: rp.widthPct, gap: rp.gap, spread: rp.spread, startPos, wheelSpeed: rp.wheel,
-      beforeMount: async (info) => { book = info; return largeBookGuard(info); },
-    });
+    if (kept) {
+      // Paint the next surface, then drop the previous nodes. No await sits
+      // between those two, so the browser never paints an empty host.
+      opened.prepare(bookId, {
+        perf: saverNow ? 'saver' : 'balanced', widthPct: rp.widthPct, gap: rp.gap, spread: rp.spread, startPos, wheelSpeed: rp.wheel,
+        info: kept,
+      });
+      book = opened.info;
+      old.unmount();
+    } else {
+      // Assign `book` in beforeMount (runs after openBook, before first onPosition from tick/render)
+      // so pageText / ThumbStrip never see null during open.
+      await opened.open(bookId, {
+        perf: saverNow ? 'saver' : 'balanced', widthPct: rp.widthPct, gap: rp.gap, spread: rp.spread, startPos, wheelSpeed: rp.wheel,
+        beforeMount: async (info) => { book = info; return largeBookGuard(info); },
+      });
+    }
     if (gen !== bootGen) return;
     opened.setCrop?.(cropOpts());
     opened.setRtl?.(rp.rtl);
@@ -203,7 +271,10 @@ async function startView({ startPos = null } = {}) {
     if (view === opened) view = null;
     book = null;
     showOpening(false);
-    if (!lost) await opened.close?.().catch(() => {});
+    if (!lost) {
+      old?.unmount?.();
+      await opened.close?.().catch(() => {});
+    }
     if (lost) return;
     return openFailed(e);
   }
@@ -213,7 +284,7 @@ async function startView({ startPos = null } = {}) {
   $('bpCover').src = coverUrl(bookId); $('bbThumb').src = coverUrl(bookId);
   $('bpTitle').textContent = book.title; $('bcBook').textContent = book.title; $('bbBook').textContent = book.title;
   $('bpChips').innerHTML = `<span class="chip">${esc(t('book.pages', { n: book.realPages }))}</span>`;
-  view.refresh(); recompute(); syncControls(); showOpening(false); await Promise.all([loadBookmarks(), loadHistory()]);
+  view.refresh(); recompute(); syncControls(); showOpening(false); await Promise.all([loadBookmarks(), loadHistory(), tail]);
 }
 function openFailed(e) {
   if (e?.code === 'cancelled') return leave('library.html');
@@ -375,7 +446,7 @@ $('cropOn').addEventListener('change', (e) => { rp.cropOn = e.target.checked; pr
 $('cropAuto').addEventListener('change', (e) => { rp.cropAuto = e.target.checked; prefs.set('reader.cropAuto', rp.cropAuto); applyViewDisplay(); });
 $('cropTrim').addEventListener('input', (e) => { rp.cropTrim = +e.target.value; prefs.set('reader.cropTrim', rp.cropTrim); $('cropTrimVal').textContent = rp.cropTrim; applyViewDisplay(); });
 $('gap').addEventListener('click', (e) => { const b = e.target.closest('button'); if (!b) return; rp.gap = +b.dataset.gap; prefs.set('reader.gap', rp.gap); if (view?.mode === 'scroll') view.setGap(rp.gap); syncControls(); });
-$('saver').addEventListener('change', async (e) => { saverNow = e.target.checked; prefs.set('saver', saverNow); await startView({ startPos: view?.topPos() }); });
+$('saver').addEventListener('change', async (e) => { saverNow = e.target.checked; prefs.set('saver', saverNow); await startView({ startPos: view?.topPos(), reuse: true }); });
 const setMode = async (m) => {
   m = normalizeViewMode(m);
   if (m === modeNow) return;
@@ -383,7 +454,7 @@ const setMode = async (m) => {
   persistBookViewMode(bookId, m, prefs);
   if (helpOpen()) renderHelp();
   syncControls();
-  await startView({ startPos: view?.topPos() });
+  await startView({ startPos: view?.topPos(), reuse: true });
 };
 const setFlipDir = (rtl) => {
   rp.rtl = !!rtl;
@@ -554,6 +625,12 @@ if (readerBootFresh && T.event?.listen) {
     if (!Number.isFinite(id) || id !== bookId) return;
     if (!p.sig || p.sig === book.sig) return;
     startView({ startPos: view.topPos?.() || null });
+  }).catch(() => {});
+  T.event.listen('book-dims', (ev) => {
+    const p = ev?.payload || {};
+    const id = Number(p.bookId);
+    if (!view?.applyRealDims || !Number.isFinite(id) || id !== bookId) return;
+    view.applyRealDims(p.dims);
   }).catch(() => {});
 }
 wireTrack(); trackObserver.observe($('track'));

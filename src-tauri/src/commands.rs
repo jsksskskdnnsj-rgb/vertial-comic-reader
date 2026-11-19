@@ -173,6 +173,100 @@ impl ListCache {
         true
     }
 
+    /// Replace header sizes without cancelling the in-flight fill.
+    /// A fix that crosses the slice threshold changes virtual indexes, so the
+    /// decode cache has to be dropped. A normal 0×0 → measured page does not.
+    fn patch_dims(&self, id: i64, fixes: &[DimFix]) -> bool {
+        let mut g = self.inner.lock();
+        let Some(e) = g.books.get_mut(&id) else {
+            return false;
+        };
+        let pages = Arc::make_mut(&mut e.pages);
+        let mut purge = false;
+        for f in fixes {
+            let Some(page) = pages.get_mut(f.page as usize) else {
+                continue;
+            };
+            if dims_cross_slice(page.h, f.h) {
+                purge = true;
+            }
+            page.w = f.w;
+            page.h = f.h;
+        }
+        purge
+    }
+
+    fn page_wh(&self, id: i64) -> Option<Vec<(u32, u32)>> {
+        let g = self.inner.lock();
+        Some(
+            g.books
+                .get(&id)?
+                .pages
+                .iter()
+                .map(|p| (p.w, p.h))
+                .collect(),
+        )
+    }
+
+    /// Store a finished header fill. Decoded sizes already in memory win over a
+    /// header that disagrees, unless the file list itself changed.
+    /// Returns the stored pages and whether the decode cache must be dropped.
+    fn finish_dims(
+        &self,
+        id: i64,
+        gen: u64,
+        sig: String,
+        mut pages: Vec<RealPage>,
+        changed: bool,
+    ) -> Option<(Vec<RealPage>, bool)> {
+        let mut g = self.inner.lock();
+        if g.gen.get(&id).copied().unwrap_or(0) != gen {
+            return None;
+        }
+        let old_h = g
+            .books
+            .get(&id)
+            .map(|e| e.pages.iter().map(|p| p.h).collect::<Vec<_>>());
+        if !changed {
+            if let Some(prev) = g.books.get(&id) {
+                if prev.pages.len() == pages.len() {
+                    for (i, page) in pages.iter_mut().enumerate() {
+                        let old = &prev.pages[i];
+                        if old.name == page.name
+                            && old.entry == page.entry
+                            && old.w > 0
+                            && old.h > 0
+                            && (old.w != page.w || old.h != page.h)
+                        {
+                            page.w = old.w;
+                            page.h = old.h;
+                        }
+                    }
+                }
+            }
+        }
+        let purge = changed
+            || match &old_h {
+                Some(h) if h.len() == pages.len() => h
+                    .iter()
+                    .zip(pages.iter())
+                    .any(|(a, b)| dims_cross_slice(*a, b.h)),
+                _ => true,
+            };
+        let stored = pages.clone();
+        g.books.insert(
+            id,
+            ListEntry {
+                sig,
+                pages: Arc::new(pages),
+                verified: true,
+                dims_ready: true,
+                busy: false,
+            },
+        );
+        Some((stored, purge))
+    }
+
     fn mark_verified(&self, id: i64, gen: u64) -> bool {
         let mut g = self.inner.lock();
         if g.gen.get(&id).copied().unwrap_or(0) != gen {
@@ -634,6 +728,18 @@ fn emit_refresh(app: Option<&AppHandle>, id: i64, sig: &str, pages: u32) {
     );
 }
 
+/// Real-page header sizes. The open reader applies these in place. A length
+/// change still goes through `book-list-refreshed` and reopens.
+fn emit_dims(app: Option<&AppHandle>, id: i64, pages: &[RealPage]) {
+    let Some(app) = app else { return };
+    let dims: Vec<[u32; 2]> = pages.iter().map(|p| [p.w, p.h]).collect();
+    let _ = app.emit("book-dims", serde_json::json!({ "bookId": id, "dims": dims }));
+}
+
+fn dims_cross_slice(old_h: u32, new_h: u32) -> bool {
+    (old_h > scan::SLICE_TRIGGER) != (new_h > scan::SLICE_TRIGGER)
+}
+
 fn run_followup(s: &ReaderState, app: Option<&AppHandle>, job: Followup) -> Result<(), ReaderError> {
     let t0 = Instant::now();
     match job {
@@ -672,13 +778,22 @@ fn run_followup(s: &ReaderState, app: Option<&AppHandle>, job: Followup) -> Resu
             if indexed.pages.is_empty() || s.lists.current(id) != gen {
                 return Ok(());
             }
-            s.cache.purge_book(id);
-            db::store_pages(&mut s.db.lock(), id, &indexed.pages, &indexed.sig)?;
             let changed = names_fingerprint(&indexed.pages) != names || indexed.sig != sig;
-            let n = indexed.pages.len() as u32;
-            let new_sig = indexed.sig.clone();
-            if s.lists.finish(id, gen, indexed.sig, indexed.pages, true, true) && changed {
-                emit_refresh(app, id, &new_sig, n);
+            let sig = indexed.sig.clone();
+            let Some((stored, purge)) =
+                s.lists
+                    .finish_dims(id, gen, sig.clone(), indexed.pages, changed)
+            else {
+                return Ok(());
+            };
+            if purge {
+                s.cache.purge_book(id);
+            }
+            db::store_pages(&mut s.db.lock(), id, &stored, &sig)?;
+            if changed {
+                emit_refresh(app, id, &sig, stored.len() as u32);
+            } else {
+                emit_dims(app, id, &stored);
             }
             perf_ms(&format!("fill book {id} dims"), t0);
             Ok(())
@@ -740,8 +855,8 @@ pub async fn set_reading_window(
         book: book_id,
         center,
         dir: direction.signum().max(-1).min(1),
-        ahead: ahead.min(12),
-        behind: behind.min(4),
+        ahead: ahead.min(24),
+        behind: behind.min(8),
         variant,
     })
 }
@@ -772,9 +887,12 @@ pub async fn fix_page_dims(
     let s = state.inner().clone();
     blocking(move || {
         db::fix_dims(&mut s.db.lock(), book_id, &fixes)?;
-        s.cache.purge_book(book_id); // slicing may differ next open (virtual indices shift) -> cached slices are stale
-        // The in-memory page list still has the old header sizes.
-        s.lists.invalidate(book_id);
+        // Keep the open list and the background header fill. Purging the
+        // decode cache is only needed when a height crosses the slice cut,
+        // because that shifts virtual indexes on the next open.
+        if s.lists.patch_dims(book_id, &fixes) {
+            s.cache.purge_book(book_id);
+        }
         Ok(())
     })
     .await
@@ -938,5 +1056,69 @@ mod open_speed {
             );
         }
         let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+#[cfg(test)]
+mod dim_fix {
+    use super::ListCache;
+    use crate::model::{DimFix, RealPage};
+
+    fn real(w: u32, h: u32) -> RealPage {
+        RealPage {
+            entry: 0,
+            name: "p.jpg".into(),
+            w,
+            h,
+            bytes: 1,
+            src_path: None,
+        }
+    }
+
+    #[test]
+    fn patch_does_not_cancel_fill_or_purge_a_normal_page() {
+        let lists = ListCache::new();
+        let gen = lists.bump(7);
+        lists.put(
+            7,
+            "sig".into(),
+            vec![real(0, 0), real(800, 100), real(800, 20_000)],
+            true,
+            false,
+            true,
+        );
+        assert!(!lists.patch_dims(7, &[DimFix { page: 0, w: 900, h: 1200 }]));
+        assert_eq!(lists.current(7), gen, "a size fix must not cancel the header fill");
+        assert!(lists.get(7).unwrap().busy);
+        assert_eq!(lists.page_wh(7).unwrap()[0], (900, 1200));
+        assert!(lists.patch_dims(7, &[DimFix { page: 1, w: 800, h: 20_000 }]));
+        assert!(!lists.patch_dims(7, &[DimFix { page: 2, w: 800, h: 18_000 }]));
+        assert_eq!(lists.current(7), gen);
+    }
+
+    #[test]
+    fn fill_keeps_a_decoded_size_and_does_not_drop_the_cache() {
+        let lists = ListCache::new();
+        let gen = lists.bump(3);
+        lists.put(
+            3,
+            "sig".into(),
+            vec![real(0, 0), real(800, 1200)],
+            true,
+            false,
+            true,
+        );
+        lists.patch_dims(3, &[DimFix { page: 0, w: 900, h: 1400 }]);
+        let (stored, purge) = lists
+            .finish_dims(3, gen, "sig".into(), vec![real(100, 100), real(800, 1200)], false)
+            .unwrap();
+        assert_eq!((stored[0].w, stored[0].h), (900, 1400));
+        assert!(!purge);
+        assert_eq!(lists.current(3), gen);
+        let (replaced, purge_again) = lists
+            .finish_dims(3, gen, "sig".into(), vec![real(100, 100), real(800, 1200)], true)
+            .unwrap();
+        assert_eq!(replaced[0].h, 100);
+        assert!(purge_again);
     }
 }

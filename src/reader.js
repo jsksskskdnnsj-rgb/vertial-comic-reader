@@ -4,14 +4,14 @@
 // Objects:  Strip (DOM + layout)   ViewportTracker (scroll -> position/direction/speed)
 //           ImageWindow (IO-driven mount/unmount)   Prefetcher (-> Rust set_reading_window)
 //           ProgressSaver (debounced save)   Scrubber (bottom slider)   Reader (glue)
-import { Layout, clampWidthPct } from './layout.js';
+import { Layout, applyRealDims as applyRealPageDims, clampWidthPct } from './layout.js';
 import { createListenerBag } from './listener-bag.js';
 import { tunePerf } from './decode-budget.js';
 import { applyCropStyle, cropCacheKey, detectCropFromImage, mergeCropInsets } from './reader-crop.js';
 import { rtlPageDelta } from './reader-rtl.js';
 import {
-  KEY_PAGE_DURATION_MS, KEY_SOFT_LAND_PX, classifyWheel, createPageKey, extendPageKey,
-  glideChase, glideTauMs, keyReleaseSpeed, pageKeyDistance, pageSeamCover, stepPageKey,
+  KEY_PAGE_DURATION_MS, KEY_SOFT_LAND_PX, createPageKey, extendPageKey,
+  glideChase, glideTauMs, keyReleaseSpeed, latchWheelKind, pageKeyDistance, pageSeamCover, stepPageKey,
 } from './reader-feel.js';
 
 const T = globalThis.window?.__TAURI__;
@@ -43,8 +43,8 @@ export const api = {
 // not-yet-mounted pages in the reading direction get a browser fetch started early.
 // Saver still uses the width-variant decode path; balanced non-slice pages do not.
 export const PERF = {
-  balanced: { nearVh: 2, farVh: 4.2, maxMounted: 18,
-              aheadVh: 7, behindVh: 2, maxAhead: 14, maxBehind: 4, variant: 0, warm: 4 },
+  balanced: { nearVh: 2.4, farVh: 5, maxMounted: 18,
+              aheadVh: 8, behindVh: 2.5, maxAhead: 18, maxBehind: 6, variant: 0, warm: 6 },
   saver:    { nearVh: 1, farVh: 2.2, maxMounted: 8,
               aheadVh: 3.5, behindVh: 0.5, maxAhead: 6, maxBehind: 1, variant: 1600, warm: 2 },
 };
@@ -59,8 +59,41 @@ export function virtualsNear(layout, scrollTop, viewH, nearVh) {
   for (let i = i0; i <= i1 && i < layout.n; i++) out.push(i);
   return out;
 }
-// How long a Ctrl+wheel burst stays on the composited scale before one real layout.
-export const ZOOM_COMMIT_MS = 140;
+/**
+ * Bitmaps to keep. Pages that intersect the viewport are always included;
+ * `maxMounted` only limits extras outside that screen.
+ */
+export function pagesToMount(layout, scrollTop, viewH, perf, extraNear) {
+  const vh = viewH > 0 ? viewH : 0;
+  const top = Number(scrollTop) || 0;
+  const must = vh > 0 ? virtualsNear(layout, top, vh, 0) : [];
+  const mustSet = new Set(must);
+  const near = new Set(must);
+  if (extraNear) for (const i of extraNear) near.add(i);
+  for (const i of virtualsNear(layout, top, vh, perf?.nearVh || 0)) near.add(i);
+  const c = top + vh / 2;
+  const dist = (i) => Math.abs((layout.vTop[i] || 0) + (layout.vH[i] || 0) / 2 - c);
+  const rest = [];
+  for (const i of near) if (!mustSet.has(i)) rest.push(i);
+  rest.sort((a, b) => dist(a) - dist(b));
+  const cap = Math.max(must.length, Number(perf?.maxMounted) || must.length);
+  return must.concat(rest.slice(0, Math.max(0, cap - must.length)));
+}
+/** A programmatic scroll write this close to the current offset is a no-op, so a fling survives. */
+export function sameScroll(current, next) {
+  return Math.abs((Number(current) || 0) - (Number(next) || 0)) < 1;
+}
+// Zoom lays out on the next frame. The gap stays the configured pixel size
+// instead of being scaled by a CSS transform and then snapped back.
+export const ZOOM_COMMIT_MS = 0;
+/** Virtual pages at or above this defer a zoom gesture to one compositor scale.
+ *  Shorter books still lay the column out every frame, so a non-zero gap never snaps. */
+export const ZOOM_LAYOUT_EVERY_FRAME_MAX = 800;
+/** How long a long-book zoom may sit on the compositor before the real column lands. */
+export const ZOOM_SETTLE_MS = 72;
+export function zoomDefersLayout(pageCount) {
+  return (pageCount | 0) >= ZOOM_LAYOUT_EVERY_FRAME_MAX;
+}
 export const PAGE_WINDOW_CAP = 96;
 export function clampZoom(z) {
   const n = Number(z);
@@ -85,19 +118,36 @@ export function pageWindow(layout, scrollTop, viewH, padVh) {
   const n = layout?.n | 0;
   if (!n) return { from: 0, to: -1, count: 0 };
   if (!(viewH > 0)) return { from: 0, to: n - 1, count: n };
+  const yTop = Math.max(0, Number(scrollTop) || 0);
+  const yBot = yTop + viewH;
+  let visFrom = layout.findVirtual(yTop);
+  let visTo = layout.findVirtual(yBot);
+  visFrom = Math.max(0, Math.min(visFrom, n - 1));
+  visTo = Math.max(visFrom, Math.min(n - 1, visTo));
   const pad = Math.max(0, Number(padVh) || 0) * viewH;
-  const y0 = Math.max(0, (Number(scrollTop) || 0) - pad);
-  const y1 = (Number(scrollTop) || 0) + viewH + pad;
-  let from = layout.findVirtual(y0);
-  let to = layout.findVirtual(Math.max(0, y1));
+  let from = layout.findVirtual(Math.max(0, yTop - pad));
+  let to = layout.findVirtual(yBot + pad);
   from = Math.max(0, from - 1);
   to = Math.min(n - 1, to + 1);
   if (to < from) to = from;
+  const visCount = visTo - visFrom + 1;
   if (to - from + 1 > PAGE_WINDOW_CAP) {
-    const mid = layout.findVirtual(Math.max(0, (Number(scrollTop) || 0) + viewH / 2));
-    from = Math.max(0, mid - Math.floor(PAGE_WINDOW_CAP / 2));
-    to = Math.min(n - 1, from + PAGE_WINDOW_CAP - 1);
-    from = Math.max(0, to - PAGE_WINDOW_CAP + 1);
+    if (visCount <= PAGE_WINDOW_CAP) {
+      let budget = PAGE_WINDOW_CAP - visCount;
+      let lo = visFrom;
+      let hi = visTo;
+      while (budget > 0 && (lo > from || hi < to)) {
+        if (lo > from) { lo--; budget--; }
+        if (budget > 0 && hi < to) { hi++; budget--; }
+      }
+      from = lo;
+      to = hi;
+    } else {
+      const mid = layout.findVirtual(yTop + viewH / 2);
+      from = Math.max(0, mid - Math.floor(PAGE_WINDOW_CAP / 2));
+      to = Math.min(n - 1, from + PAGE_WINDOW_CAP - 1);
+      from = Math.max(0, to - PAGE_WINDOW_CAP + 1);
+    }
   }
   return { from, to, count: to - from + 1 };
 }
@@ -218,9 +268,12 @@ class Strip {
     host.append(this.scroller);
     this.layout = new Layout();
     this.pages = [];               // sparse: only the live window has elements
-    this.padVh = 4.2;              // matches PERF.balanced.farVh; open() copies the active preset
+    this.padVh = 5;                // matches PERF.balanced.farVh; open() copies the active preset
     this.onBox = null;             // (index, el, 'add'|'remove') — ImageWindow observes live boxes
     this.layoutGen = 0;
+    this._winFrom = 0;
+    this._winTo = -1;
+    this._placedGen = -1;
   }
   get viewW() { return this.scroller.clientWidth; }  // excludes the scrollbar
   get viewH() { return this.scroller.clientHeight; }
@@ -234,6 +287,9 @@ class Strip {
     this.layout.setBook(dims, src);
     this.pages = new Array(dims.length);
     this.layoutGen = 0;
+    this._winFrom = 0;
+    this._winTo = -1;
+    this._placedGen = -1;
     this.sizer.replaceChildren();
   }
 
@@ -256,19 +312,36 @@ class Strip {
     this.layoutGen = (this.layoutGen + 1) | 0;
     this.sizer.style.width = this.layout.sizerW + 'px';
     this.sizer.style.height = this.layout.sizerH + 'px';
-    // The scroll event this assignment fires is not the reader scrolling.
-    this.ignoreChromeScroll = true;
-    sc.scrollTop = this.layout.posToY(pos) - anchorY;              // 2. restore in the same task
-    this.ignoreChromeScroll = false;
-    this.syncBoxes();                                              // 3. boxes at the restored scroll
+    const next = this.layout.posToY(pos) - anchorY;
+    // Writing an unchanged scrollTop cancels a trackpad fling.
+    if (!sameScroll(sc.scrollTop, next)) sc.scrollTop = next;
+    this.syncBoxes();                                              // boxes at the restored scroll
+  }
+
+  // One height change: write the sizer and the live boxes. The scroll anchor
+  // is applied by the caller before this, so the window matches the new offset.
+  commitShift() {
+    this.layoutGen = (this.layoutGen + 1) | 0;
+    this.sizer.style.height = this.layout.sizerH + 'px';
+    this._placedGen = -1;
+    this.syncBoxes();
   }
 
   syncBoxes() {
     const win = pageWindow(this.layout, this.scroller.scrollTop, this.viewH, this.padVh);
-    for (let i = 0; i < this.pages.length; i++) {
-      if (i < win.from || i > win.to) this.dropBox(i);
+    if (win.from === this._winFrom && win.to === this._winTo && this._placedGen === this.layoutGen) return;
+    const prevFrom = this._winFrom | 0;
+    const prevTo = this._winTo ?? -1;
+    if (prevTo >= prevFrom) {
+      const dropTo = Math.min(prevTo, win.from - 1);
+      for (let i = prevFrom; i <= dropTo; i++) this.dropBox(i);
+      const dropFrom = Math.max(prevFrom, win.to + 1);
+      for (let i = dropFrom; i <= prevTo; i++) this.dropBox(i);
     }
     for (let i = win.from; i <= win.to; i++) this.ensureBox(i);
+    this._winFrom = win.from;
+    this._winTo = win.to;
+    this._placedGen = this.layoutGen;
   }
 
   ensureBox(i) {
@@ -303,15 +376,24 @@ class Strip {
 
   placeBox(i, d) {
     const L = this.layout;
-    const s = d.style;
     const cover = pageSeamCover(L, i);
-    s.left = (L.vLeft[i] ?? L.left) + 'px';
-    s.width = (L.vW[i] || L.colW) + 'px';
+    const left = (L.vLeft[i] ?? L.left);
+    const width = (L.vW[i] || L.colW);
+    const top = L.vTop[i] - cover;
+    const height = L.vH[i] + cover;
+    d._placeGen = this.layoutGen;
+    if (d._boxL === left && d._boxW === width && d._boxT === top && d._boxH === height) return;
+    d._boxL = left;
+    d._boxW = width;
+    d._boxT = top;
+    d._boxH = height;
+    const s = d.style;
+    s.left = left + 'px';
+    s.width = width + 'px';
     // One extra pixel upward, painted by this later page, hides the hairline
     // the compositor flashes between abutting boxes. Gap > 0 does not abut.
-    s.top = (L.vTop[i] - cover) + 'px';
-    s.height = (L.vH[i] + cover) + 'px';
-    d._placeGen = this.layoutGen;
+    s.top = top + 'px';
+    s.height = height + 'px';
   }
 }
 
@@ -394,6 +476,7 @@ class ImageWindow {
       const i = +e.target.dataset.i;
       if (e.isIntersecting) this.near.add(i); else this.near.delete(i);
     }
+    this._nearGen = (this._nearGen | 0) + 1;
     this.flush();
   }
   onFar(entries) { for (const e of entries) if (!e.isIntersecting) this.release(+e.target.dataset.i); }
@@ -406,20 +489,29 @@ class ImageWindow {
     if (!L.n) return;
     const vh = strip.viewH;
     const top = strip.scroller.scrollTop;
+    const vis0 = vh > 0 ? L.findVirtual(top) : 0;
+    const vis1 = vh > 0 ? L.findVirtual(top + vh) : 0;
+    // Same visible pages and the same near-set already have their bitmaps.
+    // Scrolling inside one tall page must not walk the mount list every frame.
+    if (vis0 === this._vis0 && vis1 === this._vis1 && (this._nearGen | 0) === (this._flushGen | 0) && this._flushDone) return;
     const c = top + vh / 2;
     const dist = (i) => Math.abs(L.vTop[i] + L.vH[i] / 2 - c);
-    const candidates = new Set(this.near);
-    for (const i of virtualsNear(L, top, vh, this.perf.nearVh)) candidates.add(i);
-    const want = [...candidates].sort((a, b) => dist(a) - dist(b)).slice(0, this.perf.maxMounted);
+    const want = pagesToMount(L, top, vh, this.perf, this.near);
     let urgent = false;
+    let pending = false;
     for (const i of want) {
       if (this.mounted.has(i)) continue;
+      pending = true;
       // Priority only. A synchronous decode on the scroll frame freezes the
       // strip for a whole page bitmap — that hitch reads as a seam stutter.
       const high = !urgent && dist(i) <= vh;
       this.mount(i, high);
       if (high) urgent = true;
     }
+    this._vis0 = vis0;
+    this._vis1 = vis1;
+    this._flushGen = this._nearGen | 0;
+    this._flushDone = !pending;
   }
 
   // Start fetches for the next few pages before they enter the mount margin.
@@ -431,6 +523,10 @@ class ImageWindow {
     const y = strip.scroller.scrollTop, vh = strip.viewH;
     const center = L.findVirtual(y + vh * 0.5);
     const step = dir < 0 ? -1 : 1;
+    // The center page has not changed, so the warm set is already the one we want.
+    if (this._warmAt === center && this._warmStep === step) return;
+    this._warmAt = center;
+    this._warmStep = step;
     const want = [];
     for (let k = 1; want.length < nWarm && k < L.n; k++) {
       const i = center + step * k;
@@ -438,15 +534,24 @@ class ImageWindow {
       if (!this.mounted.has(i)) want.push(i);
     }
     const keep = new Set(want);
+    const slack = nWarm + 2;
     for (const [i, img] of this.warm) {
-      if (!keep.has(i)) { img.removeAttribute('src'); this.warm.delete(i); }
+      if (keep.has(i)) continue;
+      const ahead = step > 0 ? i - center : center - i;
+      // A one-page wobble must not cancel a decode and start it again.
+      if (ahead > 0 && ahead <= slack) { keep.add(i); continue; }
+      img.removeAttribute('src');
+      this.warm.delete(i);
     }
     for (const i of want) {
       if (this.warm.has(i)) continue;
       const img = new Image();
       img.className = 'pg'; img.decoding = 'async'; img.draggable = false; img.alt = '';
       if ('fetchPriority' in img) img.fetchPriority = 'low';
+      const note = () => this.r.notePageSize(i, img.naturalWidth, img.naturalHeight);
+      img.addEventListener('load', note, { once: true });
       img.src = this.url(i);
+      if (img.complete && img.naturalWidth > 0) note();
       this.warm.set(i, img);
     }
   }
@@ -549,11 +654,7 @@ class ImageWindow {
 
   // Real size differs from what the header said (EXIF-rotated JPEG, unknown dims, lying header)
   checkDims(i, img) {
-    const L = this.r.strip.layout, [w, h] = L.dims[i];
-    const nw = img.naturalWidth, nh = img.naturalHeight;
-    if (!nw || !nh) return;
-    const known = w > 0 && h > 0;
-    if (!known || Math.abs((nh / nw) / (h / w) - 1) > 0.01) this.r.fixDim(i, nw, nh);
+    this.r.notePageSize(i, img.naturalWidth, img.naturalHeight);
   }
 
   destroy() {
@@ -595,19 +696,27 @@ class Prefetcher {
 // Writes (page, frac) when it changed: 1.5 s after scrolling pauses, but never less often
 // than every 4 s during continuous reading. flush() is awaited on close/blur/hide.
 export class ProgressSaver {
-  constructor(bookId) { this.bookId = bookId; this.dirty = null; this.saved = null; this.lastAt = performance.now(); this.timer = 0; }
+  constructor(bookId) {
+    this.bookId = bookId; this.dirty = null; this.saved = null; this.lastAt = performance.now();
+    this.timer = 0; this._reschedAt = 0;
+  }
 
   mark(pos, reachedEnd) {
     const s = this.saved;
     if (!reachedEnd && s && s.page === pos.page && Math.abs(s.frac - pos.frac) < 0.002) return;
     this.dirty = { pos, reachedEnd: !!(reachedEnd || this.dirty?.reachedEnd) };
     const now = performance.now();
+    // A fling calls this every frame. The latest position is already in `dirty`;
+    // resetting the timer 60 times a second only stole time from the scroll.
+    if (this.timer && now < this._reschedAt) return;
+    this._reschedAt = now + 80;
     const delay = Math.max(0, Math.min(CFG.saveDebounceMs, this.lastAt + CFG.saveMaxWaitMs - now));
     clearTimeout(this.timer);
     this.timer = setTimeout(() => this.flush(), delay);
   }
   async flush() {
     clearTimeout(this.timer);
+    this.timer = 0;
     const d = this.dirty; if (!d) return;
     this.dirty = null;
     try {
@@ -656,8 +765,13 @@ export class Scrubber {
   }
   setValue(page, realPages, frac = 0) {                     // from tracker, when not dragging
     if (this.dragging) return;
-    this.track.style.setProperty('--p', String(scrubProgress(page, realPages, frac)));
-    this.label.textContent = pageReadout(page, realPages).text;
+    const p = String(scrubProgress(page, realPages, frac));
+    const txt = pageReadout(page, realPages).text;
+    if (this._p === p && this._label === txt) return;
+    this._p = p;
+    this._label = txt;
+    this.track.style.setProperty('--p', p);
+    if (this.label.textContent !== txt) this.label.textContent = txt;
   }
 }
 
@@ -677,48 +791,39 @@ export class Reader {
     this._glideWrite = false;
     this._glideWrittenY = 0;
     this._glideWrittenX = 0;
-    this._wheelAt = 0;
+    this._wheelGesture = null;
     this._openToken = 0;
-    this._zoom = null;          // { base, live, anchorY, originY, raf, timer } while a gesture is composited
+    this._zoom = null;          // { live, anchorY, raf } until the frame lays the column out
     this._layoutRaf = 0;
     this._layoutAnchor = 0;
     this._inLayout = false;
+    this._fixFull = false;
+    this._fixMoved = false;
+    this._fixPos = null;
   }
 
   layoutParams() { return { viewW: this.strip.viewW, ...this.params }; }
 
-  // opts: perf, widthPct, gap, startPos ({page,frac}: overrides the saved resume point),
-  //       beforeMount(info) -> false (cancel) | {perf} | undefined   (used for the large-book warning)
-  async open(bookId, { perf = 'balanced', widthPct = 100, gap = 0, spread = false, startPos = null, beforeMount = null, wheelSpeed = WHEEL_GEAR_DEFAULT } = {}) {
-    const token = ++this._openToken;
-    const superseded = () => {
-      const err = { code: 'superseded', detail: 'superseded' };
-      throw err;
-    };
-    this.perfName = perf; this.perf = PERF[perf];
-    this.wheelGear = wheelGear(wheelSpeed);
-    Object.assign(this.params, { widthPct: clampWidthPct(widthPct), gap, spread: !!spread });
-    const tOpen = performance.now();
-    let info;
-    try {
-      info = await api.openBook(bookId);            // { bookId, sig, dims, src, realPages, chapters, resume, ... }
-    } catch (e) {
-      if (token !== this._openToken || e?.detail === 'superseded') superseded();
-      throw e;
-    }
-    if (token !== this._openToken) superseded();
-    this.info = info;
-    perfLog('openBook', tOpen, { bookId, pages: info?.realPages });
-    if (beforeMount) {
-      const r = await beforeMount(this.info);
-      if (token !== this._openToken) superseded();
-      if (r === false) { await api.closeBook(bookId).catch(() => {}); throw { code: 'cancelled' }; }
-      if (r?.perf) { this.perfName = r.perf; this.perf = PERF[r.perf]; }
-    }
-    if (token !== this._openToken) superseded();
+  _begin(opts) {
+    const perf = opts.perf || 'balanced';
+    this.perfName = perf;
+    this.perf = PERF[perf] || PERF.balanced;
+    this.wheelGear = wheelGear(opts.wheelSpeed);
+    Object.assign(this.params, {
+      widthPct: clampWidthPct(opts.widthPct ?? 100),
+      gap: opts.gap ?? 0,
+      spread: !!opts.spread,
+    });
+  }
+
+  // Synchronous: the boxes exist before this returns. Mode switches call this
+  // while the previous surface is still on screen, then unmount that surface.
+  _mount(token, startPos) {
+    if (token !== this._openToken) throw { code: 'superseded', detail: 'superseded' };
     this.perf = tunePerf(this.perf, this.info?.realPages);
-    this.strip.padVh = this.perf.farVh || 4.2;
+    this.strip.padVh = this.perf.farVh || 5;
     const { dims, src } = this.info, resume = startPos ?? this.info.resume;
+    const bookId = this.info.bookId;
 
     const tDom = performance.now();
     this.strip.build(dims, src);
@@ -767,6 +872,49 @@ export class Reader {
     this._listen.add(window, 'blur', this.blurHandler = () => this.saver.flush());
   }
 
+  // opts: perf, widthPct, gap, startPos ({page,frac}: overrides the saved resume point),
+  //       beforeMount(info) -> false (cancel) | {perf} | undefined   (used for the large-book warning)
+  async open(bookId, { perf = 'balanced', widthPct = 100, gap = 0, spread = false, startPos = null, beforeMount = null, wheelSpeed = WHEEL_GEAR_DEFAULT, info: knownInfo = null } = {}) {
+    const token = ++this._openToken;
+    const superseded = () => {
+      const err = { code: 'superseded', detail: 'superseded' };
+      throw err;
+    };
+    this._begin({ perf, widthPct, gap, spread, wheelSpeed });
+    const tOpen = performance.now();
+    let info = knownInfo;
+    if (!info) {
+      try {
+        info = await api.openBook(bookId);          // { bookId, sig, dims, src, realPages, chapters, resume, ... }
+      } catch (e) {
+        if (token !== this._openToken || e?.detail === 'superseded') superseded();
+        throw e;
+      }
+    }
+    if (token !== this._openToken) superseded();
+    this.info = info;
+    perfLog('openBook', tOpen, { bookId, pages: info?.realPages });
+    if (beforeMount) {
+      const r = await beforeMount(this.info);
+      if (token !== this._openToken) superseded();
+      if (r === false) { await api.closeBook(bookId).catch(() => {}); throw { code: 'cancelled' }; }
+      if (r?.perf) { this.perfName = r.perf; this.perf = PERF[r.perf] || PERF.balanced; }
+    }
+    this._mount(token, startPos);
+    return this.info;
+  }
+
+  // Already-open book: no IPC and no await, so the caller can paint this
+  // surface before dropping the previous one.
+  prepare(bookId, { perf = 'balanced', widthPct = 100, gap = 0, spread = false, startPos = null, wheelSpeed = WHEEL_GEAR_DEFAULT, info: knownInfo = null } = {}) {
+    const token = ++this._openToken;
+    this._begin({ perf, widthPct, gap, spread, wheelSpeed });
+    if (!knownInfo) throw { code: 'no_info', detail: 'no_info' };
+    this.info = knownInfo;
+    this._mount(token, startPos);
+    return this.info;
+  }
+
   // Which virtual pages should Rust keep warm? Sized in viewport heights, not page counts,
   // so 8000px slices and 300px strips both get sensible windows.
   computeWindow(y, dir) {
@@ -783,7 +931,7 @@ export class Reader {
   get viewH() { return this.strip.viewH; }
   topPos() { return this.strip.layout.getPosition(this.strip.scroller.scrollTop); }                       // what is saved
   centerPos() { return this.strip.layout.getPosition(this.strip.scroller.scrollTop + this.strip.viewH / 2); }   // what B bookmarks
-  stepPage(dir) { const p = this.topPos(); const to = clamp(p.page + dir, 0, this.strip.layout.realPages - 1); this.jumpTo({ page: to, frac: 0 }, { smooth: true }); }
+  stepPage(dir) { const p = this.topPos(); const to = clamp(p.page + dir, 0, this.strip.layout.realPages - 1); this.jumpTo({ page: to, frac: 0 }); }
   refresh() { this.tracker?.tick(); }
   setRtl(on) { this.rtl = !!on; }
   setFit() {                                                                   // "fit to panel"
@@ -806,8 +954,16 @@ export class Reader {
     this.prefetcher.jumpNow({ ...this.computeWindow(y, y >= sc.scrollTop ? 1 : -1), center });
     if (smooth) { this.glideTo(y); return; }
     this.stopGlide();
-    this.tracker.expectJump(y);
-    sc.scrollTop = y;                                        // observers fire next frame -> demand requests
+    if (!sameScroll(sc.scrollTop, y)) {
+      this.tracker?.expectJump(y);
+      sc.scrollTop = y;
+    }
+    // Mount the destination in this turn. Waiting for the scroll event left
+    // a blank frame between the click and the page.
+    if (this.tracker) {
+      cancelAnimationFrame(this.tracker.raf);
+      this.tracker.tick();
+    }
   }
 
   // Notch scrolling and keyboard page jumps share one chase. The target moves
@@ -898,15 +1054,22 @@ export class Reader {
     }
     this.stopKeyScroll();
     const now = e.timeStamp || performance.now();
-    const kind = classifyWheel(e, this._wheelAt, now);
-    this._wheelAt = now;
+    // Notch bursts stay notches. classifyWheel alone treats a fast second detent as a trackpad.
+    const kind = latchWheelKind(e, this._wheelGesture, now);
+    this._wheelGesture = { kind, t: now };
     // Trackpad and other pixel streams keep the platform's own inertia.
     // Multiplying those and calling preventDefault is what made a flick step.
     if (kind !== 'notch') return;
     const d = wheelScrollDelta(e, this.wheelGear, { w: this.strip.viewW, h: this.strip.viewH });
     if (!d) return;
     e.preventDefault();
-    this.glideBy(d.dx, d.dy);
+    this.stopGlide();
+    const sc = this.strip.scroller;
+    if (typeof sc.scrollBy === 'function') sc.scrollBy(d.dx, d.dy);
+    else {
+      sc.scrollLeft += d.dx;
+      sc.scrollTop += d.dy;
+    }
   }
   setWheelSpeed(gear) { this.wheelGear = wheelGear(gear); }
 
@@ -998,36 +1161,45 @@ export class Reader {
     cancelAnimationFrame(hold.raf);
     if (hold.onUp) window.removeEventListener('keyup', hold.onUp);
   }
-  // Ctrl+wheel: one transform per frame. The origin stays at the pointer from the
-  // first event of the burst. Layout (every page's top/height) runs once, after idle.
+  // Ctrl+wheel, anchored on the pointer. A shorter book lays the column out
+  // every frame so the gap stays the configured pixel size. A very long book
+  // would relayout a huge scroll height on each notch, so the gesture scales
+  // on the compositor and the real column (same gap) lands once the wheel pauses.
   previewZoom(nextZoom, anchorY) {
     const live = clampZoom(nextZoom);
-    if (!this._zoom) {
-      const sc = this.strip.scroller;
-      this._zoom = {
-        base: this.params.zoom || 1,
-        live,
-        anchorY,
-        originY: zoomOriginY(sc.scrollTop, anchorY),
-        raf: 0,
-        timer: 0,
-      };
-    } else {
+    const heavy = zoomDefersLayout(this.strip?.layout?.n || 0);
+    if (!this._zoom) this._zoom = { live, base: this.params.zoom || 1, anchorY, raf: 0, timer: 0, heavy };
+    else {
       this._zoom.live = live;
+      this._zoom.anchorY = anchorY;
     }
     const z = this._zoom;
-    if (!z.raf) z.raf = requestAnimationFrame(() => this.paintZoom());
-    clearTimeout(z.timer);
-    z.timer = setTimeout(() => this.commitZoom(), ZOOM_COMMIT_MS);
+    if (z.heavy) {
+      const s = zoomPreviewScale(z.base, z.live);
+      const sizer = this.strip.sizer;
+      sizer.style.transformOrigin = `50% ${zoomOriginY(this.strip.scroller.scrollTop, z.anchorY)}px`;
+      sizer.style.transform = s === 1 ? '' : `scale(${s})`;
+      sizer.classList.toggle('zoom-live', s !== 1);
+      if (!z.timer) z.timer = setTimeout(() => this.flushZoom(), ZOOM_SETTLE_MS);
+      return;
+    }
+    if (!z.raf) z.raf = requestAnimationFrame(() => this.flushZoom());
   }
-  paintZoom() {
+  flushZoom() {
     const z = this._zoom;
     if (!z) return;
+    cancelAnimationFrame(z.raf);
+    clearTimeout(z.timer);
     z.raf = 0;
-    const sizer = this.strip.sizer;
-    sizer.classList.add('zoom-live');
-    sizer.style.transformOrigin = `50% ${z.originY}px`;
-    sizer.style.transform = `scale(${zoomPreviewScale(z.base, z.live)})`;
+    z.timer = 0;
+    this._zoom = null;
+    this.clearZoomStyle();
+    const anchor = z.anchorY;
+    if (z.live !== this.params.zoom) this.params.zoom = z.live;
+    if (this._inLayout) return;
+    this._inLayout = true;
+    try { this.strip.relayout(this.layoutParams(), anchor); }
+    finally { this._inLayout = false; }
   }
   clearZoomStyle() {
     const sizer = this.strip?.sizer;
@@ -1044,20 +1216,7 @@ export class Reader {
     this._zoom = null;
     this.clearZoomStyle();
   }
-  commitZoom() {
-    const z = this._zoom;
-    if (!z) return;
-    const anchor = z.anchorY;
-    const live = z.live;
-    const same = live === this.params.zoom;
-    cancelAnimationFrame(z.raf);
-    clearTimeout(z.timer);
-    this._zoom = null;
-    this.clearZoomStyle();
-    if (same) return;
-    this.params.zoom = live;
-    this.relayoutNow(anchor);
-  }
+  commitZoom() { this.flushZoom(); }
   relayoutNow(anchorY = 0) {
     if (this._layoutRaf) {
       cancelAnimationFrame(this._layoutRaf);
@@ -1101,16 +1260,59 @@ export class Reader {
   }
   refreshCropAll() { this.imageWindow?.refreshCrop(); }
 
+  // Real pixel size from a decode, including a warm image that is still off screen.
+  notePageSize(i, w, h) {
+    if (!(w > 0) || !(h > 0)) return;
+    const L = this.strip.layout;
+    const [cw, ch] = L.dims[i] || [0, 0];
+    const known = cw > 0 && ch > 0;
+    if (!known || Math.abs((h / w) / (ch / cw) - 1) > 0.01) this.fixDim(i, w, h);
+  }
+
+  // Header sizes that arrived after open, one [w, h] per real page.
+  applyRealDims(realDims) {
+    const n = applyRealPageDims(this.strip.layout, realDims);
+    if (n > 0) this.relayoutNow(0);
+    return n;
+  }
+
   // Corrections for pages whose real size differs from the header (batched per frame).
+  // One page slides the tail. A spread row still recomputes, because the two
+  // pages share a height. The anchor is read once, before any of those slides.
   fixDim(i, w, h) {
     const L = this.strip.layout;
+    const [cw, ch] = L.dims[i] || [0, 0];
+    if (cw === w && ch === h) return;
+    if (!this.fixRaf) this._fixPos = L.getPosition(this.strip.scroller.scrollTop);
     L.setDim(i, w, h);
     const g = L.src[i];
     if (L.gFirst[g] === L.gLast[g]) this.fixes.set(g, { page: g, w, h });   // sliced pages: ignore
+    if (L.spread) this._fixFull = true;
+    else if (!this._fixFull) {
+      const col = L.vW[i] || L.colW || 1;
+      const nextH = Math.max(1, Math.round(col * (h / w)));
+      const delta = L.shiftHeight(i, nextH);
+      if (delta) this._fixMoved = true;
+    }
     if (this.fixRaf) return;
     this.fixRaf = requestAnimationFrame(() => {
       this.fixRaf = 0;
-      this.relayoutNow(0);                                    // anchored on viewport top (page, frac)
+      const full = this._fixFull;
+      const moved = this._fixMoved;
+      const pos = this._fixPos;
+      this._fixFull = false;
+      this._fixMoved = false;
+      this._fixPos = null;
+      if (full) this.relayoutNow(0);
+      else if (moved && pos) {
+        const sc = this.strip.scroller;
+        const next = L.posToY(pos);
+        if (!sameScroll(sc.scrollTop, next)) {
+          this.tracker?.expectJump(next);
+          sc.scrollTop = next;
+        }
+        this.strip.commitShift();
+      }
       const batch = [...this.fixes.values()]; this.fixes.clear();
       if (batch.length) api.fixDims(this.info.bookId, batch).catch(() => {});
     });
@@ -1140,7 +1342,7 @@ export class Reader {
       case 'ArrowRight':
       case 'ArrowLeft': {
         const d = rtlPageDelta(e.key, this.rtl);
-        if (d) this.jumpTo({ page: page + d, frac: 0 }, { smooth: true });
+        if (d) this.jumpTo({ page: page + d, frac: 0 });
         break;
       }
       case 'Home': this.jumpTo({ page: 0, frac: 0 }); break;
@@ -1154,20 +1356,42 @@ export class Reader {
     e.preventDefault();
   }
 
-  async close() {
+  // Stop input and start the save. The scroller stays until unmount(), so a
+  // mode switch can paint the next surface first.
+  release({ releaseBook = true } = {}) {
     this._openToken = (this._openToken || 0) + 1;
     this.dismissZoomPreview();
     if (this._layoutRaf) { cancelAnimationFrame(this._layoutRaf); this._layoutRaf = 0; }
+    if (this.fixRaf) { cancelAnimationFrame(this.fixRaf); this.fixRaf = 0; }
     this.stopKeyScroll();
     this.stopGlide();
-    await this.saver?.flush();
+    const flush = this.saver?.flush();
+    this.saver = null;
     this._listen?.clear();
     this._listen = null;
     this.scrubber?.destroy();
     this.scrubber = null;
-    this.ro?.disconnect(); this.tracker?.destroy(); this.imageWindow?.destroy(); this.prefetcher?.destroy();
-    this.strip.scroller.remove();                              // leave the host empty for the next view
-    if (this.info) await api.closeBook(this.info.bookId).catch(() => {});
+    this.ro?.disconnect();
+    this.ro = null;
+    this.tracker?.destroy();
+    this.tracker = null;
+    this.imageWindow?.destroy();
+    this.imageWindow = null;
+    this.prefetcher?.destroy();
+    this.prefetcher = null;
+    const closing = releaseBook ? this.info?.bookId : 0;
+    return (async () => {
+      if (closing) await api.closeBook(closing).catch(() => {});
+      await flush;
+    })();
+  }
+  unmount() {
+    this.strip?.scroller?.remove();
+  }
+  async close(opts) {
+    const tail = this.release(opts);
+    await tail;
+    this.unmount();
   }
 }
 
