@@ -49,5 +49,8 @@ const cargoPkg = cargo.split(/^\[/m).find((section) => section.startsWith('packa
 const cargoVersion = cargoPkg?.match(/^version = "([^"]+)"/m)?.[1];
 assert.equal(typeof pkg.version, 'string');
 assert.match(pkg.version, /^\d+\.\d+\.\d+$/);
+assert.equal(pkg.version, '0.9.5');
 assert.equal(conf.version, pkg.version);
 assert.equal(cargoVersion, pkg.version);
+const meta = fs.readFileSync(new URL('../src-tauri/src/metadata/mod.rs', import.meta.url), 'utf8');
+assert.match(meta, /MH-Reader\/0\.9\.5 /);
