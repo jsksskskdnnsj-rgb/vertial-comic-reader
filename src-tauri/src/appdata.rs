@@ -141,6 +141,7 @@ pub fn set_data_dir(path: String) -> Result<String, String> {
         if old_cfg.exists() && !new_cfg.exists() {
             std::fs::copy(&old_cfg, &new_cfg).map_err(|e| format!("迁移阅读配置失败：{}", e))?;
         }
+        crate::cache::migrate_limit_file(&old_dir, &new_dir)?;
         // 页面缓存（已解压的 ZIP 页面，递归复制，已存在的跳过）
         let old_cache = old_dir.join("page_cache");
         let new_cache = new_dir.join("page_cache");

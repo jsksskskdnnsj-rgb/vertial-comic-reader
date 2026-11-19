@@ -10,6 +10,22 @@ use std::path::{Path, PathBuf};
 pub(crate) const SEVENZ_EXTS: &[&str] = &["7z", "cb7"];
 pub(crate) const RAR_EXTS: &[&str] = &["rar", "cbr"];
 
+#[cfg(test)]
+mod tests {
+    use super::archive_kind_ext;
+
+    #[test]
+    fn full_folder_unpack_is_only_sevenz_and_rar() {
+        assert_eq!(archive_kind_ext("zip"), Some("zip"));
+        assert_eq!(archive_kind_ext("cbz"), Some("zip"));
+        assert_eq!(archive_kind_ext("7z"), Some("sevenz"));
+        assert_eq!(archive_kind_ext("cb7"), Some("sevenz"));
+        assert_eq!(archive_kind_ext("rar"), Some("rar"));
+        assert_eq!(archive_kind_ext("cbr"), Some("rar"));
+        assert_eq!(archive_kind_ext("jpg"), None);
+    }
+}
+
 pub(crate) fn archive_kind_ext(ext: &str) -> Option<&'static str> {
     let e = ext.to_ascii_lowercase();
     if crate::paths::ZIP_EXTS.iter().any(|x| *x == e) {
@@ -134,7 +150,14 @@ fn extract_rar_inner(archive: &Path, dest: &Path) -> Result<(), String> {
     Ok(())
 }
 
-/// Unpack archive → folder path. Returns None if the extension is not an archive we handle here.
+/// Unpack a 7z/cb7/rar/cbr into `data_dir/expanded/<stem>`.
+///
+/// This is a full second copy of that archive's images. It is not part of the
+/// page-cache byte limit, and cache clear / close / shelf remove do not delete
+/// it. zip/cbz and plain folders never come through here. Each import picks a
+/// new directory name, so importing the same archive again grows `expanded/`
+/// by another tree. An extract that yields no images removes only the directory
+/// it just created.
 pub fn import_unpack_to_folder(path: &str) -> Result<Option<PathBuf>, String> {
     let p = Path::new(path);
     let ext = crate::ext_of(p);

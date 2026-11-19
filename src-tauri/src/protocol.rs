@@ -79,8 +79,12 @@ pub fn serve(ex: &Extractor, req: &http::Request<Vec<u8>>) -> http::Response<Vec
                     .unwrap()
             }
             Err(e) if e.kind() == std::io::ErrorKind::NotFound && attempt == 0 => {
-                ex.cache.remove(&key)
-            } // index lied: re-extract once
+                // Only an owned cache object can be dropped and extracted again.
+                // A missing original must not erase a backup copy.
+                if ex.cache.hosts(&page.path) {
+                    ex.cache.remove(&key);
+                }
+            }
             Err(e) => return err(&e.into()),
         }
     }
@@ -267,6 +271,14 @@ mod serve_tests {
             resp.headers().get("content-type").unwrap().to_str().unwrap(),
             "image/jpeg"
         );
+        assert_eq!(std::fs::read(&img_path).unwrap(), jpeg);
+        let copied = std::fs::read_dir(dir.join("cache")).unwrap().any(|entry| {
+            entry
+                .ok()
+                .map(|e| e.file_name().to_string_lossy().contains(".0."))
+                .unwrap_or(false)
+        });
+        assert!(!copied, "loose image read must not write a full-size cache file");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
