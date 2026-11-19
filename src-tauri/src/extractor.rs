@@ -572,31 +572,145 @@ fn sniff_file(path: &Path) -> Option<&'static str> {
     sniff(&buf[..n]).map(|(mime, _)| mime)
 }
 
+/// True when `a` and `b` name the same file, including hard links.
+///
+/// Cache cleanup uses this so an original indexed as a cache object is not
+/// deleted. On Windows a failed identity query keeps the file: a false
+/// "different" would unlink that original.
 fn same_file(a: &Path, b: &Path) -> bool {
     if a == b {
         return true;
     }
-    let Ok(ma) = std::fs::metadata(a) else {
-        return false;
-    };
-    let Ok(mb) = std::fs::metadata(b) else {
-        return false;
-    };
     #[cfg(unix)]
     {
+        let Ok(ma) = std::fs::metadata(a) else {
+            return false;
+        };
+        let Ok(mb) = std::fs::metadata(b) else {
+            return false;
+        };
         use std::os::unix::fs::MetadataExt;
         return ma.dev() == mb.dev() && ma.ino() == mb.ino();
     }
     #[cfg(windows)]
     {
-        use std::os::windows::fs::MetadataExt;
-        return ma.volume_serial_number() == mb.volume_serial_number()
-            && ma.file_index() == mb.file_index();
+        return win_file_id::same_file(a, b);
     }
     #[cfg(not(any(unix, windows)))]
     {
-        let _ = (ma, mb);
+        let _ = (a, b);
         false
+    }
+}
+
+/// Windows file identity without nightly `windows_by_handle`.
+///
+/// `MetadataExt::volume_serial_number` and `file_index` read
+/// `BY_HANDLE_FILE_INFORMATION`, but those methods are still unstable
+/// (rust-lang/rust#63010). `FileIdInfo` is the stable 128-bit id Windows
+/// documents for "are these two handles the same file". Where that call is
+/// not supported, the legacy 64-bit index is the same pair of fields the
+/// old code compared.
+#[cfg(windows)]
+mod win_file_id {
+    use std::fs::File;
+    use std::io;
+    use std::os::windows::fs::OpenOptionsExt;
+    use std::os::windows::io::AsRawHandle;
+    use std::path::Path;
+
+    use windows_sys::Win32::Foundation::HANDLE;
+    use windows_sys::Win32::Storage::FileSystem::{
+        FileIdInfo, GetFileInformationByHandle, GetFileInformationByHandleEx,
+        BY_HANDLE_FILE_INFORMATION, FILE_FLAG_BACKUP_SEMANTICS, FILE_ID_INFO, FILE_SHARE_DELETE,
+        FILE_SHARE_READ, FILE_SHARE_WRITE,
+    };
+
+    #[derive(Clone, Copy, PartialEq, Eq)]
+    struct WideId {
+        volume: u64,
+        file: [u8; 16],
+    }
+
+    #[derive(Clone, Copy, PartialEq, Eq)]
+    struct LegacyId {
+        volume: u32,
+        index: u64,
+    }
+
+    pub(super) fn same_file(a: &Path, b: &Path) -> bool {
+        let (left, right) = match (open_for_id(a), open_for_id(b)) {
+            (Ok(left), Ok(right)) => (left, right),
+            (left, right) => return open_error_means_same_file(&left, &right),
+        };
+        // Prefer the 128-bit id when both handles have one. Falling back only
+        // when it is unavailable keeps NTFS/ReFS on one definition and still
+        // covers volumes that only implement the legacy index.
+        if let (Some(left), Some(right)) = (wide_id(&left), wide_id(&right)) {
+            return left == right;
+        }
+        match (legacy_id(&left), legacy_id(&right)) {
+            (Ok(left), Ok(right)) => left == right,
+            // Opened, but this volume did not report an id. Do not delete.
+            _ => true,
+        }
+    }
+
+    /// `NotFound` is a real "this path is not the other file" answer, so the
+    /// cache copy may be removed. Sharing violations and access errors are
+    /// not proof, and `remove` would unlink the path that might be the original.
+    fn open_error_means_same_file(left: &io::Result<File>, right: &io::Result<File>) -> bool {
+        let unproven = |result: &io::Result<File>| matches!(result, Err(err) if err.kind() != io::ErrorKind::NotFound);
+        unproven(left) || unproven(right)
+    }
+
+    fn open_for_id(path: &Path) -> io::Result<File> {
+        // Access 0 plus backup semantics is how `std::fs::metadata` opens a
+        // file: no data-read right, follow reparse points, and don't block
+        // readers. Directories can be opened too, so a junction still has an id.
+        std::fs::OpenOptions::new()
+            .access_mode(0)
+            .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
+            .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
+            .open(path)
+    }
+
+    fn wide_id(file: &File) -> Option<WideId> {
+        let mut info = FILE_ID_INFO::default();
+        let size = u32::try_from(std::mem::size_of::<FILE_ID_INFO>()).ok()?;
+        // SAFETY: `file` owns a live handle for this call. `info` is a
+        // writable `FILE_ID_INFO` and `size` is its byte length, which is
+        // what `FileIdInfo` writes. A zero return leaves `info` unread.
+        let ok = unsafe {
+            GetFileInformationByHandleEx(
+                file.as_raw_handle() as HANDLE,
+                FileIdInfo,
+                (&mut info as *mut FILE_ID_INFO).cast(),
+                size,
+            )
+        };
+        if ok == 0 {
+            return None;
+        }
+        Some(WideId {
+            volume: info.VolumeSerialNumber,
+            file: info.FileId.Identifier,
+        })
+    }
+
+    fn legacy_id(file: &File) -> io::Result<LegacyId> {
+        let mut info = BY_HANDLE_FILE_INFORMATION::default();
+        // SAFETY: `file` owns a live handle for this call. `info` is a
+        // writable `BY_HANDLE_FILE_INFORMATION`. The call fills it only when
+        // it returns nonzero; on failure the struct is discarded.
+        let ok = unsafe { GetFileInformationByHandle(file.as_raw_handle() as HANDLE, &mut info) };
+        if ok == 0 {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(LegacyId {
+            volume: info.dwVolumeSerialNumber,
+            index: u64::from(info.nFileIndexLow) | (u64::from(info.nFileIndexHigh) << 32),
+        })
     }
 }
 
@@ -1088,6 +1202,79 @@ mod tests {
         cache.set_limit(1);
         cache.evict_if_needed(&|_| false);
         assert_eq!(std::fs::read(&file).unwrap(), bytes);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn same_file_matches_one_file_under_two_names() {
+        let dir = scratch("ident");
+        let a = dir.join("a.jpg");
+        let b = dir.join("b.jpg");
+        std::fs::write(&a, b"one").unwrap();
+        std::fs::write(&b, b"two").unwrap();
+        assert!(same_file(&a, &a));
+        assert!(!same_file(&a, &b));
+        assert!(!same_file(&a, &dir.join("missing.jpg")));
+        assert!(!same_file(&dir.join("missing.jpg"), &a));
+        std::fs::create_dir(dir.join("sub")).unwrap();
+        let via_parent = dir.join("sub").join("..").join("a.jpg");
+        assert!(same_file(&a, &via_parent));
+        let link = dir.join("a-hard.jpg");
+        std::fs::hard_link(&a, &link).unwrap();
+        assert!(same_file(&a, &link));
+        let canon = std::fs::canonicalize(&a).unwrap();
+        assert!(same_file(&a, &canon));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn hard_linked_original_is_not_deleted() {
+        let dir = scratch("hardlink");
+        let (cache, ex) = boot(&dir, 64);
+        let cached = cache.path_for(&(5, 0, 0), "jpg");
+        std::fs::create_dir_all(cached.parent().unwrap()).unwrap();
+        let bytes = jpeg(10, 10);
+        std::fs::write(&cached, &bytes).unwrap();
+        let book_dir = dir.join("book");
+        std::fs::create_dir_all(&book_dir).unwrap();
+        let original = book_dir.join("page.jpg");
+        std::fs::hard_link(&cached, &original).unwrap();
+        cache.insert((5, 0, 0), "jpg", bytes.len() as u64);
+        ex.register_book(book(
+            5,
+            SourceKind::Folder,
+            book_dir,
+            vec![page("page.jpg", 10, 10)],
+        ));
+        assert_eq!(std::fs::read(&cached).unwrap(), bytes);
+        assert_eq!(std::fs::read(&original).unwrap(), bytes);
+        assert!(!cache.contains(&(5, 0, 0)));
+        cache.set_limit(1);
+        cache.evict_if_needed(&|_| false);
+        assert_eq!(std::fs::read(&cached).unwrap(), bytes);
+        assert_eq!(std::fs::read(&original).unwrap(), bytes);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn windows_same_file_ignores_spelling_and_keeps_hard_links() {
+        let dir = scratch("spell");
+        let file = dir.join("Page.JPG");
+        std::fs::write(&file, b"same-bytes").unwrap();
+        let other = dir.join("other.jpg");
+        std::fs::write(&other, b"different").unwrap();
+        assert!(same_file(&file, &dir.join("page.jpg")));
+        assert!(same_file(&file, &dir.join("PAGE.JPG")));
+        let slashes = file.display().to_string().replace('\\', "/");
+        assert!(same_file(&file, std::path::Path::new(&slashes)));
+        let canon = std::fs::canonicalize(&file).unwrap();
+        assert!(same_file(&file, &canon));
+        assert!(!same_file(&file, &other));
+        assert!(!same_file(&file, &dir.join("missing.jpg")));
+        let link = dir.join("Linked.JPG");
+        std::fs::hard_link(&file, &link).unwrap();
+        assert!(same_file(&dir.join("page.jpg"), &link));
         let _ = std::fs::remove_dir_all(&dir);
     }
 
