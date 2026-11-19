@@ -5,7 +5,7 @@ import { Layout, clampWidthPct } from './layout.js';
 import { applyCropStyle, cropCacheKey, detectCropFromImage, mergeCropInsets } from './reader-crop.js';
 import { flipWarmPages, flipTapZone } from './flip-adjacent.js';
 import { rtlStep, rtlTapZone } from './reader-rtl.js';
-import { createFlipWheelState, flipSwipeDir, flipVisualSign, flipWheelAdvance } from './reader-feel.js';
+import { createFlipWheelState, flipDragRelease, flipSwipeDir, flipVisualSign, flipWheelAdvance } from './reader-feel.js';
 
 export class FlipView {
   constructor(host, { onPosition = () => {}, scrubber = null } = {}) {
@@ -26,6 +26,7 @@ export class FlipView {
     this._ptr = null;
     this._suppressClick = false;
     this._anim = null;
+    this._turn = 0;
     this._aimedPage = -1;
     this._lastDir = 1;
     this._keyAt = 0;
@@ -128,7 +129,10 @@ export class FlipView {
 
   _pointerDown(e) {
     if (e.button !== 0) return;
+    this._finishTurn();
     this._anim?.cancel();
+    this._anim = null;
+    this._clearDrag();
     this._ptr = { id: e.pointerId, x: e.clientX, y: e.clientY, t: performance.now(), dragged: false };
     try { e.currentTarget.setPointerCapture(e.pointerId); } catch { /* not a captor */ }
   }
@@ -166,6 +170,28 @@ export class FlipView {
     this._setDrag(this._dragX(dx));
   }
 
+  _canTurn(dir) {
+    const indexDir = Math.sign(dir) || 0;
+    if (!indexDir || !this.layout?.realPages) return false;
+    if (this.spread) {
+      const n = this.layout.spreadStart(this.page) + (indexDir > 0 ? 2 : -2);
+      const next = this.layout.spreadStart(Math.max(0, Math.min(this.layout.realPages - 1, n)));
+      return next !== this.page;
+    }
+    const next = Math.max(0, Math.min(this.layout.realPages - 1, this.page + indexDir));
+    return next !== this.page;
+  }
+
+  _finishTurn() {
+    const dir = this._turn;
+    if (!dir) return;
+    this._turn = 0;
+    this._anim?.cancel();
+    this._anim = null;
+    this._clearDrag();
+    this.stepPage(dir, { settle: false });
+  }
+
   _pointerUp(e) {
     const p = this._ptr;
     this._ptr = null;
@@ -177,17 +203,44 @@ export class FlipView {
     if (!p.dragged) return;
     this._suppressClick = true;
     const dir = flipSwipeDir(dx, dy, performance.now() - p.t, this.rtl);
-    if (!dir) {
-      this._play(
-        [{ transform: `translate3d(${Math.round(visual)}px,0,0)` }, { transform: 'translate3d(0,0,0)' }],
-        180,
-      );
+    const release = flipDragRelease(visual, dir, !!dir && this._canTurn(dir));
+    const from = `translate3d(${Math.round(release.from)}px,0,0)`;
+    if (release.action === 'back') {
+      this._play([{ transform: from }, { transform: 'translate3d(0,0,0)' }], 180);
       return;
     }
-    this.stepPage(dir, { settle: false });
+    if (this._reduceMotion()) {
+      this.stepPage(dir, { settle: false });
+      return;
+    }
+    const width = this._stageEl?.clientWidth || 1;
+    const off = Math.round(release.sign * width * 0.92);
+    this._turn = dir;
+    const anim = this._play(
+      [{ transform: from }, { transform: `translate3d(${off}px,0,0)` }],
+      150,
+      'forwards',
+    );
+    if (!anim) {
+      this._turn = 0;
+      this.stepPage(dir, { settle: false });
+      return;
+    }
+    anim.onfinish = () => {
+      if (this._turn !== dir) return;
+      this._turn = 0;
+      this.stepPage(dir, { settle: false });
+      this._anim?.cancel();
+      this._anim = null;
+      this._clearDrag();
+    };
   }
 
   _pointerCancel() {
+    if (this._turn) {
+      this._finishTurn();
+      return;
+    }
     if (!this._ptr) return;
     this._ptr = null;
     this._clearDrag();
@@ -197,11 +250,12 @@ export class FlipView {
     return typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches;
   }
 
-  _play(keyframes, duration) {
+  _play(keyframes, duration, fill = 'none') {
     const stage = this._stageEl;
-    if (!stage || this._reduceMotion()) return;
+    if (!stage || this._reduceMotion()) return null;
     this._anim?.cancel();
-    this._anim = stage.animate(keyframes, { duration, easing: 'cubic-bezier(0.16, 0.84, 0.22, 1)', fill: 'none' });
+    this._anim = stage.animate(keyframes, { duration, easing: 'cubic-bezier(0.16, 0.84, 0.22, 1)', fill });
+    return this._anim;
   }
 
   _settle(indexDir) {

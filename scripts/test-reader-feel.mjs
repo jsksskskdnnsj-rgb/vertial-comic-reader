@@ -11,7 +11,7 @@ import {
   FLIP_WHEEL_NOTCH_LOCK_MS, FLIP_WHEEL_TRACK_PX, KEY_PAGE_DURATION_MS, KEY_PAGE_FRACTION,
   KEY_PAGE_OVERLAP_PX,
   chainPageScroll, classifyWheel, createFlipWheelState, createPageKey, extendPageKey,
-  flipSwipeDir, flipVisualSign, flipWheelAdvance, glideChase, glideTauMs, keyReleaseSpeed, latchWheelKind,
+  flipDragRelease, flipSwipeDir, flipVisualSign, flipWheelAdvance, glideChase, glideTauMs, keyReleaseSpeed, latchWheelKind,
   pageKeyDistance, pageScrollSegment, pageSeamCover, samplePageScroll, stepPageKey,
 } from '../src/reader-feel.js';
 import { keyScrollPlan } from '../src/reader.js';
@@ -225,6 +225,10 @@ function book(n, w = 800, h = 1200) {
   assert.equal(flipVisualSign(1, false), 1);
   assert.equal(flipVisualSign(1, true), -1);
   assert.equal(flipVisualSign(-1, true), 1);
+  assert.deepEqual(flipDragRelease(-120, 1, true), { action: 'turn', from: -120, sign: -1 });
+  assert.deepEqual(flipDragRelease(90, -1, true), { action: 'turn', from: 90, sign: 1 });
+  assert.deepEqual(flipDragRelease(-120, 1, false), { action: 'back', from: -120, sign: 0 });
+  assert.deepEqual(flipDragRelease(-40, 0, true), { action: 'back', from: -40, sign: 0 });
 }
 
 const reader = fs.readFileSync(path.join(root, 'src/reader.js'), 'utf8');
@@ -243,6 +247,7 @@ assert.equal(reader.includes("decoding = syncDecode ? 'sync' : 'async'"), false)
 assert.equal(/scrollTo\(\{[^}]*behavior:\s*'smooth'/.test(reader), false);
 assert.match(flip, /flipWheelAdvance/);
 assert.match(flip, /flipSwipeDir/);
+assert.match(flip, /flipDragRelease/);
 assert.match(flip, /pointermove/);
 assert.match(flip, /set_reading_window|setWindow/);
 assert.match(css, /\.scroller\{overflow-anchor:none\}/);

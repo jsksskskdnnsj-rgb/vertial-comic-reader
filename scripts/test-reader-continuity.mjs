@@ -29,6 +29,20 @@ function layout(dims, src, opts = {}) {
 }
 
 {
+  const L = layout([[800, 1600], [0, 0], [0, 0]]);
+  assert.equal(L.vH[1], 1600);
+  assert.equal(L.vH[2], 1600);
+  L.setDim(1, 800, 800);
+  L.compute({ viewW: 800, widthPct: 100, maxW: Infinity, zoom: 1, gap: 0, endPad: 0 });
+  assert.equal(L.vH[1], 800, 'the decoded page takes its real ratio');
+  assert.equal(L.vH[2], 1600, 'later unknown pages keep the height already on screen');
+  L.setBook([[0, 0], [0, 0]], [0, 1]);
+  L.compute({ viewW: 800, widthPct: 100, maxW: Infinity, zoom: 1, gap: 0, endPad: 0 });
+  assert.equal(L.vH[0], 1200);
+  assert.equal(L.vH[1], 1200);
+}
+
+{
   const L = layout([[800, 8000], [800, 8000], [0, 0]], [0, 0, 1]);
   assert.equal(applyRealDims(L, [[800, 20000], [900, 1200]]), 1);
   assert.deepEqual(L.dims[0], [800, 8000]);

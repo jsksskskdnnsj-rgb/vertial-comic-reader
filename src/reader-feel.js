@@ -302,6 +302,22 @@ export function flipWheelAdvance(state, e, now) {
  *
  * @returns {-1 | 0 | 1} index delta
  */
+/**
+ * Where a flip-mode drag goes when the finger lifts.
+ * `back` eases to center (no turn, or already at that end of the book).
+ * `turn` keeps traveling in the finger's direction; the page changes after
+ * that motion, instead of popping back to center first.
+ * `sign` is the screen direction of `from` (−1 left, +1 right).
+ *
+ * @returns {{ action: 'back' | 'turn', from: number, sign: -1 | 0 | 1 }}
+ */
+export function flipDragRelease(visual, dir, canTurn) {
+  const from = Number(visual) || 0;
+  if (!dir || !canTurn || !from) return { action: 'back', from, sign: 0 };
+  const sign = /** @type {-1 | 1} */ (Math.sign(from));
+  return { action: 'turn', from, sign };
+}
+
 export function flipSwipeDir(dx, dy, dtMs, rtl = false) {
   const x = Number(dx) || 0;
   const y = Number(dy) || 0;

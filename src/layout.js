@@ -15,21 +15,29 @@ const FALLBACK_AR = 1.5; // h/w used only when a page and its neighbors are all 
  * pages keeps the previous known page, and pages before the first known size
  * take that first known size. 1.5 is only the last resort, so a long book does
  * not jump from a square placeholder to the real strip as each file decodes.
+ *
+ * `prev` is the aspect already on screen. Unknown pages keep that estimate, so
+ * decoding one page does not restretch every later page that is still 0×0.
+ * A different page count (a new book) ignores `prev`.
  */
-export function fillAspects(dims) {
+export function fillAspects(dims, prev) {
   const n = dims?.length || 0;
+  const sticky = prev && prev.length === n ? prev : null;
   const ar = new Array(n).fill(0);
-  let carry = 0;
   for (let i = 0; i < n; i++) {
     const [w, h] = dims[i] || [0, 0];
-    if (w > 0 && h > 0) carry = h / w;
-    ar[i] = carry;
+    if (w > 0 && h > 0) ar[i] = h / w;
+    else if (sticky && sticky[i] > 0) ar[i] = sticky[i];
+  }
+  let carry = 0;
+  for (let i = 0; i < n; i++) {
+    if (ar[i] > 0) carry = ar[i];
+    else if (carry > 0) ar[i] = carry;
   }
   let back = 0;
   for (let i = n - 1; i >= 0; i--) {
-    const [w, h] = dims[i] || [0, 0];
-    if (w > 0 && h > 0) back = h / w;
-    else if (!(ar[i] > 0) && back > 0) ar[i] = back;
+    if (ar[i] > 0) back = ar[i];
+    else if (back > 0) ar[i] = back;
   }
   for (let i = 0; i < n; i++) if (!(ar[i] > 0)) ar[i] = FALLBACK_AR;
   return ar;
@@ -105,13 +113,14 @@ export class Layout {
     this.vH = new Float64Array(this.n);
     this.vLeft = new Float64Array(this.n);
     this.vW = new Float64Array(this.n);
+    this.ar = [];
     this._arDirty = true;
   }
 
   isGroupEnd(i) { return i === this.n - 1 || this.src[i + 1] !== this.src[i]; }
 
   _rebuildAr() {
-    this.ar = fillAspects(this.dims);
+    this.ar = fillAspects(this.dims, this.ar);
     this._arDirty = false;
   }
 
