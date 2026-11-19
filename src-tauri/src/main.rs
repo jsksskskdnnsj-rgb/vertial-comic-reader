@@ -13,6 +13,7 @@ mod cache;
 mod chapters;
 mod commands;
 mod config;
+mod cosers;
 mod cover_protocol;
 mod db;
 mod error;
@@ -141,6 +142,9 @@ fn main() {
             window::win_start_drag,
             window::win_hide_if_tray,
             window::app_exit,
+            cosers::cosers_show,
+            cosers::cosers_hide,
+            cosers::cosers_close,
             window::take_drop_queue,
             shelf::folder_add,
             shelf::folder_list,

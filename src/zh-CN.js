@@ -688,4 +688,7 @@ export default {
   'meta.mirrorMoegirl': '萌娘百科接口',
   'meta.mirrorMangaupdates': 'MangaUpdates 接口',
   'meta.mirrorAnilist': 'AniList 接口',
+  'nav.cosers': '官网',
+  'cosers.hint': 'coserslove 官网',
+  'cosers.failed': '无法在应用内打开官网。',
 };

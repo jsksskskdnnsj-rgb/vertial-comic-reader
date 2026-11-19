@@ -13,7 +13,7 @@ export const COVER_BASE = T.core?.convertFileSrc
   : '';
 export const coverUrl = (id, v = 0) => `${COVER_BASE}/${id}?v=${v ?? 0}`;
 
-const SHELL_PAGES = new Set(['home.html', 'library.html', 'meta.html', 'import.html', 'settings.html', 'scan.html', 'book.html']);
+const SHELL_PAGES = new Set(['home.html', 'library.html', 'meta.html', 'import.html', 'settings.html', 'scan.html', 'book.html', 'cosers.html']);
 
 let coverWired = false;
 /** Cover <img data-cover="id"> fallback: a 404 means "not generated yet" -> ask Rust once
@@ -39,6 +39,7 @@ const RAIL = [
   { key: 'recent', href: 'library.html?view=recent', icon: 'clock', label: 'reader.history' },
   { key: 'marked', href: 'library.html?view=marked', icon: 'star', label: 'bookmarks.title' },
   { key: 'import', href: 'import.html', icon: 'download', label: 'nav.import' },
+  { key: 'cosers', href: 'cosers.html', icon: 'globe', label: 'nav.cosers', title: 'cosers.hint' },
 ];
 
 const searchCtx = { onSearch: null, searchTimer: 0 };
@@ -58,6 +59,7 @@ export function railActiveFromUrl(url = location) {
     return 'library';
   }
   if (base === 'meta.html') return 'meta';
+  if (base === 'cosers.html') return 'cosers';
   if (base === 'settings.html') return 'settings';
   if (base === 'import.html' || base === 'scan.html') return 'import';
   if (base === 'book.html') return 'library';
@@ -82,6 +84,7 @@ const PAGE_LABEL = {
   scan: 'nav.scan',
   settings: 'nav.settings',
   meta: 'nav.meta',
+  cosers: 'nav.cosers',
   book: 'nav.book',
   reader: 'nav.reader',
 };
@@ -104,7 +107,8 @@ function syncRailActive(active) {
         : a.href.includes('view=marked') ? 'marked'
           : a.href.includes('import.html') ? 'import'
             : a.href.includes('meta.html') ? 'meta'
-              : a.href.includes('library.html') ? 'library'
+              : a.href.includes('cosers.html') ? 'cosers'
+                : a.href.includes('library.html') ? 'library'
                 : a.href.includes('home.html') ? 'home' : '';
     a.classList.toggle('is-on', key === active);
   });
@@ -115,8 +119,11 @@ function renderRail(active) {
   if (!rail) return;
   rail.className = 'shell-rail';
   rail.innerHTML =
-    RAIL.map((r) => `<a href="${r.href}" class="${active === r.key ? 'is-on' : ''}">
-        <svg class="i"><use href="icons.svg#${r.icon}"/></svg><span>${esc(t(r.label))}</span></a>`).join('') +
+    RAIL.map((r) => {
+      const title = r.title ? ` title="${esc(t(r.title))}"` : '';
+      return `<a href="${r.href}" class="${active === r.key ? 'is-on' : ''}"${title}>
+        <svg class="i"><use href="icons.svg#${r.icon}"/></svg><span>${esc(t(r.label))}</span></a>`;
+    }).join('') +
     `<span class="rail-spacer"></span>
      <a href="settings.html" class="${active === 'settings' ? 'is-on' : ''}">
        <svg class="i"><use href="icons.svg#settings"/></svg><span>${esc(t('nav.settings'))}</span></a>`;
@@ -213,14 +220,24 @@ async function loadPageModule(pathname) {
 
 const shellHtmlCache = new Map();
 
+/** Drop the official-site child webview before the shell leaves that page. */
+function releaseCosersWebview(nextUrl) {
+  if (pageNameFromUrl() !== 'cosers') return Promise.resolve();
+  if (nextUrl && isShellUrl(nextUrl) && pageNameFromUrl(nextUrl) === 'cosers') return Promise.resolve();
+  document.dispatchEvent(new Event('mh-cosers-release'));
+  return invoke('cosers_close').catch(() => {});
+}
+
 async function swapShellMain(href, { historyMode = 'push' } = {}) {
   const url = new URL(href, location.href);
   if (!isShellUrl(url)) {
+    await releaseCosersWebview(url);
     location.assign(url.href);
     return;
   }
   const main = document.querySelector('.page-main');
   if (!main) {
+    await releaseCosersWebview(url);
     location.assign(url.href);
     return;
   }
@@ -230,6 +247,7 @@ async function swapShellMain(href, { historyMode = 'push' } = {}) {
   navBusy = true;
   main.classList.add('is-swapping');
   try {
+    await releaseCosersWebview(url);
     let html = shellHtmlCache.get(url.pathname);
     if (html == null) {
       const res = await fetch(url.pathname);
@@ -249,6 +267,7 @@ async function swapShellMain(href, { historyMode = 'push' } = {}) {
     applyI18n();
     if (url.hash) document.querySelector(url.hash)?.scrollIntoView({ block: 'start' });
   } catch {
+    await releaseCosersWebview(url);
     location.assign(url.href);
   } finally {
     main.classList.remove('is-swapping');
@@ -264,8 +283,7 @@ export function shellNavigate(href, opts = {}) {
   if (navBusy) return Promise.resolve();
   const url = new URL(href, location.href);
   if (!isShellUrl(url)) {
-    location.assign(url.href);
-    return Promise.resolve();
+    return releaseCosersWebview(url).finally(() => { location.assign(url.href); });
   }
   const mode = opts.replace ? 'replace' : 'push';
   return swapShellMain(url.href, { historyMode: mode });
