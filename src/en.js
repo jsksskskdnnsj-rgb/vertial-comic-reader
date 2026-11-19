@@ -687,4 +687,7 @@ export default {
   'meta.mirrorMoegirl': 'Moegirl API',
   'meta.mirrorMangaupdates': 'MangaUpdates API',
   'meta.mirrorAnilist': 'AniList API',
+  'nav.cosers': 'Cosers',
+  'cosers.hint': 'coserslove official site',
+  'cosers.failed': 'The official site could not be opened in the app.',
 };

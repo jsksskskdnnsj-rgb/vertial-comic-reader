@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title data-i="app.name"></title>
+<link rel="stylesheet" href="mh-ui.css">
+</head>
+<body>
+<div class="app">
+  <header id="shell-top"></header>
+  <div class="work shell-frame">
+    <nav id="shell-rail"></nav>
+    <main class="page-main cosers-page">
+      <div id="cosersHost" class="cosers-host">
+        <div class="cosers-fallback" id="cosersFallback" hidden>
+          <p data-i="cosers.failed"></p>
+          <button type="button" class="btn btn--ghost btn--sm" id="cosersRetry"><span data-i="common.retry"></span></button>
+        </div>
+      </div>
+    </main>
+  </div>
+</div>
+<script type="module" src="cosers.js"></script>
+</body>
+</html>
