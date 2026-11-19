@@ -36,6 +36,11 @@ url = "2"
 regex = "1"
 serde_yaml = "0.9"
 
+[target.'cfg(windows)'.dependencies]
+# Stable bindings for the Win32 file-id calls. The std methods that expose
+# the same fields still require nightly `windows_by_handle`.
+windows-sys = { version = "0.61.2", features = ["Win32_Storage_FileSystem"] }
+
 [features]
 default = ["custom-protocol"]
 custom-protocol = ["tauri/custom-protocol"]

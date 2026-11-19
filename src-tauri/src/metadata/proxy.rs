@@ -2,7 +2,6 @@
 //! The bundled mihomo process, when used, listens on 127.0.0.1 only and is stopped when the
 //! switch is off or the process exits.
 
-use std::io::Write;
 use std::net::{SocketAddr, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
@@ -206,7 +205,7 @@ fn write_private(path: &Path, bytes: &[u8]) -> Result<(), String> {
             .mode(0o600)
             .open(path)
             .map_err(|_| "无法写入核心配置".to_string())?;
-        file.write_all(bytes).map_err(|_| "无法写入核心配置".to_string())?;
+        std::io::Write::write_all(&mut file, bytes).map_err(|_| "无法写入核心配置".to_string())?;
     }
     #[cfg(not(unix))]
     {
