@@ -1,0 +1,2 @@
+fc431cf49cccf816564bc2d3a249118a847755b382f7190e649ebd4d6f710c62  MH-Reader_0.10.0_x64-setup-repack.exe
+8938747a54577e36d623834343d77f926df0b2bbf26da2b2bdc2bfe00a7b020b  mh-reader-v0.10.0-repack.zip
